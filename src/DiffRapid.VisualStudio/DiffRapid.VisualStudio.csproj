@@ -40,6 +40,10 @@
   <ItemGroup>
     <None Include="source.extension.vsixmanifest" SubType="Designer" />
     <VSCTCompile Include="DiffRapidPackage.vsct" ResourceName="Menus.ctmenu" />
+    <EmbeddedResource Update="VSPackage.resx">
+      <MergeWithCTO>true</MergeWithCTO>
+      <ManifestResourceName>VSPackage</ManifestResourceName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

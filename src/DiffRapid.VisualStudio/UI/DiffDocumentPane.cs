@@ -1,8 +1,11 @@
 using System;
+using System.ComponentModel.Design;
 using System.Windows;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
 
 namespace DiffRapid.VisualStudio.UI;
 
@@ -11,7 +14,7 @@ namespace DiffRapid.VisualStudio.UI;
 /// running document table; saving it saves what the comparison edits (the compared files) through their
 /// own documents.
 /// </summary>
-internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData
+internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData, IOleCommandTarget
 {
     private static readonly Guid EditorType = new(PackageIds.DiffWindowGuidString);
 
@@ -38,6 +41,45 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData
         View?.Dispose();
         Content = null;
     }
+
+    // Content that hosts editors (the file comparison) gets the window's commands first, so typing,
+    // undo and clipboard reach the focused editor; the rest go to the pane's own command service.
+    int IOleCommandTarget.QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (Content is IOleCommandTarget content)
+        {
+            var hr = content.QueryStatus(ref pguidCmdGroup, cCmds, prgCmds, pCmdText);
+            if (!IsUnhandled(hr))
+            {
+                return hr;
+            }
+        }
+
+        return GetService(typeof(IMenuCommandService)) is IOleCommandTarget commands
+            ? commands.QueryStatus(ref pguidCmdGroup, cCmds, prgCmds, pCmdText)
+            : (int)Constants.OLECMDERR_E_NOTSUPPORTED;
+    }
+
+    int IOleCommandTarget.Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (Content is IOleCommandTarget content)
+        {
+            var hr = content.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+            if (!IsUnhandled(hr))
+            {
+                return hr;
+            }
+        }
+
+        return GetService(typeof(IMenuCommandService)) is IOleCommandTarget commands
+            ? commands.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut)
+            : (int)Constants.OLECMDERR_E_NOTSUPPORTED;
+    }
+
+    private static bool IsUnhandled(int hr) =>
+        hr == (int)Constants.OLECMDERR_E_NOTSUPPORTED || hr == (int)Constants.OLECMDERR_E_UNKNOWNGROUP;
 
     int IVsPersistDocData.GetGuidEditorType(out Guid pClassID)
     {

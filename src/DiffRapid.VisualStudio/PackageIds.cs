@@ -14,4 +14,13 @@ internal static class PackageIds
     public const int CompareSelected = 0x0100;
     public const int CompareFiles = 0x0101;
     public const int CompareFolders = 0x0102;
+
+    // File comparison window commands, bound to Alt+arrows in its key binding scope (DiffWindowGuid).
+    public const int PreviousDifference = 0x0200;
+    public const int NextDifference = 0x0201;
+    public const int CopyToLeft = 0x0202;
+    public const int CopyToRight = 0x0203;
+
+    /// <summary>Name of the key binding scope in Tools > Options > Keyboard (VSPackage.resx).</summary>
+    public const short KeyBindingScopeNameResource = 110;
 }

@@ -19,12 +19,15 @@ using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Imaging.Interop;
+using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
+using OleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
 using Span = Microsoft.VisualStudio.Text.Span;
 using Task = System.Threading.Tasks.Task;
 
@@ -32,9 +35,10 @@ namespace DiffRapid.VisualStudio.UI;
 
 /// <summary>
 /// Side-by-side text comparison built from two Visual Studio editor views. The views show the live
-/// document buffers (including unsaved edits), so syntax highlighting comes from VS itself.
+/// document buffers (including unsaved edits), so syntax highlighting comes from VS itself. Both sides
+/// are editable; the comparison is redone shortly after each edit.
 /// </summary>
-internal sealed class TextDiffControl : DockPanel, IComparisonView
+internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandTarget
 {
     private static readonly TimeSpan RecompareDelay = TimeSpan.FromMilliseconds(300);
 
@@ -61,6 +65,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
     private ITextSnapshot? _modelRightSnapshot;
     private int _currentDifference = -1;
     private bool _revealCurrentAfterCompare;
+    private bool? _copyAfterCompare;
     private bool _syncingScroll;
     private bool _disposed;
 
@@ -109,7 +114,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
         _left.View.LayoutChanged += (_, _) => SyncScroll(_left, _right);
         _right.View.LayoutChanged += (_, _) => SyncScroll(_right, _left);
         _overview.RowRequested += (_, row) => ScrollToRow(row);
-        PreviewKeyDown += OnPreviewKeyDown;
+        _left.View.Caret.PositionChanged += (_, e) => SelectDifferenceAt(_left, e.NewPosition.BufferPosition);
+        _right.View.Caret.PositionChanged += (_, e) => SelectDifferenceAt(_right, e.NewPosition.BufferPosition);
     }
 
     public static async Task<TextDiffControl> CreateAsync(AsyncPackage package, string leftPath, string rightPath)
@@ -122,11 +128,13 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
             ?? throw new InvalidOperationException("Component model is unavailable."));
         var invisibleEditors = (IVsInvisibleEditorManager)(await package.GetServiceAsync(typeof(SVsInvisibleEditorManager))
             ?? throw new InvalidOperationException("Invisible editor manager is unavailable."));
+        var services = (OleServiceProvider)(await package.GetServiceAsync(typeof(OleServiceProvider))
+            ?? throw new InvalidOperationException("The service provider is unavailable."));
         var editorFactory = componentModel.GetService<ITextEditorFactoryService>();
         var adapters = componentModel.GetService<IVsEditorAdaptersFactoryService>();
 
-        var left = Pane.Open(leftPath, invisibleEditors, adapters, editorFactory);
-        var right = Pane.Open(rightPath, invisibleEditors, adapters, editorFactory);
+        var left = Pane.Open(leftPath, invisibleEditors, adapters, editorFactory, services);
+        var right = Pane.Open(rightPath, invisibleEditors, adapters, editorFactory, services);
         var control = Diagnostics.Step("Building the comparison view", () => new TextDiffControl(package, left, right));
         control.StartCompare();
         return control;
@@ -170,11 +178,11 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
         var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
 
         var summary = new StackPanel { Orientation = Orientation.Horizontal };
-        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToPrevious, "Previous"), "Previous difference (Alt+Up)", () => NavigateDifference(-1)));
-        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToNext, "Next"), "Next difference (Alt+Down)", () => NavigateDifference(+1)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToPrevious, "Previous"), "Previous difference (Shift+F8 or Alt+Up)", () => NavigateDifference(-1)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToNext, "Next"), "Next difference (F8 or Alt+Down)", () => NavigateDifference(+1)));
         summary.Children.Add(DiffTheme.Separator());
-        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Backwards, "Copy to left"), "Replace the current difference on the left with the right side (Alt+Left)", () => CopyDifference(toRight: false)));
-        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Forwards, "Copy to right"), "Replace the current difference on the right with the left side (Alt+Right)", () => CopyDifference(toRight: true)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Backwards, "Copy to left"), "Replace the current difference on the left with the right side (Ctrl+Shift+F8 or Alt+Left)", () => CopyDifference(toRight: false)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Forwards, "Copy to right"), "Replace the current difference on the right with the left side (Ctrl+F8 or Alt+Right)", () => CopyDifference(toRight: true)));
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.SaveAll, "Save"), "Save both files (Ctrl+S)", Save));
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
@@ -392,6 +400,12 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
                 ScrollToRow(model.HunkRows[_currentDifference]);
             }
         }
+
+        if (_copyAfterCompare is { } toRight)
+        {
+            _copyAfterCompare = null;
+            CopyDifference(toRight);
+        }
     }
 
     /// <summary>Replaces the current difference on one side with the lines from the other side.</summary>
@@ -405,13 +419,14 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
 
         if (_currentDifference < 0)
         {
-            _position.Text = "Go to a difference first (Alt+Down), then copy it.";
+            _position.Text = "Click inside a difference or press F8 to pick one, then copy it.";
             return;
         }
 
-        // The model must describe the buffers as they are now; otherwise wait for the pending re-compare.
+        // The model must describe the buffers as they are now; otherwise copy once the re-compare is done.
         if (_left.Buffer.CurrentSnapshot != _modelLeftSnapshot || _right.Buffer.CurrentSnapshot != _modelRightSnapshot)
         {
+            _copyAfterCompare = toRight;
             StartCompare();
             return;
         }
@@ -480,7 +495,100 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
 
     public bool IsDirty => _left.IsDirty || _right.IsDirty;
 
-    /// <summary>Saves whichever of the two files has unsaved changes, through Visual Studio's own save.</summary>
+    // The window's commands (typing, undo, cut/copy/paste...) go to the editor that has focus.
+    private Pane? FocusedPane => _left.HasFocus ? _left : _right.HasFocus ? _right : null;
+
+    int IOleCommandTarget.QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (cCmds == 1 && OwnCommand(pguidCmdGroup, prgCmds[0].cmdID) is not null)
+        {
+            prgCmds[0].cmdf = (uint)(OLECMDF.OLECMDF_SUPPORTED | OLECMDF.OLECMDF_ENABLED);
+            return VSConstants.S_OK;
+        }
+
+        return FocusedPane is { } pane
+            ? pane.CommandTarget.QueryStatus(ref pguidCmdGroup, cCmds, prgCmds, pCmdText)
+            : (int)Constants.OLECMDERR_E_NOTSUPPORTED;
+    }
+
+    int IOleCommandTarget.Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (OwnCommand(pguidCmdGroup, nCmdID) is { } command)
+        {
+            command();
+            return VSConstants.S_OK;
+        }
+
+        return FocusedPane is { } pane
+            ? pane.CommandTarget.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut)
+            : (int)Constants.OLECMDERR_E_NOTSUPPORTED;
+    }
+
+    // Commands the comparison handles itself rather than the editors: stepping and copying differences
+    // (F8 keys and Alt+arrows in the DiffRapid key binding scope) and saving, which saves both files.
+    private Action? OwnCommand(Guid group, uint id)
+    {
+        if (group == PackageIds.CommandSet)
+        {
+            return (int)id switch
+            {
+                PackageIds.PreviousDifference => () => NavigateDifference(-1),
+                PackageIds.NextDifference => () => NavigateDifference(+1),
+                PackageIds.CopyToLeft => () => CopyDifference(toRight: false),
+                PackageIds.CopyToRight => () => CopyDifference(toRight: true),
+                _ => null,
+            };
+        }
+
+        if (group == VSConstants.GUID_VSStandardCommandSet97
+            && (VSConstants.VSStd97CmdID)id is VSConstants.VSStd97CmdID.Save or VSConstants.VSStd97CmdID.SaveProjectItem)
+        {
+            return Save;
+        }
+
+        return null;
+    }
+
+    /// <summary>Makes the difference under the caret the current one, so copying acts on what was clicked.</summary>
+    private void SelectDifferenceAt(Pane pane, SnapshotPoint position)
+    {
+        var model = _model;
+        var state = DiffPaneState.Get(pane.View);
+        if (model is null || state is null)
+        {
+            return;
+        }
+
+        var line = position.GetContainingLine().LineNumber;
+        if (line >= state.LineCount)
+        {
+            return;
+        }
+
+        var hunk = model.Rows[state.RowOfLine[line]].HunkIndex;
+        if (hunk < 0)
+        {
+            return;
+        }
+
+        for (var i = 0; i < model.HunkRows.Count; i++)
+        {
+            if (model.Rows[model.HunkRows[i]].HunkIndex == hunk)
+            {
+                if (i != _currentDifference)
+                {
+                    _currentDifference = i;
+                    UpdatePosition();
+                }
+
+                return;
+            }
+        }
+    }
+
+    /// <summary>Saves whichever of the two files has unsaved changes.</summary>
     public void Save()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -504,7 +612,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
         _position.Text = count == 0
             ? "No differences"
             : _currentDifference < 0
-                ? $"{Plural(count, "difference")}  ·  press Alt+Down to step through them"
+                ? $"{Plural(count, "difference")}  ·  press F8 or Alt+Down to step through them"
                 : $"Difference {_currentDifference + 1} of {count:N0}";
     }
 
@@ -627,25 +735,6 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
         }
     }
 
-    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        if (Keyboard.Modifiers == ModifierKeys.Alt && e.SystemKey is Key.Down or Key.Up)
-        {
-            NavigateDifference(e.SystemKey == Key.Down ? +1 : -1);
-            e.Handled = true;
-        }
-        else if (Keyboard.Modifiers == ModifierKeys.Alt && e.SystemKey is Key.Left or Key.Right)
-        {
-            CopyDifference(toRight: e.SystemKey == Key.Right);
-            e.Handled = true;
-        }
-        else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S)
-        {
-            Save();
-            e.Handled = true;
-        }
-    }
-
     /// <summary>Title block above each editor: side badge, file name, folder and line count.</summary>
     private sealed class FileHeader : Border
     {
@@ -713,12 +802,18 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
     {
         private readonly IVsInvisibleEditor _invisibleEditor;
 
+        private readonly IVsTextView _textView;
+
+        private readonly IVsPersistDocData _docData;
+
         private readonly ITextDocument? _document;
 
-        private Pane(string path, IVsInvisibleEditor invisibleEditor, ITextBuffer buffer, IWpfTextViewHost host)
+        private Pane(string path, IVsInvisibleEditor invisibleEditor, IVsTextLines textLines, ITextBuffer buffer, IVsTextView textView, IWpfTextViewHost host)
         {
             Path = path;
             _invisibleEditor = invisibleEditor;
+            _docData = (IVsPersistDocData)textLines;
+            _textView = textView;
             Buffer = buffer;
             Host = host;
             if (buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
@@ -740,11 +835,17 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
 
         public IWpfTextView View => Host.TextView;
 
+        /// <summary>The editor's command chain: typing, undo, clipboard and the other editing commands.</summary>
+        public IOleCommandTarget CommandTarget => (IOleCommandTarget)_textView;
+
+        public bool HasFocus => Host.HostControl.IsKeyboardFocusWithin;
+
         public static Pane Open(
             string path,
             IVsInvisibleEditorManager invisibleEditors,
             IVsEditorAdaptersFactoryService adapters,
-            ITextEditorFactoryService editorFactory)
+            ITextEditorFactoryService editorFactory,
+            OleServiceProvider services)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var name = System.IO.Path.GetFileName(path);
@@ -755,15 +856,15 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
                 return editor;
             });
 
-            var buffer = Diagnostics.Step($"Getting the text buffer of {name}", () =>
+            var (textLines, buffer) = Diagnostics.Step($"Getting the text buffer of {name}", () =>
             {
                 var iid = typeof(IVsTextLines).GUID;
                 ErrorHandler.ThrowOnFailure(invisibleEditor.GetDocData(0, ref iid, out var docDataPtr));
                 try
                 {
-                    var textLines = (IVsTextLines)Marshal.GetObjectForIUnknown(docDataPtr);
-                    return adapters.GetDocumentBuffer(textLines)
-                        ?? throw new InvalidOperationException("The document has no text buffer.");
+                    var lines = (IVsTextLines)Marshal.GetObjectForIUnknown(docDataPtr);
+                    return (lines, adapters.GetDocumentBuffer(lines)
+                        ?? throw new InvalidOperationException("The document has no text buffer."));
                 }
                 finally
                 {
@@ -771,27 +872,39 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
                 }
             });
 
-            var host = Diagnostics.Step($"Creating the editor view for {name}", () =>
+            // A view made through the adapters gets Visual Studio's editing command chain (typing, undo,
+            // clipboard, IntelliSense); the pane forwards the window's commands to it.
+            var (vsView, host) = Diagnostics.Step($"Creating the editor view for {name}", () =>
             {
                 var roles = editorFactory.CreateTextViewRoleSet(
                     PredefinedTextViewRoles.Document,
                     PredefinedTextViewRoles.Analyzable,
+                    PredefinedTextViewRoles.Editable,
                     PredefinedTextViewRoles.Interactive,
                     PredefinedTextViewRoles.Zoomable,
                     DiffRapidRoles.Pane);
-                var view = editorFactory.CreateTextView(buffer, roles);
-                view.Options.SetOptionValue(DefaultTextViewOptions.ViewProhibitUserInputId, true);
+                var textView = adapters.CreateVsTextViewAdapter(services, roles);
+                var init = new[] { new INITVIEW { fSelectionMargin = 0, fWidgetMargin = 0, fVirtualSpace = 0, fDragDropMove = 1 } };
+                const uint flags = (uint)TextViewInitFlags.VIF_HSCROLL | (uint)TextViewInitFlags.VIF_VSCROLL | (uint)TextViewInitFlags3.VIF_NO_HWND_SUPPORT;
+                ErrorHandler.ThrowOnFailure(textView.Initialize(textLines, IntPtr.Zero, flags, init));
+
+                var viewHost = adapters.GetWpfTextViewHost(textView)
+                    ?? throw new InvalidOperationException("The editor view has no WPF host.");
+                var view = viewHost.TextView;
                 view.Options.SetOptionValue(DefaultTextViewOptions.WordWrapStyleId, WordWrapStyles.None);
                 view.Options.SetOptionValue(DefaultTextViewHostOptions.LineNumberMarginId, true);
                 view.Options.SetOptionValue(DefaultTextViewHostOptions.GlyphMarginId, false);
                 view.Options.SetOptionValue(DefaultTextViewHostOptions.OutliningMarginId, false);
-                return editorFactory.CreateTextViewHost(view, setFocus: false);
+                return (textView, viewHost);
             });
 
-            return new Pane(path, invisibleEditor, buffer, host);
+            return new Pane(path, invisibleEditor, textLines, buffer, vsView, host);
         }
 
-        /// <summary>Saves through the running document table, so source control and save events behave as usual.</summary>
+        /// <summary>
+        /// Saves through the document's own data, as its owner would; going through the running document table
+        /// instead asks the file's owner, which for a file outside any project is the solution.
+        /// </summary>
         public void Save()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -800,22 +913,15 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView
                 return;
             }
 
-            var table = (IVsRunningDocumentTable)Package.GetGlobalService(typeof(SVsRunningDocumentTable));
-            ErrorHandler.ThrowOnFailure(table.FindAndLockDocument(
-                (uint)_VSRDTFLAGS.RDT_NoLock, Path, out var hierarchy, out var itemId, out var docData, out var cookie));
-            if (docData != IntPtr.Zero)
-            {
-                Marshal.Release(docData);
-            }
-
-            ErrorHandler.ThrowOnFailure(table.SaveDocuments((uint)__VSRDTSAVEOPTIONS.RDTSAVEOPT_SaveIfDirty, hierarchy, itemId, cookie));
+            ErrorHandler.ThrowOnFailure(_docData.SaveDocData(VSSAVEFLAGS.VSSAVE_Save, out _, out _));
         }
 
         public void Close()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (!Host.IsClosed)
             {
-                Host.Close();
+                _textView.CloseView();
             }
 
             GC.KeepAlive(_invisibleEditor);

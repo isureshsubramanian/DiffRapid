@@ -45,8 +45,61 @@
           <LocCanonicalName>.DiffRapid.CompareFiles</LocCanonicalName>
         </Strings>
       </Button>
+
+      <!-- File comparison window commands: only on keys (see KeyBindings) and in Tools > Options > Keyboard. -->
+      <Button guid="guidDiffRapidCommandSet" id="cmdidPreviousDifference" priority="0x0200" type="Button">
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>DiffRapid: Previous Difference</ButtonText>
+          <CanonicalName>.DiffRapid.PreviousDifference</CanonicalName>
+          <LocCanonicalName>.DiffRapid.PreviousDifference</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidNextDifference" priority="0x0201" type="Button">
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>DiffRapid: Next Difference</ButtonText>
+          <CanonicalName>.DiffRapid.NextDifference</CanonicalName>
+          <LocCanonicalName>.DiffRapid.NextDifference</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCopyToLeft" priority="0x0202" type="Button">
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>DiffRapid: Copy Difference to Left</ButtonText>
+          <CanonicalName>.DiffRapid.CopyToLeft</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CopyToLeft</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCopyToRight" priority="0x0203" type="Button">
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>DiffRapid: Copy Difference to Right</ButtonText>
+          <CanonicalName>.DiffRapid.CopyToRight</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CopyToRight</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
+
+  <!--
+    Scoped to the file comparison window (its command UI is guidDiffWindow, inheriting the text editor's
+    bindings), so these win over the editor's Alt+arrow bindings there and nowhere else.
+  -->
+  <KeyBindings>
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidPreviousDifference" editor="guidDiffWindow" key1="VK_UP" mod1="Alt" />
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidNextDifference" editor="guidDiffWindow" key1="VK_DOWN" mod1="Alt" />
+    <!--
+      F8 keys work where Alt+arrows are taken by the OS (e.g. Mac keyboards send Alt as the Windows key).
+      F8 / Shift+F8 match Visual Studio's own diff.
+    -->
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidPreviousDifference" editor="guidDiffWindow" key1="VK_F8" mod1="Shift" />
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidNextDifference" editor="guidDiffWindow" key1="VK_F8" />
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidCopyToLeft" editor="guidDiffWindow" key1="VK_F8" mod1="Control Shift" />
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidCopyToRight" editor="guidDiffWindow" key1="VK_F8" mod1="Control" />
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidCopyToLeft" editor="guidDiffWindow" key1="VK_LEFT" mod1="Alt" />
+    <KeyBinding guid="guidDiffRapidCommandSet" id="cmdidCopyToRight" editor="guidDiffWindow" key1="VK_RIGHT" mod1="Alt" />
+  </KeyBindings>
 
   <CommandPlacements>
     <CommandPlacement guid="guidDiffRapidCommandSet" id="cmdidCompareSelected" priority="0x0100">
@@ -68,6 +121,12 @@
       <IDSymbol name="cmdidCompareSelected" value="0x0100" />
       <IDSymbol name="cmdidCompareFiles" value="0x0101" />
       <IDSymbol name="cmdidCompareFolders" value="0x0102" />
+      <IDSymbol name="cmdidPreviousDifference" value="0x0200" />
+      <IDSymbol name="cmdidNextDifference" value="0x0201" />
+      <IDSymbol name="cmdidCopyToLeft" value="0x0202" />
+      <IDSymbol name="cmdidCopyToRight" value="0x0203" />
     </GuidSymbol>
+    <!-- The comparison document window; also its key binding scope. -->
+    <GuidSymbol name="guidDiffWindow" value="{26ef4ac2-8d5b-4904-a008-96ca9cd7af9b}" />
   </Symbols>
 </CommandTable>
