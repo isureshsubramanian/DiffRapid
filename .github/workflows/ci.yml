@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-engine-${{ hashFiles('Directory.Packages.props') }}
+      - name: Build Core
+        run: dotnet build src/DiffRapid.Core
+      - name: Build CLI
+        run: dotnet build src/DiffRapid.Cli
+      - name: Test Core
+        run: dotnet test tests/DiffRapid.Core.Tests
+
+  vsix:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: microsoft/setup-msbuild@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-vsix-${{ hashFiles('Directory.Packages.props') }}
+      - name: Build VSIX
+        run: msbuild src/DiffRapid.VisualStudio/DiffRapid.VisualStudio.csproj /restore /p:Configuration=Release /p:DeployExtension=false
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiffRapid-vsix
+          path: src/DiffRapid.VisualStudio/bin/Release/**/*.vsix
+          if-no-files-found: error
