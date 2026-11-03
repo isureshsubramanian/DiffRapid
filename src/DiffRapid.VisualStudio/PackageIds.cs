@@ -18,6 +18,8 @@ internal static class PackageIds
     public const int CompareWithClipboard = 0x0104;
     public const int SelectForCompare = 0x0105;
     public const int CompareWithSelected = 0x0106;
+    public const int CompareWithVersion = 0x0107;
+    public const int CompareDocumentWithVersion = 0x0108;
 
     // File comparison window commands, bound to Alt+arrows in its key binding scope (DiffWindowGuid).
     public const int PreviousDifference = 0x0200;

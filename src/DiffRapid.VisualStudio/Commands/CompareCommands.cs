@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel.Design;
 using System.Threading.Tasks;
+using DiffRapid.Core.VersionControl;
 using DiffRapid.VisualStudio.UI;
 using Microsoft.VisualStudio.Shell;
 using Task = System.Threading.Tasks.Task;
@@ -79,6 +80,26 @@ internal static class CompareCommands
                 : "Compare with Selected (DiffRapid)";
         };
         commandService.AddCommand(compareWithSelected);
+
+        var compareWithVersion = new OleMenuCommand(
+            (_, _) => Run(package, () => CompareWithVersionAsync(package, SolutionSelection.GetSelectedFilePaths()[0])),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareWithVersion));
+        compareWithVersion.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            compareWithVersion.Visible = SolutionSelection.GetSelectedFilePaths().Count == 1;
+        };
+        commandService.AddCommand(compareWithVersion);
+
+        var compareDocumentWithVersion = new OleMenuCommand(
+            (_, _) => Run(package, () => CompareDocumentWithVersionAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareDocumentWithVersion));
+        compareDocumentWithVersion.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            compareDocumentWithVersion.Visible = EditorSelection.HasActiveEditor();
+        };
+        commandService.AddCommand(compareDocumentWithVersion);
     }
 
     private static async Task CompareSelectedAsync(DiffRapidPackage package)
@@ -183,6 +204,64 @@ internal static class CompareCommands
 
         _selectedForCompare = null;
         await package.OpenComparisonAsync(selected.ToComparisonFile(), current.ToComparisonFile());
+    }
+
+    private static async Task CompareDocumentWithVersionAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var path = EditorSelection.FromActiveEditor()?.DocumentPath;
+        if (path is null || !System.IO.File.Exists(path))
+        {
+            ShowMessage(package, "Save the document to a file first: only files have earlier versions.");
+            return;
+        }
+
+        await CompareWithVersionAsync(package, path);
+    }
+
+    /// <summary>
+    /// Lets the user pick a version of the file from git or TFVC (Azure DevOps), and compares it (left) with the
+    /// working copy (right). The version is written to a temporary file with its own bytes and encoding.
+    /// </summary>
+    private static async Task CompareWithVersionAsync(DiffRapidPackage package, string path)
+    {
+        var cancellation = package.DisposalToken;
+
+        // Finding a TFVC workspace runs tf.exe, so the lookup and the history stay off the UI thread.
+        var versionControl = await Task.Run(() => VersionControl.Find(path), cancellation);
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation);
+        if (versionControl is null)
+        {
+            ShowMessage(package, $"{System.IO.Path.GetFileName(path)} is not in a git repository or a TFVC (Azure DevOps) workspace.");
+            return;
+        }
+
+        var provider = versionControl.Kind == "tfvc" ? "TFVC" : "git";
+        var history = await Task.Run(() => versionControl.GetHistoryAsync(path, 200, cancellation), cancellation);
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation);
+        if (history.Count == 0)
+        {
+            ShowMessage(package, $"{System.IO.Path.GetFileName(path)} has no history in {provider} yet.");
+            return;
+        }
+
+        var dialog = new VersionPickerDialog(System.IO.Path.GetFileName(path), provider, history);
+        if (dialog.ShowModal() != true || dialog.SelectedVersion is not { } version)
+        {
+            return;
+        }
+
+        var content = await Task.Run(() => versionControl.ReadFileAsync(version.Id, version.PathAtVersion, cancellation), cancellation);
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation);
+        if (content is null)
+        {
+            ShowMessage(package, $"{System.IO.Path.GetFileName(path)} does not exist in version {version.ShortId}.");
+            return;
+        }
+
+        var name = System.IO.Path.GetFileNameWithoutExtension(path) + "@" + version.ShortId;
+        var earlier = EditorSelection.WriteTemporary(content, name, System.IO.Path.GetExtension(path));
+        await package.OpenComparisonAsync(earlier, path);
     }
 
     private static void Run(DiffRapidPackage package, Func<Task> action)

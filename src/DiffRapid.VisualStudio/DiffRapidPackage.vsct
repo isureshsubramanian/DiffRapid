@@ -90,6 +90,27 @@
         </Strings>
       </Button>
 
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareWithVersion" priority="0x0101" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="SolutionExplorerGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Compare with Earlier Version (DiffRapid)...</ButtonText>
+          <CanonicalName>.DiffRapid.CompareWithVersion</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareWithVersion</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareDocumentWithVersion" priority="0x0103" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="EditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Compare with Earlier Version (DiffRapid)...</ButtonText>
+          <CanonicalName>.DiffRapid.CompareDocumentWithVersion</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareDocumentWithVersion</LocCanonicalName>
+        </Strings>
+      </Button>
+
       <!-- File comparison window commands: only on keys (see KeyBindings) and in Tools > Options > Keyboard. -->
       <Button guid="guidDiffRapidCommandSet" id="cmdidPreviousDifference" priority="0x0200" type="Button">
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -170,6 +191,8 @@
       <IDSymbol name="cmdidCompareWithClipboard" value="0x0104" />
       <IDSymbol name="cmdidSelectForCompare" value="0x0105" />
       <IDSymbol name="cmdidCompareWithSelected" value="0x0106" />
+      <IDSymbol name="cmdidCompareWithVersion" value="0x0107" />
+      <IDSymbol name="cmdidCompareDocumentWithVersion" value="0x0108" />
       <IDSymbol name="cmdidPreviousDifference" value="0x0200" />
       <IDSymbol name="cmdidNextDifference" value="0x0201" />
       <IDSymbol name="cmdidCopyToLeft" value="0x0202" />

@@ -13,6 +13,8 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using DiffRapid.Core.Algorithms;
 using DiffRapid.Core.Comparison;
+using DiffRapid.Core.Output;
+using DiffRapid.Core.Text;
 using DiffRapid.VisualStudio.Editor;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
@@ -190,6 +192,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Backwards, "Copy to left"), "Replace the current difference on the left with the right side (Ctrl+Shift+F8 or Alt+Left)", () => CopyDifference(toRight: false)));
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Forwards, "Copy to right"), "Replace the current difference on the right with the left side (Ctrl+F8 or Alt+Right)", () => CopyDifference(toRight: true)));
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.SaveAll, "Save"), "Save both files (Ctrl+S)", Save));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.CompareFiles, "Create patch"), "Save the changes from the left file to the right file as a patch (unified diff)", CreatePatch));
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         summary.Children.Add(_metrics);
@@ -411,6 +414,32 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         {
             _copyAfterCompare = null;
             CopyDifference(toRight);
+        }
+    }
+
+    /// <summary>
+    /// Saves a patch that turns the left text into the right text, including unsaved edits. The patch compares
+    /// exact content: changes hidden by the ignore options are still changes for whoever applies it.
+    /// </summary>
+    private void CreatePatch()
+    {
+        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
+        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
+        var result = TextComparer.Compare(left, right, CompareOptions.Default with { Algorithm = _options.Algorithm });
+        if (result.AreEqual)
+        {
+            _position.Text = "The files are identical: there is nothing to put in a patch";
+            return;
+        }
+
+        var leftName = System.IO.Path.GetFileName(_left.Path);
+        var rightName = System.IO.Path.GetFileName(_right.Path);
+        var message = PatchExport.Save(
+            System.IO.Path.GetFileNameWithoutExtension(rightName),
+            writer => UnifiedDiffWriter.Write(writer, result, "a/" + leftName, "b/" + rightName));
+        if (message is not null)
+        {
+            _position.Text = message;
         }
     }
 

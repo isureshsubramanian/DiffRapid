@@ -100,13 +100,17 @@ internal sealed class EditorSelection
     public string Extension => Path.GetExtension(DocumentPath ?? string.Empty);
 
     /// <summary>Writes text to a new temporary folder under a readable name and returns the path.</summary>
-    public static string WriteTemporary(string text, string name, string extension)
+    public static string WriteTemporary(string text, string name, string extension) =>
+        WriteTemporary(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(text), name, extension);
+
+    /// <summary>Writes bytes as they are (keeping their encoding) to a new temporary folder and returns the path.</summary>
+    public static string WriteTemporary(byte[] content, string name, string extension)
     {
         var folder = Path.Combine(Path.GetTempPath(), "DiffRapid", Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(folder);
         var safeName = string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
         var path = Path.Combine(folder, safeName + (safeName.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ? string.Empty : extension));
-        File.WriteAllText(path, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.WriteAllBytes(path, content);
         return path;
     }
 

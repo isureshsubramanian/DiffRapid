@@ -19,6 +19,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using DiffRapid.Core.Folders;
+using DiffRapid.Core.Output;
 using Microsoft.Win32;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Imaging;
@@ -73,6 +74,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private readonly Button _deleteLeft;
     private readonly Button _deleteRight;
     private readonly Button _exportReport;
+    private readonly Button _createPatch;
     private readonly TextBox _search = new() { Width = 220, VerticalAlignment = VerticalAlignment.Center, ToolTip = "Show only paths containing this text" };
     private readonly TextBlock _verdict = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 14, 0) };
     private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
@@ -115,6 +117,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _deleteRight = DiffTheme.CommandButton(IconLabel(KnownMonikers.Delete, "Delete right"), "Move the selected files and folders on the right to the Recycle Bin (Delete, for items only on the right)", () => DeleteSelection(fromLeft: false));
         _exportReport = DiffTheme.CommandButton(IconLabel(KnownMonikers.Report, "Export report"), "Save the comparison as an HTML or CSV report", ExportReport);
         _exportReport.IsEnabled = false;
+        _createPatch = DiffTheme.CommandButton(IconLabel(KnownMonikers.CompareFiles, "Create patch"), "Save the differences between the text files as one patch file (unified diff)", CreatePatch);
+        _createPatch.IsEnabled = false;
 
         var toolbar = BuildToolbar();
         SetDock(toolbar, Dock.Top);
@@ -166,6 +170,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         summary.Children.Add(_deleteLeft);
         summary.Children.Add(_deleteRight);
         summary.Children.Add(_exportReport);
+        summary.Children.Add(_createPatch);
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         SetDock(summary, Dock.Left);
@@ -1128,6 +1133,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _deleteLeft.IsEnabled = enabled;
         _deleteRight.IsEnabled = enabled;
         _exportReport.IsEnabled = !_scanning && !_busy && _result is not null;
+        _createPatch.IsEnabled = _exportReport.IsEnabled;
     }
 
     // Saves the last completed comparison as a report; the save dialog's file type picks the format and rows.
@@ -1193,6 +1199,25 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
             _position.Text = $"Could not save the report: {ex.Message}";
+        }
+    }
+
+    // One git-style patch for every changed, added and removed text file; it always compares exact content.
+    private void CreatePatch()
+    {
+        if (_scanning || _busy || _result is null)
+        {
+            return;
+        }
+
+        var result = _result;
+        var names = ReportNames();
+        var message = PatchExport.Save(
+            names.Left.Replace(Path.DirectorySeparatorChar, ' ') + " to " + names.Right.Replace(Path.DirectorySeparatorChar, ' '),
+            writer => FolderPatchWriter.Write(writer, result, DiffRapid.Core.Comparison.CompareOptions.Default));
+        if (message is not null)
+        {
+            _position.Text = message;
         }
     }
 

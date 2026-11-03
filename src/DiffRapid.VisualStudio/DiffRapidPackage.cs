@@ -16,11 +16,14 @@ namespace DiffRapid.VisualStudio;
 
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [Guid(PackageIds.PackageGuidString)]
-[ProvideMenuResource("Menus.ctmenu", 1)]
+[ProvideMenuResource("Menus.ctmenu", 2)]
 [ProvideSettingsManifest(PackageRelativeManifestFile = @"UnifiedSettings\registration.json")]
 [ProvideKeyBindingTable(PackageIds.DiffWindowGuidString, PackageIds.KeyBindingScopeNameResource, AllowNavKeyBinding = true)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.FolderOpened_string, PackageAutoLoadFlags.BackgroundLoad)]
+
+// Also without a solution (a file opened on its own), so the editor menu can decide which DiffRapid items to show.
+[ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
 public sealed class DiffRapidPackage : AsyncPackage
 {
     private static int _comparisonCount;
