@@ -13,4 +13,5 @@ internal static class PackageIds
 
     public const int CompareSelected = 0x0100;
     public const int CompareFiles = 0x0101;
+    public const int CompareFolders = 0x0102;
 }

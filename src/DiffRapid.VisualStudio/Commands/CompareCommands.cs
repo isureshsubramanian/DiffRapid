@@ -27,6 +27,10 @@ internal static class CompareCommands
         commandService.AddCommand(new OleMenuCommand(
             (_, _) => Run(package, () => CompareFilesAsync(package)),
             new CommandID(PackageIds.CommandSet, PackageIds.CompareFiles)));
+
+        commandService.AddCommand(new OleMenuCommand(
+            (_, _) => Run(package, () => CompareFoldersAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareFolders)));
     }
 
     private static async Task CompareSelectedAsync(DiffRapidPackage package)
@@ -49,6 +53,7 @@ internal static class CompareCommands
         // Pre-fill from the Solution Explorer selection so a selected file lands on the left.
         var selected = SolutionSelection.GetSelectedFilePaths();
         var dialog = new SelectFilesDialog(
+            ComparisonTarget.Files,
             selected.Count > 0 ? selected[0] : null,
             selected.Count > 1 ? selected[1] : null);
         if (dialog.ShowModal() != true)
@@ -57,6 +62,18 @@ internal static class CompareCommands
         }
 
         await package.OpenComparisonAsync(dialog.LeftPath, dialog.RightPath);
+    }
+
+    private static async Task CompareFoldersAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var dialog = new SelectFilesDialog(ComparisonTarget.Folders);
+        if (dialog.ShowModal() != true)
+        {
+            return;
+        }
+
+        await package.OpenFolderComparisonAsync(dialog.LeftPath, dialog.RightPath);
     }
 
     private static void Run(DiffRapidPackage package, Func<Task> action)

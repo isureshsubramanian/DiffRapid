@@ -29,6 +29,14 @@
           <LocCanonicalName>.DiffRapid.CompareSelected</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareFolders" priority="0x0101" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" />
+        <Strings>
+          <ButtonText>DiffRapid: Compare Folders...</ButtonText>
+          <CanonicalName>.DiffRapid.CompareFolders</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareFolders</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidDiffRapidCommandSet" id="cmdidCompareFiles" priority="0x0100" type="Button">
         <Parent guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" />
         <Strings>
@@ -59,6 +67,7 @@
       <IDSymbol name="ToolsMenuGroup" value="0x1022" />
       <IDSymbol name="cmdidCompareSelected" value="0x0100" />
       <IDSymbol name="cmdidCompareFiles" value="0x0101" />
+      <IDSymbol name="cmdidCompareFolders" value="0x0102" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

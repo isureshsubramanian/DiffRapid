@@ -21,6 +21,13 @@ internal static class DiffTheme
     public static readonly Brush MovedBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x3B, 0x82, 0xF6)));
     public static readonly Brush IgnoredBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x90, 0x80, 0x80, 0x80)));
 
+    /// <summary>A translucent version of an accent, for pills and soft backgrounds.</summary>
+    public static Brush Tint(Brush accent, byte alpha = 0x33)
+    {
+        var color = accent is SolidColorBrush solid ? solid.Color : Colors.Gray;
+        return Freeze(new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B)));
+    }
+
     private static readonly Lazy<Style> FlatButton = new(() => CreateFlatStyle(typeof(Button)));
     private static readonly Lazy<Style> FlatToggle = new(() => CreateFlatStyle(typeof(ToggleButton)));
 

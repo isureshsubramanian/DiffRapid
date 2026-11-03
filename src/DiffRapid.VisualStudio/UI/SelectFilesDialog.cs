@@ -1,26 +1,44 @@
+using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.Win32;
 
 namespace DiffRapid.VisualStudio.UI;
 
-/// <summary>Lets the user pick the left and right files in one place.</summary>
+/// <summary>What the selection dialog picks.</summary>
+internal enum ComparisonTarget
+{
+    Files,
+    Folders,
+}
+
+/// <summary>Lets the user pick the left and right files (or folders) in one place.</summary>
 internal sealed class SelectFilesDialog : DialogWindow
 {
-    private static string? _lastLeft;
-    private static string? _lastRight;
+    private const int MaxPath = 32767;
 
+    private static readonly string?[] LastLeft = new string?[2];
+    private static readonly string?[] LastRight = new string?[2];
+
+    private readonly ComparisonTarget _target;
     private readonly TextBox _left = PathBox();
     private readonly TextBox _right = PathBox();
     private readonly TextBlock _error = new() { Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
     private readonly Button _compare;
 
-    public SelectFilesDialog(string? left = null, string? right = null)
+    public SelectFilesDialog(ComparisonTarget target, string? left = null, string? right = null)
     {
+        _target = target;
+        var noun = Folders ? "folder" : "file";
+
         Title = "DiffRapid";
         Width = 640;
         SizeToContent = SizeToContent.Height;
@@ -32,21 +50,21 @@ internal sealed class SelectFilesDialog : DialogWindow
         SetResourceReference(BackgroundProperty, ThemedDialogColors.WindowPanelBrushKey);
         SetResourceReference(ForegroundProperty, ThemedDialogColors.WindowPanelTextBrushKey);
 
-        _left.Text = left ?? _lastLeft ?? string.Empty;
-        _right.Text = right ?? _lastRight ?? string.Empty;
+        _left.Text = left ?? LastLeft[(int)target] ?? string.Empty;
+        _right.Text = right ?? LastRight[(int)target] ?? string.Empty;
         _error.SetResourceReference(TextBlock.ForegroundProperty, ThemedDialogColors.ValidationErrorTextBrushKey);
 
         var grid = new Grid { Margin = new Thickness(20, 0, 20, 10) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 3; i++)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         }
 
-        AddRow(grid, 0, "_Left:", _left, "Select the left file");
-        AddRow(grid, 1, "_Right:", _right, "Select the right file");
+        AddRow(grid, 0, "_Left:", _left, $"Select the left {noun}");
+        AddRow(grid, 1, "_Right:", _right, $"Select the right {noun}");
 
         Grid.SetRow(_error, 2);
         Grid.SetColumn(_error, 1);
@@ -55,7 +73,7 @@ internal sealed class SelectFilesDialog : DialogWindow
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var swap = DialogButton("_Swap", (_, _) => (_left.Text, _right.Text) = (_right.Text, _left.Text));
-        swap.ToolTip = "Exchange the left and right files";
+        swap.ToolTip = $"Exchange the left and right {noun}s";
         _compare = DialogButton("_Compare", (_, _) => Accept());
         _compare.IsDefault = true;
         var cancel = DialogButton("Cancel", (_, _) => DialogResult = false);
@@ -66,7 +84,7 @@ internal sealed class SelectFilesDialog : DialogWindow
         var footerRow = new DockPanel();
         DockPanel.SetDock(buttons, Dock.Right);
         footerRow.Children.Add(buttons);
-        var hint = new TextBlock { Text = "Tip: drag a file from Explorer onto either box.", VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        var hint = new TextBlock { Text = $"Tip: drag a {noun} from Explorer onto either box.", VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         hint.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
         footerRow.Children.Add(hint);
 
@@ -75,8 +93,15 @@ internal sealed class SelectFilesDialog : DialogWindow
         footer.SetResourceReference(Border.BorderBrushProperty, ThemedDialogColors.WindowBorderBrushKey);
 
         var heading = new StackPanel { Margin = new Thickness(20, 18, 20, 14) };
-        heading.Children.Add(new TextBlock { Text = "Compare files", FontSize = 18, FontWeight = FontWeights.SemiBold });
-        var subtitle = new TextBlock { Text = "Choose the two files to compare side by side. Unsaved edits in open documents are included.", Margin = new Thickness(0, 4, 0, 0), TextWrapping = TextWrapping.Wrap };
+        heading.Children.Add(new TextBlock { Text = Folders ? "Compare folders" : "Compare files", FontSize = 18, FontWeight = FontWeights.SemiBold });
+        var subtitle = new TextBlock
+        {
+            Text = Folders
+                ? "Choose the two folders to compare. Results appear while the scan runs; double-click a file to compare it."
+                : "Choose the two files to compare side by side. Unsaved edits in open documents are included.",
+            Margin = new Thickness(0, 4, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
         subtitle.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
         heading.Children.Add(subtitle);
 
@@ -102,12 +127,14 @@ internal sealed class SelectFilesDialog : DialogWindow
 
     public string RightPath => Normalize(_right.Text);
 
+    private bool Folders => _target == ComparisonTarget.Folders;
+
     private static TextBox PathBox()
     {
         var box = new TextBox { Margin = new Thickness(0, 0, 6, 8), MinHeight = 26, AllowDrop = true, VerticalContentAlignment = VerticalAlignment.Center };
         box.SetResourceReference(StyleProperty, VsResourceKeys.TextBoxStyleKey);
 
-        // Accept a file dragged from Explorer or Solution Explorer.
+        // Accept a file or folder dragged from Explorer or Solution Explorer.
         box.PreviewDragOver += (_, e) =>
         {
             e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
@@ -115,9 +142,9 @@ internal sealed class SelectFilesDialog : DialogWindow
         };
         box.PreviewDrop += (_, e) =>
         {
-            if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files)
+            if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } paths)
             {
-                box.Text = files[0];
+                box.Text = paths[0];
                 e.Handled = true;
             }
         };
@@ -125,6 +152,8 @@ internal sealed class SelectFilesDialog : DialogWindow
     }
 
     private static string Normalize(string path) => path.Trim().Trim('"');
+
+    private bool Exists(string path) => Folders ? Directory.Exists(path) : File.Exists(path);
 
     private void AddRow(Grid grid, int row, string label, TextBox box, string browseTitle)
     {
@@ -142,23 +171,59 @@ internal sealed class SelectFilesDialog : DialogWindow
             var current = Normalize(box.Text);
             var other = Normalize(ReferenceEquals(box, _left) ? _right.Text : _left.Text);
             var start = Directory.Exists(current) ? current : SafeDirectory(current) ?? SafeDirectory(other);
-            var dialog = new OpenFileDialog
+            var chosen = Folders ? BrowseForFolder(browseTitle, start) : BrowseForFile(browseTitle, start, current);
+            if (chosen is not null)
             {
-                Title = browseTitle,
-                CheckFileExists = true,
-                Filter = "All files (*.*)|*.*",
-                InitialDirectory = start ?? string.Empty,
-                FileName = File.Exists(current) ? Path.GetFileName(current) : string.Empty,
-            };
-            if (dialog.ShowDialog(this) == true)
-            {
-                box.Text = dialog.FileName;
+                box.Text = chosen;
             }
         });
         browse.Margin = new Thickness(0, 0, 0, 8);
         Grid.SetRow(browse, row);
         Grid.SetColumn(browse, 2);
         grid.Children.Add(browse);
+    }
+
+    private string? BrowseForFile(string title, string? start, string current)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = title,
+            CheckFileExists = true,
+            Filter = "All files (*.*)|*.*",
+            InitialDirectory = start ?? string.Empty,
+            FileName = File.Exists(current) ? Path.GetFileName(current) : string.Empty,
+        };
+        return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+    }
+
+    // Visual Studio's own folder picker, so it matches the rest of the IDE.
+    private string? BrowseForFolder(string title, string? start)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (Package.GetGlobalService(typeof(SVsUIShell)) is not IVsUIShell shell)
+        {
+            return null;
+        }
+
+        var buffer = Marshal.AllocCoTaskMem(MaxPath * sizeof(char));
+        try
+        {
+            Marshal.WriteInt16(buffer, 0);
+            var info = new VSBROWSEINFOW
+            {
+                lStructSize = (uint)Marshal.SizeOf(typeof(VSBROWSEINFOW)),
+                hwndOwner = new WindowInteropHelper(this).Handle,
+                pwzDlgTitle = title,
+                pwzInitialDir = start ?? string.Empty,
+                pwzDirName = buffer,
+                nMaxDirName = MaxPath,
+            };
+            return shell.GetDirectoryViaBrowseDlg(new[] { info }) == VSConstants.S_OK ? Marshal.PtrToStringUni(buffer) : null;
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(buffer);
+        }
     }
 
     private static Button DialogButton(string text, RoutedEventHandler onClick)
@@ -176,7 +241,7 @@ internal sealed class SelectFilesDialog : DialogWindow
             var directory = Path.GetDirectoryName(path);
             return !string.IsNullOrEmpty(directory) && Directory.Exists(directory) ? directory : null;
         }
-        catch (System.ArgumentException)
+        catch (ArgumentException)
         {
             return null;
         }
@@ -184,18 +249,19 @@ internal sealed class SelectFilesDialog : DialogWindow
 
     private bool Validate(bool showErrors)
     {
+        var noun = Folders ? "folder" : "file";
         string? problem = null;
         if (LeftPath.Length == 0 || RightPath.Length == 0)
         {
-            problem = "Choose a file for both sides.";
+            problem = $"Choose a {noun} for both sides.";
         }
-        else if (!File.Exists(LeftPath))
+        else if (!Exists(LeftPath))
         {
-            problem = "The left file does not exist.";
+            problem = $"The left {noun} does not exist.";
         }
-        else if (!File.Exists(RightPath))
+        else if (!Exists(RightPath))
         {
-            problem = "The right file does not exist.";
+            problem = $"The right {noun} does not exist.";
         }
 
         _compare.IsEnabled = problem is null || !showErrors;
@@ -210,8 +276,8 @@ internal sealed class SelectFilesDialog : DialogWindow
             return;
         }
 
-        _lastLeft = LeftPath;
-        _lastRight = RightPath;
+        LastLeft[(int)_target] = LeftPath;
+        LastRight[(int)_target] = RightPath;
         DialogResult = true;
     }
 

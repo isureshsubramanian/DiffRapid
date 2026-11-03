@@ -1,5 +1,5 @@
 using System;
-using System.Threading.Tasks;
+using System.Windows;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -8,23 +8,20 @@ namespace DiffRapid.VisualStudio.UI;
 
 /// <summary>
 /// A comparison shown as a document tab. It is both the view and the document data registered in the
-/// running document table; it cannot be saved (the compared files are saved through their own documents).
+/// running document table; saving it saves what the comparison edits (the compared files) through their
+/// own documents.
 /// </summary>
 internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData
 {
     private static readonly Guid EditorType = new(PackageIds.DiffWindowGuidString);
 
-    public DiffDocumentPane()
+    public DiffDocumentPane(FrameworkElement view)
         : base(null)
     {
+        Content = view;
     }
 
-    public async Task LoadAsync(AsyncPackage package, string leftPath, string rightPath)
-    {
-        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
-        DisposeContent();
-        Content = await TextDiffControl.CreateAsync(package, leftPath, rightPath);
-    }
+    private IComparisonView? View => Content as IComparisonView;
 
     protected override void Dispose(bool disposing)
     {
@@ -38,7 +35,7 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData
 
     private void DisposeContent()
     {
-        (Content as IDisposable)?.Dispose();
+        View?.Dispose();
         Content = null;
     }
 
@@ -48,9 +45,11 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData
         return VSConstants.S_OK;
     }
 
+    // Dirty when a compared file has unsaved edits, so closing the tab offers to save them.
     int IVsPersistDocData.IsDocDataDirty(out int pfDirty)
     {
-        pfDirty = 0;
+        ThreadHelper.ThrowIfNotOnUIThread();
+        pfDirty = View is { IsDirty: true } ? 1 : 0;
         return VSConstants.S_OK;
     }
 
@@ -60,8 +59,10 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData
 
     int IVsPersistDocData.SaveDocData(VSSAVEFLAGS dwSave, out string? pbstrMkDocumentNew, out int pfSaveCanceled)
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
         pbstrMkDocumentNew = null;
         pfSaveCanceled = 0;
+        View?.Save();
         return VSConstants.S_OK;
     }
 

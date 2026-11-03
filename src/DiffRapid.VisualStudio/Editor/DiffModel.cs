@@ -31,6 +31,9 @@ internal sealed class DiffModel
     /// <summary>First row of every important difference, in order.</summary>
     public IReadOnlyList<int> HunkRows { get; }
 
+    /// <summary>The hunk behind navigable difference <paramref name="difference"/> (an index into <see cref="HunkRows"/>).</summary>
+    public DiffHunk HunkAt(int difference) => Result.Hunks[Rows[HunkRows[difference]].HunkIndex];
+
     public static DiffModel Build(string leftText, string rightText, CompareOptions options, CancellationToken cancellationToken)
     {
         var leftDoc = TextDocument.Parse(leftText);

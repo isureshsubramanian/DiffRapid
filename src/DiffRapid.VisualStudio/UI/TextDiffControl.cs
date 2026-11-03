@@ -25,6 +25,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Span = Microsoft.VisualStudio.Text.Span;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio.UI;
@@ -33,7 +34,7 @@ namespace DiffRapid.VisualStudio.UI;
 /// Side-by-side text comparison built from two Visual Studio editor views. The views show the live
 /// document buffers (including unsaved edits), so syntax highlighting comes from VS itself.
 /// </summary>
-internal sealed class TextDiffControl : DockPanel, IDisposable
+internal sealed class TextDiffControl : DockPanel, IComparisonView
 {
     private static readonly TimeSpan RecompareDelay = TimeSpan.FromMilliseconds(300);
 
@@ -56,7 +57,10 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
     private CompareOptions _options = CompareOptions.Default;
     private CancellationTokenSource? _compareCancellation;
     private DiffModel? _model;
+    private ITextSnapshot? _modelLeftSnapshot;
+    private ITextSnapshot? _modelRightSnapshot;
     private int _currentDifference = -1;
+    private bool _revealCurrentAfterCompare;
     private bool _syncingScroll;
     private bool _disposed;
 
@@ -98,6 +102,10 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
 
         _left.Buffer.Changed += OnBufferChanged;
         _right.Buffer.Changed += OnBufferChanged;
+        _left.DirtyStateChanged += (_, _) => _leftHeader.SetDirty(_left.IsDirty);
+        _right.DirtyStateChanged += (_, _) => _rightHeader.SetDirty(_right.IsDirty);
+        _leftHeader.SetDirty(_left.IsDirty);
+        _rightHeader.SetDirty(_right.IsDirty);
         _left.View.LayoutChanged += (_, _) => SyncScroll(_left, _right);
         _right.View.LayoutChanged += (_, _) => SyncScroll(_right, _left);
         _overview.RowRequested += (_, row) => ScrollToRow(row);
@@ -162,8 +170,12 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
 
         var summary = new StackPanel { Orientation = Orientation.Horizontal };
-        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.MoveUp, "Previous"), "Previous difference (Alt+Up)", () => NavigateDifference(-1)));
-        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.MoveDown, "Next"), "Next difference (Alt+Down)", () => NavigateDifference(+1)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToPrevious, "Previous"), "Previous difference (Alt+Up)", () => NavigateDifference(-1)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToNext, "Next"), "Next difference (Alt+Down)", () => NavigateDifference(+1)));
+        summary.Children.Add(DiffTheme.Separator());
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Backwards, "Copy to left"), "Replace the current difference on the left with the right side (Alt+Left)", () => CopyDifference(toRight: false)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Forwards, "Copy to right"), "Replace the current difference on the right with the left side (Alt+Right)", () => CopyDifference(toRight: true)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.SaveAll, "Save"), "Save both files (Ctrl+S)", Save));
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         summary.Children.Add(_metrics);
@@ -280,8 +292,10 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         var cancellation = new CancellationTokenSource();
         _compareCancellation = cancellation;
 
-        var leftText = _left.Buffer.CurrentSnapshot.GetText();
-        var rightText = _right.Buffer.CurrentSnapshot.GetText();
+        var leftSnapshot = _left.Buffer.CurrentSnapshot;
+        var rightSnapshot = _right.Buffer.CurrentSnapshot;
+        var leftText = leftSnapshot.GetText();
+        var rightText = rightSnapshot.GetText();
         var options = _options;
         _verdict.Text = "Comparing…";
         _verdict.ClearValue(TextBlock.ForegroundProperty);
@@ -297,6 +311,8 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation.Token);
                 if (!_disposed && !cancellation.IsCancellationRequested)
                 {
+                    _modelLeftSnapshot = leftSnapshot;
+                    _modelRightSnapshot = rightSnapshot;
                     Apply(model, options, elapsed);
                 }
             }
@@ -316,7 +332,9 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
     private void Apply(DiffModel model, CompareOptions options, TimeSpan elapsed)
     {
         _model = model;
-        _currentDifference = -1;
+
+        // Keep the position across re-compares; after a copy the same index is the next difference.
+        _currentDifference = Math.Min(_currentDifference, model.HunkRows.Count - 1);
         DiffPaneState.Set(_left.View, model.Left);
         DiffPaneState.Set(_right.View, model.Right);
         Relayout(_left.View);
@@ -365,6 +383,119 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         _rightHeader.SetLineCount(_right.Buffer.CurrentSnapshot.LineCount);
         UpdatePosition();
         _details.Text = $"{options.Algorithm} algorithm  ·  {model.Rows.Count:N0} rows  ·  compared in {FormatElapsed(elapsed)}";
+
+        if (_revealCurrentAfterCompare)
+        {
+            _revealCurrentAfterCompare = false;
+            if (_currentDifference >= 0)
+            {
+                ScrollToRow(model.HunkRows[_currentDifference]);
+            }
+        }
+    }
+
+    /// <summary>Replaces the current difference on one side with the lines from the other side.</summary>
+    private void CopyDifference(bool toRight)
+    {
+        var model = _model;
+        if (model is null || model.HunkRows.Count == 0)
+        {
+            return;
+        }
+
+        if (_currentDifference < 0)
+        {
+            _position.Text = "Go to a difference first (Alt+Down), then copy it.";
+            return;
+        }
+
+        // The model must describe the buffers as they are now; otherwise wait for the pending re-compare.
+        if (_left.Buffer.CurrentSnapshot != _modelLeftSnapshot || _right.Buffer.CurrentSnapshot != _modelRightSnapshot)
+        {
+            StartCompare();
+            return;
+        }
+
+        var hunk = model.HunkAt(_currentDifference);
+        var (source, sourceStart, sourceCount) = toRight ? (_modelLeftSnapshot!, hunk.LeftStart, hunk.LeftCount) : (_modelRightSnapshot!, hunk.RightStart, hunk.RightCount);
+        var (target, targetStart, targetCount) = toRight ? (_right, hunk.RightStart, hunk.RightCount) : (_left, hunk.LeftStart, hunk.LeftCount);
+
+        var targetSnapshot = target.Buffer.CurrentSnapshot;
+        var replace = LinesSpan(targetSnapshot, targetStart, targetCount);
+        var text = source.GetText(LinesSpan(source, sourceStart, sourceCount));
+
+        if (text.Length > 0)
+        {
+            var lineBreak = LineBreakOf(targetSnapshot);
+
+            // Copied lines that ended the source file need a break when they land before more text.
+            if (!EndsWithLineBreak(text) && replace.End < targetSnapshot.Length)
+            {
+                text += lineBreak;
+            }
+
+            // Appending after a last line that has no break: start a new line first.
+            if (replace.Start == targetSnapshot.Length && replace.Start > 0 && !EndsWithLineBreak(targetSnapshot.GetText(replace.Start - 1, 1)))
+            {
+                text = lineBreak + text;
+            }
+        }
+
+        try
+        {
+            using var edit = target.Buffer.CreateEdit();
+            edit.Replace(replace, text);
+            edit.Apply();
+            _revealCurrentAfterCompare = true;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _position.Text = $"Could not change {System.IO.Path.GetFileName(target.Path)}: {ex.Message}";
+        }
+    }
+
+    private static Span LinesSpan(ITextSnapshot snapshot, int startLine, int lineCount)
+    {
+        var start = startLine < snapshot.LineCount ? snapshot.GetLineFromLineNumber(startLine).Start.Position : snapshot.Length;
+        var endLine = startLine + lineCount;
+        var end = endLine < snapshot.LineCount ? snapshot.GetLineFromLineNumber(endLine).Start.Position : snapshot.Length;
+        return Span.FromBounds(start, Math.Max(start, end));
+    }
+
+    private static bool EndsWithLineBreak(string text) => text.Length > 0 && text[text.Length - 1] is '\n' or '\r';
+
+    private static string LineBreakOf(ITextSnapshot snapshot)
+    {
+        foreach (var line in snapshot.Lines)
+        {
+            var lineBreak = line.GetLineBreakText();
+            if (lineBreak.Length > 0)
+            {
+                return lineBreak;
+            }
+        }
+
+        return Environment.NewLine;
+    }
+
+    public bool IsDirty => _left.IsDirty || _right.IsDirty;
+
+    /// <summary>Saves whichever of the two files has unsaved changes, through Visual Studio's own save.</summary>
+    public void Save()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        foreach (var pane in new[] { _left, _right })
+        {
+            try
+            {
+                pane.Save();
+            }
+            catch (Exception ex) when (ex is COMException or InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                _position.Text = $"Could not save {System.IO.Path.GetFileName(pane.Path)}: {ex.Message}";
+                return;
+            }
+        }
     }
 
     private void UpdatePosition()
@@ -503,12 +634,32 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
             NavigateDifference(e.SystemKey == Key.Down ? +1 : -1);
             e.Handled = true;
         }
+        else if (Keyboard.Modifiers == ModifierKeys.Alt && e.SystemKey is Key.Left or Key.Right)
+        {
+            CopyDifference(toRight: e.SystemKey == Key.Right);
+            e.Handled = true;
+        }
+        else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S)
+        {
+            Save();
+            e.Handled = true;
+        }
     }
 
     /// <summary>Title block above each editor: side badge, file name, folder and line count.</summary>
     private sealed class FileHeader : Border
     {
         private readonly TextBlock _lines = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        private readonly TextBlock _modified = new()
+        {
+            Text = "● Unsaved",
+            Foreground = DiffTheme.ChangedBrush,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+            Visibility = Visibility.Collapsed,
+            ToolTip = "This file has changes that are not saved yet (Ctrl+S saves both files)",
+        };
 
         public FileHeader(string side, string path, Brush accent)
         {
@@ -543,14 +694,18 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
             DockPanel.SetDock(badge, Dock.Left);
             DockPanel.SetDock(name, Dock.Left);
             DockPanel.SetDock(_lines, Dock.Right);
+            DockPanel.SetDock(_modified, Dock.Right);
             row.Children.Add(badge);
             row.Children.Add(name);
             row.Children.Add(_lines);
+            row.Children.Add(_modified);
             row.Children.Add(folder);
             Child = row;
         }
 
         public void SetLineCount(int lines) => _lines.Text = lines == 1 ? "1 line" : $"{lines:N0} lines";
+
+        public void SetDirty(bool dirty) => _modified.Visibility = dirty ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>One side of the comparison: the document buffer and the editor view showing it.</summary>
@@ -558,15 +713,26 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
     {
         private readonly IVsInvisibleEditor _invisibleEditor;
 
+        private readonly ITextDocument? _document;
+
         private Pane(string path, IVsInvisibleEditor invisibleEditor, ITextBuffer buffer, IWpfTextViewHost host)
         {
             Path = path;
             _invisibleEditor = invisibleEditor;
             Buffer = buffer;
             Host = host;
+            if (buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
+            {
+                _document = document;
+                _document.DirtyStateChanged += (s, e) => DirtyStateChanged?.Invoke(this, EventArgs.Empty);
+            }
         }
 
+        public event EventHandler? DirtyStateChanged;
+
         public string Path { get; }
+
+        public bool IsDirty => _document?.IsDirty ?? false;
 
         public ITextBuffer Buffer { get; }
 
@@ -623,6 +789,26 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
             });
 
             return new Pane(path, invisibleEditor, buffer, host);
+        }
+
+        /// <summary>Saves through the running document table, so source control and save events behave as usual.</summary>
+        public void Save()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!IsDirty)
+            {
+                return;
+            }
+
+            var table = (IVsRunningDocumentTable)Package.GetGlobalService(typeof(SVsRunningDocumentTable));
+            ErrorHandler.ThrowOnFailure(table.FindAndLockDocument(
+                (uint)_VSRDTFLAGS.RDT_NoLock, Path, out var hierarchy, out var itemId, out var docData, out var cookie));
+            if (docData != IntPtr.Zero)
+            {
+                Marshal.Release(docData);
+            }
+
+            ErrorHandler.ThrowOnFailure(table.SaveDocuments((uint)__VSRDTSAVEOPTIONS.RDTSAVEOPT_SaveIfDirty, hierarchy, itemId, cookie));
         }
 
         public void Close()
