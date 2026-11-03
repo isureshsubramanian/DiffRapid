@@ -35,6 +35,8 @@
     <ProjectReference Include="..\DiffRapid.Core\DiffRapid.Core.csproj" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Design" />
+    <!-- FileSystem.DeleteFile/DeleteDirectory: move to the Recycle Bin. -->
+    <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>
 
   <ItemGroup>

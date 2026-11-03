@@ -18,10 +18,12 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using DiffRapid.Core.Folders;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio.UI;
@@ -58,11 +60,16 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private readonly Dictionary<FolderCompareStatus, SummaryCard> _chips = new();
     private readonly Grid _composition = new() { ClipToBounds = true };
     private readonly TextBlock _compositionText = new() { FontSize = 11 };
-    private readonly List<FolderCompareItem> _streamed = new();
+    private List<FolderCompareItem> _streamed = new();
+    private List<FolderCompareItem> _scanned = new();
     private readonly ListView _list = new();
     private readonly ToggleButton _treeToggle;
     private readonly Button _expandAll;
     private readonly Button _collapseAll;
+    private readonly Button _copyToLeft;
+    private readonly Button _copyToRight;
+    private readonly Button _deleteLeft;
+    private readonly Button _deleteRight;
     private readonly TextBox _search = new() { Width = 220, VerticalAlignment = VerticalAlignment.Center, ToolTip = "Show only paths containing this text" };
     private readonly TextBlock _verdict = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 14, 0) };
     private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
@@ -72,6 +79,10 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private FolderCompareMethod _method = FolderCompareMethod.FullContents;
     private CancellationTokenSource? _scanCancellation;
     private bool _scanning;
+    private bool _refreshing;
+    private bool _busy;
+    private string? _afterScanMessage;
+    private ViewState? _restoreAfterScan;
     private bool _disposed;
 
     public FolderDiffControl(DiffRapidPackage package, string leftRoot, string rightRoot)
@@ -91,6 +102,10 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _treeToggle.Content = IconLabel(KnownMonikers.TreeView, "Tree");
         _expandAll = DiffTheme.CommandButton(Icon(KnownMonikers.ExpandAll), "Expand all folders", () => SetAllExpanded(true));
         _collapseAll = DiffTheme.CommandButton(Icon(KnownMonikers.CollapseAll), "Collapse all folders", () => SetAllExpanded(false));
+        _copyToLeft = DiffTheme.CommandButton(IconLabel(KnownMonikers.Backwards, "Copy to left"), "Copy the selected files and folders from the right to the left (Ctrl+Shift+F8)", () => CopySelection(toRight: false));
+        _copyToRight = DiffTheme.CommandButton(IconLabel(KnownMonikers.Forwards, "Copy to right"), "Copy the selected files and folders from the left to the right (Ctrl+F8)", () => CopySelection(toRight: true));
+        _deleteLeft = DiffTheme.CommandButton(IconLabel(KnownMonikers.Delete, "Delete left"), "Move the selected files and folders on the left to the Recycle Bin (Delete, for items only on the left)", () => DeleteSelection(fromLeft: true));
+        _deleteRight = DiffTheme.CommandButton(IconLabel(KnownMonikers.Delete, "Delete right"), "Move the selected files and folders on the right to the Recycle Bin (Delete, for items only on the right)", () => DeleteSelection(fromLeft: false));
 
         var toolbar = BuildToolbar();
         SetDock(toolbar, Dock.Top);
@@ -136,6 +151,11 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         var summary = new StackPanel { Orientation = Orientation.Horizontal };
         summary.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Compare again (F5)", StartScan));
+        summary.Children.Add(DiffTheme.Separator());
+        summary.Children.Add(_copyToLeft);
+        summary.Children.Add(_copyToRight);
+        summary.Children.Add(_deleteLeft);
+        summary.Children.Add(_deleteRight);
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         SetDock(summary, Dock.Left);
@@ -311,7 +331,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         _list.View = view;
         _list.BorderThickness = new Thickness(0);
-        _list.SelectionMode = SelectionMode.Single;
+        _list.SelectionMode = SelectionMode.Extended;
+        _list.SelectionChanged += (_, _) => UpdateActionButtons();
         _list.SetResourceReference(StyleProperty, VsResourceKeys.ThemedDialogListViewStyleKey);
         _list.SetResourceReference(ItemsControl.ItemContainerStyleProperty, VsResourceKeys.ThemedDialogListViewItemGridStyleKey);
         _list.SetResourceReference(ImageThemingUtilities.ImageBackgroundColorProperty, EnvironmentColors.ToolWindowBackgroundColorKey);
@@ -326,6 +347,9 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             }
         };
         _list.PreviewKeyDown += OnListKeyDown;
+        _list.ContextMenu = new ContextMenu();
+        _list.ContextMenu.SetResourceReference(StyleProperty, VsResourceKeys.ContextMenuStyleKey);
+        _list.ContextMenuOpening += OnContextMenuOpening;
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.F5)
@@ -478,20 +502,33 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         {
         }
 
-        _root = null;
-        _streamed.Clear();
-        _counts.Clear();
-        SetRows(new ObservableCollection<FolderRow>());
+        // A rescan (after a copy, F5...) keeps the current results on screen and swaps them for the new ones
+        // when the scan is done, keeping the user's place; only the first scan streams rows in as they come.
+        _refreshing = _root is not null;
+        _restoreAfterScan ??= CaptureViewState();
+        _scanned = new List<FolderCompareItem>();
         _scanning = true;
-        UpdateChips();
-        UpdateComposition(new Dictionary<FolderCompareStatus, int>());
-        _expandAll.IsEnabled = false;
-        _collapseAll.IsEnabled = false;
-        _verdict.Text = "Comparing…";
-        _verdict.ClearValue(TextBlock.ForegroundProperty);
-        _position.Text = "Scanning folders…";
-        _details.Text = string.Empty;
+        UpdateActionButtons();
         _flushTimer.Start();
+        if (_refreshing)
+        {
+            _position.Text = "Comparing again…";
+        }
+        else
+        {
+            _streamed = _scanned;
+            _root = null;
+            _counts.Clear();
+            SetRows(new ObservableCollection<FolderRow>());
+            UpdateChips();
+            UpdateComposition(new Dictionary<FolderCompareStatus, int>());
+            _expandAll.IsEnabled = false;
+            _collapseAll.IsEnabled = false;
+            _verdict.Text = "Comparing…";
+            _verdict.ClearValue(TextBlock.ForegroundProperty);
+            _position.Text = "Scanning folders…";
+            _details.Text = string.Empty;
+        }
 
         var options = new FolderCompareOptions { Method = _method };
         var reporter = new QueueReporter(_pending, cancellation.Token);
@@ -516,8 +553,10 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
                 if (!cancellation.IsCancellationRequested)
                 {
                     _scanning = false;
+                    _refreshing = false;
                     _flushTimer.Stop();
                     UpdateChips();
+                    UpdateActionButtons();
                     _verdict.Text = "Compare failed";
                     _verdict.Foreground = DiffTheme.RemovedBrush;
                     _position.Text = ex.Message;
@@ -537,7 +576,13 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
                 continue;
             }
 
-            _streamed.Add(item);
+            _scanned.Add(item);
+            added++;
+            if (_refreshing)
+            {
+                continue;
+            }
+
             var status = ChipStatus(item.Status);
             _counts[status] = _counts.TryGetValue(status, out var count) ? count + 1 : 1;
             var row = new FolderRow(item, null, depth: 0, treeMode: false);
@@ -545,14 +590,12 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             {
                 _rows.Add(row);
             }
-
-            added++;
         }
 
-        if (added > 0 && _scanning)
+        if (added > 0 && _scanning && !_refreshing)
         {
             UpdateChips();
-            _position.Text = $"Scanning folders…  {_streamed.Count:N0} items so far";
+            _position.Text = $"Scanning folders…  {_scanned.Count:N0} items so far";
         }
     }
 
@@ -561,6 +604,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _scanning = false;
         _flushTimer.Stop();
         Flush();
+        _refreshing = false;
+        _streamed = _scanned;
 
         _root = Node.Build(result.Root);
         _counts.Clear();
@@ -571,7 +616,9 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         UpdateChips();
         UpdateComposition(_root.Files);
+        RestoreViewState();
         ShowResults();
+        RestoreSelectionAndScroll();
 
         var changes = Count(FolderCompareStatus.Different) + Count(FolderCompareStatus.LeftOnly) + Count(FolderCompareStatus.RightOnly) + Count(FolderCompareStatus.Error);
         if (result.Root.Error is not null)
@@ -590,8 +637,16 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         {
             _verdict.Text = changes == 1 ? "1 difference" : $"{changes:N0} differences";
             _verdict.ClearValue(TextBlock.ForegroundProperty);
-            _position.Text = "Double-click a file to compare it  ·  ←/→ collapse and expand  ·  F5 compares again";
+            _position.Text = "Double-click a file to compare it  ·  select items to copy or delete them  ·  F5 compares again";
         }
+
+        if (_afterScanMessage is not null)
+        {
+            _position.Text = _afterScanMessage;
+            _afterScanMessage = null;
+        }
+
+        UpdateActionButtons();
 
         var skipped = result.Counts.TryGetValue(FolderCompareStatus.Skipped, out var s) ? s : 0;
         var method = Methods.First(m => m.Method == _method).Label;
@@ -685,7 +740,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
     private string CardDetail(FolderCompareStatus status)
     {
-        if (_scanning)
+        if (_scanning && !_refreshing)
         {
             return "Scanning…";
         }
@@ -773,6 +828,18 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         switch (e.Key)
         {
+            case Key.F8 when Keyboard.Modifiers == ModifierKeys.Control:
+                CopySelection(toRight: true);
+                e.Handled = true;
+                break;
+            case Key.F8 when Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift):
+                CopySelection(toRight: false);
+                e.Handled = true;
+                break;
+            case Key.Delete when Keyboard.Modifiers == ModifierKeys.None:
+                DeleteSelection();
+                e.Handled = true;
+                break;
             case Key.Enter:
                 Activate();
                 e.Handled = true;
@@ -813,8 +880,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             return;
         }
 
-        var left = Path.Combine(_leftRoot, row.Item.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-        var right = Path.Combine(_rightRoot, row.Item.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var left = FullPath(row.Item, left: true);
+        var right = FullPath(row.Item, left: false);
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
             try
@@ -838,8 +905,385 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         }).FileAndForget("DiffRapid/FolderOpen");
     }
 
+    private ViewState? CaptureViewState()
+    {
+        if (_root is null)
+        {
+            return null;
+        }
+
+        var expanded = new HashSet<string>(
+            _root.Descendants().Where(n => n.Row.IsExpanded).Select(n => n.Item.RelativePath),
+            StringComparer.OrdinalIgnoreCase);
+        var selected = new HashSet<string>(SelectedItems().Select(i => i.RelativePath), StringComparer.OrdinalIgnoreCase);
+
+        // The list scrolls by item, so the offset is the index of the top row.
+        var offset = FindScrollViewer(_list)?.VerticalOffset ?? 0;
+        var top = (int)offset;
+        var topPath = top >= 0 && top < _rows.Count ? _rows[top].Item.RelativePath : null;
+        return new ViewState(expanded, selected, topPath, offset);
+    }
+
+    // Opens the folders that were open before the rescan (the new tree starts collapsed).
+    private void RestoreViewState()
+    {
+        if (_restoreAfterScan is not { } state || _root is null)
+        {
+            return;
+        }
+
+        foreach (var node in _root.Descendants())
+        {
+            if (node.Row.HasChildren && state.Expanded.Contains(node.Item.RelativePath))
+            {
+                node.Row.IsExpanded = true;
+            }
+        }
+    }
+
+    // Reselects the rows that are still listed and scrolls back to the same top row (or the same offset).
+    private void RestoreSelectionAndScroll()
+    {
+        if (_restoreAfterScan is not { } state)
+        {
+            return;
+        }
+
+        _restoreAfterScan = null;
+        _list.SelectedItems.Clear();
+        foreach (var row in _rows.Where(r => state.Selected.Contains(r.Item.RelativePath)))
+        {
+            _list.SelectedItems.Add(row);
+        }
+
+        var top = -1;
+        for (var i = 0; state.TopPath is not null && i < _rows.Count; i++)
+        {
+            if (string.Equals(_rows[i].Item.RelativePath, state.TopPath, StringComparison.OrdinalIgnoreCase))
+            {
+                top = i;
+                break;
+            }
+        }
+
+        // Lay out the new rows first so the scroll range covers the offset.
+        _list.UpdateLayout();
+        FindScrollViewer(_list)?.ScrollToVerticalOffset(top >= 0 ? top : state.Offset);
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject element)
+    {
+        if (element is ScrollViewer viewer)
+        {
+            return viewer;
+        }
+
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+        {
+            if (FindScrollViewer(VisualTreeHelper.GetChild(element, i)) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private IReadOnlyList<FolderCompareItem> SelectedItems() => _list.SelectedItems.OfType<FolderRow>().Select(r => r.Item).ToList();
+
+    private string FullPath(FolderCompareItem item, bool left) =>
+        Path.Combine(left ? _leftRoot : _rightRoot, item.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+
+    // Right-click menu for the selection, rebuilt on each opening with only the actions that apply to it.
+    private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        var selected = SelectedItems();
+        var menu = _list.ContextMenu;
+        menu.Items.Clear();
+        if (selected.Count == 0)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        var ready = !_scanning && !_busy && _root is not null;
+        var single = selected.Count == 1 ? selected[0] : null;
+        var groups = new List<List<MenuItem>>();
+
+        var open = new List<MenuItem>();
+        if (single is { Kind: FolderItemKind.File })
+        {
+            var both = single.Left.Exists && single.Right.Exists;
+            open.Add(MenuEntry(both ? "Compare" : "Open", KnownMonikers.Open, "Enter", Activate));
+        }
+
+        groups.Add(open);
+
+        var copy = new List<MenuItem>();
+        if (ready && !FolderCopyPlan.Create(selected, toRight: true).IsEmpty)
+        {
+            copy.Add(MenuEntry("Copy to right", KnownMonikers.Forwards, "Ctrl+F8", () => CopySelection(toRight: true)));
+        }
+
+        if (ready && !FolderCopyPlan.Create(selected, toRight: false).IsEmpty)
+        {
+            copy.Add(MenuEntry("Copy to left", KnownMonikers.Backwards, "Ctrl+Shift+F8", () => CopySelection(toRight: false)));
+        }
+
+        groups.Add(copy);
+
+        var delete = new List<MenuItem>();
+        var onlySide = FolderDeletePlan.OnlySide(selected);
+        if (ready && !FolderDeletePlan.Create(selected, fromLeft: true).IsEmpty)
+        {
+            delete.Add(MenuEntry("Delete from left…", KnownMonikers.Delete, onlySide == true ? "Del" : null, () => DeleteSelection(fromLeft: true)));
+        }
+
+        if (ready && !FolderDeletePlan.Create(selected, fromLeft: false).IsEmpty)
+        {
+            delete.Add(MenuEntry("Delete from right…", KnownMonikers.Delete, onlySide == false ? "Del" : null, () => DeleteSelection(fromLeft: false)));
+        }
+
+        groups.Add(delete);
+
+        var paths = new List<MenuItem>();
+        if (single is not null)
+        {
+            // The side the entry is on; the left when it is on both.
+            var path = FullPath(single, left: single.Left.Exists);
+            paths.Add(MenuEntry("Open containing folder", KnownMonikers.OpenFolder, null, () => RevealInExplorer(path)));
+            paths.Add(MenuEntry("Copy full path", KnownMonikers.Copy, null, () => CopyToClipboard(path)));
+        }
+
+        groups.Add(paths);
+
+        foreach (var group in groups.Where(g => g.Count > 0))
+        {
+            if (menu.Items.Count > 0)
+            {
+                menu.Items.Add(new Separator());
+            }
+
+            foreach (var item in group)
+            {
+                menu.Items.Add(item);
+            }
+        }
+
+        if (menu.Items.Count == 0)
+        {
+            e.Handled = true;
+        }
+    }
+
+    private static MenuItem MenuEntry(string header, ImageMoniker icon, string? gesture, Action action)
+    {
+        var item = new MenuItem { Header = header, Icon = Icon(icon), InputGestureText = gesture ?? string.Empty };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    private void CopyToClipboard(string text)
+    {
+        try
+        {
+            Clipboard.SetText(text);
+            _position.Text = "Copied " + text;
+        }
+        catch (System.Runtime.InteropServices.COMException ex)
+        {
+            // Another application can hold the clipboard open.
+            _position.Text = $"Could not copy the path: {ex.Message}";
+        }
+    }
+
+    private void RevealInExplorer(string path)
+    {
+        try
+        {
+            Process.Start("explorer.exe", $"/select,\"{path}\"");
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            _position.Text = $"Could not open the folder: {ex.Message}";
+        }
+    }
+
+    private void UpdateActionButtons()
+    {
+        var enabled = !_scanning && !_busy && _root is not null && _list.SelectedItems.Count > 0;
+        _copyToLeft.IsEnabled = enabled;
+        _copyToRight.IsEnabled = enabled;
+        _deleteLeft.IsEnabled = enabled;
+        _deleteRight.IsEnabled = enabled;
+    }
+
+    // Copies the selected entries to the other side after a confirmation, then compares again.
+    private void CopySelection(bool toRight)
+    {
+        if (_scanning || _busy || _root is null)
+        {
+            return;
+        }
+
+        var plan = FolderCopyPlan.Create(SelectedItems(), toRight);
+        var (from, to) = toRight ? ("left", "right") : ("right", "left");
+        if (plan.IsEmpty)
+        {
+            _position.Text = $"Nothing to copy: the selection has no files on the {from} that differ or are missing on the {to}.";
+            return;
+        }
+
+        var (sourceRoot, targetRoot) = toRight ? (_leftRoot, _rightRoot) : (_rightRoot, _leftRoot);
+        var files = plan.Files.Count;
+        var added = files - plan.Overwrites;
+        var message = $"Copy {Plural(files, "file")} from the {from} to the {to}?"
+            + Environment.NewLine + Environment.NewLine
+            + (added > 0 ? $"{added:N0} new" : string.Empty)
+            + (added > 0 && plan.Overwrites > 0 ? ", " : string.Empty)
+            + (plan.Overwrites > 0 ? $"{plan.Overwrites:N0} replaced (the {to} version is overwritten)" : string.Empty)
+            + Environment.NewLine + Environment.NewLine
+            + "Into: " + targetRoot;
+        if (!Confirm(message, "DiffRapid: Copy to " + to, warn: plan.Overwrites > 0))
+        {
+            return;
+        }
+
+        RunFileOperation(
+            $"Copying {Plural(files, "file")} to the {to}…",
+            token => plan.Run(sourceRoot, targetRoot, token),
+            "Copy",
+            errors => errors == 0
+                ? $"Copied {Plural(files, "file")} to the {to}."
+                : $"Copied {files - errors:N0} of {Plural(files, "file")} to the {to}; {errors:N0} failed");
+    }
+
+    // The Delete key: removes items that exist on one side only from that side; a mixed selection needs a side.
+    private void DeleteSelection()
+    {
+        var side = FolderDeletePlan.OnlySide(SelectedItems());
+        if (side is { } fromLeft)
+        {
+            DeleteSelection(fromLeft);
+        }
+        else if (_list.SelectedItems.Count > 0)
+        {
+            _position.Text = "The selection exists on both sides: use Delete left or Delete right.";
+        }
+    }
+
+    // Moves the selected entries on one side to the Recycle Bin after a confirmation, then compares again.
+    private void DeleteSelection(bool fromLeft)
+    {
+        if (_scanning || _busy || _root is null)
+        {
+            return;
+        }
+
+        var plan = FolderDeletePlan.Create(SelectedItems(), fromLeft);
+        var side = fromLeft ? "left" : "right";
+        if (plan.IsEmpty)
+        {
+            _position.Text = $"Nothing to delete: the selection does not exist on the {side}.";
+            return;
+        }
+
+        var root = fromLeft ? _leftRoot : _rightRoot;
+        var what = string.Join(" and ", new[]
+        {
+            plan.Files > 0 ? Plural(plan.Files, "file") : null,
+            plan.Folders > 0 ? Plural(plan.Folders, "folder") + " (with everything in " + (plan.Folders == 1 ? "it" : "them") + ")" : null,
+        }.Where(p => p is not null));
+        var message = $"Move {what} on the {side} to the Recycle Bin?"
+            + Environment.NewLine + Environment.NewLine
+            + "From: " + root;
+        if (!Confirm(message, "DiffRapid: Delete " + side, warn: true))
+        {
+            return;
+        }
+
+        RunFileOperation(
+            $"Deleting {what} on the {side}…",
+            token => plan.Run(root, token),
+            "Delete",
+            errors => errors == 0
+                ? $"Moved {what} on the {side} to the Recycle Bin."
+                : $"Deleted on the {side} with {errors:N0} {(errors == 1 ? "failure" : "failures")}");
+    }
+
+    private bool Confirm(string message, string title, bool warn) =>
+        VsShellUtilities.ShowMessageBox(
+            _package,
+            message,
+            title,
+            warn ? OLEMSGICON.OLEMSGICON_WARNING : OLEMSGICON.OLEMSGICON_QUERY,
+            OLEMSGBUTTON.OLEMSGBUTTON_OKCANCEL,
+            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST) == (int)VSConstants.MessageBoxResult.IDOK;
+
+    // Runs a copy or delete off the UI thread, logs per-item failures, then compares again and reports.
+    private void RunFileOperation(string busyText, Func<CancellationToken, IReadOnlyList<string>> work, string verb, Func<int, string> outcome)
+    {
+        _busy = true;
+        UpdateActionButtons();
+        _position.Text = busyText;
+        _package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            IReadOnlyList<string> errors;
+            try
+            {
+                errors = await Task.Run(() => work(_package.DisposalToken));
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            finally
+            {
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                _busy = false;
+            }
+
+            if (_disposed)
+            {
+                return;
+            }
+
+            foreach (var error in errors)
+            {
+                Diagnostics.WriteLine($"[{DateTime.Now:HH:mm:ss}] {verb} failed: {error}");
+            }
+
+            _afterScanMessage = errors.Count == 0
+                ? outcome(0)
+                : $"{outcome(errors.Count)} (details in the DiffRapid output pane): {errors[0]}";
+            StartScan();
+        }).FileAndForget("DiffRapid/Folder" + verb);
+    }
+
+    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
+
     private static string FormatElapsed(TimeSpan elapsed) =>
         elapsed.TotalMilliseconds < 1000 ? $"{Math.Max(1, (int)elapsed.TotalMilliseconds)} ms" : $"{elapsed.TotalSeconds:0.0} s";
+
+    /// <summary>What the list showed before a rescan: open folders, selected rows and the top row, by relative path.</summary>
+    private sealed class ViewState
+    {
+        public ViewState(HashSet<string> expanded, HashSet<string> selected, string? topPath, double offset)
+        {
+            Expanded = expanded;
+            Selected = selected;
+            TopPath = topPath;
+            Offset = offset;
+        }
+
+        public HashSet<string> Expanded { get; }
+
+        public HashSet<string> Selected { get; }
+
+        public string? TopPath { get; }
+
+        public double Offset { get; }
+    }
 
     /// <summary>
     /// A dashboard tile: accent stripe, headline count, label and a detail line. It doubles as a filter;
@@ -999,6 +1443,18 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             var isMixedFolder = Item.Kind == FolderItemKind.Folder && Item.Left.Exists && Item.Right.Exists
                 && Item.Status is FolderCompareStatus.Identical or FolderCompareStatus.Different;
             Visible = Depth < 0 || (isMixedFolder ? anyChild : isShown(Row) || anyChild);
+        }
+
+        public IEnumerable<Node> Descendants()
+        {
+            foreach (var child in Children)
+            {
+                yield return child;
+                foreach (var descendant in child.Descendants())
+                {
+                    yield return descendant;
+                }
+            }
         }
 
         public void SetExpandedRecursive(bool expanded)
