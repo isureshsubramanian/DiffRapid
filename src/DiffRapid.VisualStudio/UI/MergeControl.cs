@@ -214,7 +214,8 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         Loaded -= OnFirstLoaded;
         if (_conflictCount > 0)
         {
-            Dispatcher.BeginInvoke(new Action(() => GoToConflict(+1, unresolvedOnly: true)), System.Windows.Threading.DispatcherPriority.Background);
+            // Once the editors have laid out, so the first conflict can be scrolled into view.
+            ThreadHelper.JoinableTaskFactory.StartOnIdle(() => GoToConflict(+1, unresolvedOnly: true)).FileAndForget("DiffRapid/MergeFirstConflict");
         }
     }
 

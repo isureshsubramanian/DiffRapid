@@ -55,9 +55,23 @@ internal sealed class EditorSelection
         }
 
         var spans = view.Selection.SelectedSpans;
-        var text = string.Join(Environment.NewLine, spans.Select(span => span.GetText()));
-        var first = snapshot.GetLineNumberFromPosition(spans[0].Start) + 1;
-        var last = snapshot.GetLineNumberFromPosition(spans[spans.Count - 1].End) + 1;
+        var firstLine = snapshot.GetLineFromPosition(spans[0].Start);
+        var end = spans[spans.Count - 1].End;
+
+        // A selection that ends at the start of a line (whole lines selected) does not include that line.
+        var lastLine = snapshot.GetLineFromPosition(end);
+        if (end.Position == lastLine.Start.Position && lastLine.LineNumber > firstLine.LineNumber)
+        {
+            lastLine = snapshot.GetLineFromLineNumber(lastLine.LineNumber - 1);
+        }
+
+        // A stream selection is widened to whole lines, so indentation and the last line break match what is
+        // compared against; a box selection keeps its columns.
+        var text = view.Selection.Mode == TextSelectionMode.Box
+            ? string.Join(Environment.NewLine, spans.Select(span => span.GetText()))
+            : snapshot.GetText(Span.FromBounds(firstLine.Start, lastLine.EndIncludingLineBreak));
+        var first = firstLine.LineNumber + 1;
+        var last = lastLine.LineNumber + 1;
         var lines = first == last ? $"line {first}" : $"lines {first}-{last}";
         return new EditorSelection(text, path, $"{name} {lines}", isWholeDocument: false);
     }
