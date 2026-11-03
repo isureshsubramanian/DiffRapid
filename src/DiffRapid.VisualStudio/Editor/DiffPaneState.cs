@@ -29,14 +29,18 @@ internal sealed class DiffPaneState
 {
     private static readonly IReadOnlyList<TextSpan> NoSpans = Array.Empty<TextSpan>();
 
-    public DiffPaneState(int lineCount)
+    public DiffPaneState(int lineCount, bool isLeft)
     {
         LineCount = lineCount;
+        IsLeft = isLeft;
         FillerBefore = new int[lineCount + 1];
         RowOfLine = new int[lineCount];
         LineKind = new PaneLineKind[lineCount];
         Inline = new IReadOnlyList<TextSpan>?[lineCount];
     }
+
+    /// <summary>True for the left (original) pane; lines only on this side read as removed.</summary>
+    public bool IsLeft { get; }
 
     /// <summary>Number of lines in the compared text (excludes the editor's empty line after a final newline).</summary>
     public int LineCount { get; }

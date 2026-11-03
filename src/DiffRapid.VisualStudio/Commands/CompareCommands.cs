@@ -1,9 +1,8 @@
 using System;
 using System.ComponentModel.Design;
-using System.IO;
 using System.Threading.Tasks;
+using DiffRapid.VisualStudio.UI;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.Win32;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio.Commands;
@@ -46,31 +45,18 @@ internal static class CompareCommands
     private static async Task CompareFilesAsync(DiffRapidPackage package)
     {
         await package.JoinableTaskFactory.SwitchToMainThreadAsync();
-        var left = PickFile("Select the left file");
-        if (left is null)
+
+        // Pre-fill from the Solution Explorer selection so a selected file lands on the left.
+        var selected = SolutionSelection.GetSelectedFilePaths();
+        var dialog = new SelectFilesDialog(
+            selected.Count > 0 ? selected[0] : null,
+            selected.Count > 1 ? selected[1] : null);
+        if (dialog.ShowModal() != true)
         {
             return;
         }
 
-        var right = PickFile("Select the right file", Path.GetDirectoryName(left));
-        if (right is null)
-        {
-            return;
-        }
-
-        await package.OpenComparisonAsync(left, right);
-    }
-
-    private static string? PickFile(string title, string? initialDirectory = null)
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = title,
-            CheckFileExists = true,
-            Filter = "All files (*.*)|*.*",
-            InitialDirectory = initialDirectory ?? string.Empty,
-        };
-        return dialog.ShowDialog() == true ? dialog.FileName : null;
+        await package.OpenComparisonAsync(dialog.LeftPath, dialog.RightPath);
     }
 
     private static void Run(DiffRapidPackage package, Func<Task> action)
@@ -84,7 +70,8 @@ internal static class CompareCommands
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 await package.JoinableTaskFactory.SwitchToMainThreadAsync();
-                ShowMessage(package, ex.Message);
+                Diagnostics.LogError(ex);
+                ShowMessage(package, ex.Message + "\n\nDetails are in the Output window (DiffRapid pane) and in " + Diagnostics.LogFilePath);
             }
         }).FileAndForget("DiffRapid/Command");
     }

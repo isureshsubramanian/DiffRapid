@@ -7,12 +7,13 @@ namespace DiffRapid.VisualStudio.Editor;
 
 /// <summary>
 /// Diff colors. They appear under Tools &gt; Options &gt; Fonts and Colors (Text Editor) so users can
-/// change them. Defaults are translucent so they read well on light and dark themes.
+/// change them. Pick the hue here; DiffRapid paints it as a light tint so syntax colours stay readable.
 /// </summary>
 internal static class DiffFormatNames
 {
     public const string ChangedLine = "DiffRapid.ChangedLine";
     public const string InsertedLine = "DiffRapid.InsertedLine";
+    public const string RemovedLine = "DiffRapid.RemovedLine";
     public const string MovedLine = "DiffRapid.MovedLine";
     public const string IgnoredLine = "DiffRapid.IgnoredLine";
     public const string ChangedText = "DiffRapid.ChangedText";
@@ -27,7 +28,7 @@ internal sealed class ChangedLineFormat : EditorFormatDefinition
     public ChangedLineFormat()
     {
         DisplayName = "DiffRapid - Changed line";
-        BackgroundColor = Color.FromArgb(0x38, 0xE0, 0xA8, 0x00);
+        BackgroundColor = Color.FromRgb(0xD9, 0x9A, 0x1E);
         ForegroundCustomizable = false;
     }
 }
@@ -39,8 +40,8 @@ internal sealed class InsertedLineFormat : EditorFormatDefinition
 {
     public InsertedLineFormat()
     {
-        DisplayName = "DiffRapid - Line only on this side";
-        BackgroundColor = Color.FromArgb(0x38, 0x2E, 0xA0, 0x43);
+        DisplayName = "DiffRapid - Line only in the right file";
+        BackgroundColor = Color.FromRgb(0x2D, 0xA4, 0x4E);
         ForegroundCustomizable = false;
     }
 }
@@ -53,7 +54,7 @@ internal sealed class MovedLineFormat : EditorFormatDefinition
     public MovedLineFormat()
     {
         DisplayName = "DiffRapid - Moved line";
-        BackgroundColor = Color.FromArgb(0x38, 0x3B, 0x82, 0xF6);
+        BackgroundColor = Color.FromRgb(0x3B, 0x82, 0xF6);
         ForegroundCustomizable = false;
     }
 }
@@ -66,7 +67,7 @@ internal sealed class IgnoredLineFormat : EditorFormatDefinition
     public IgnoredLineFormat()
     {
         DisplayName = "DiffRapid - Ignored difference";
-        BackgroundColor = Color.FromArgb(0x20, 0x80, 0x80, 0x80);
+        BackgroundColor = Color.FromRgb(0x80, 0x80, 0x80);
         ForegroundCustomizable = false;
     }
 }
@@ -79,7 +80,7 @@ internal sealed class ChangedTextFormat : EditorFormatDefinition
     public ChangedTextFormat()
     {
         DisplayName = "DiffRapid - Changed text within a line";
-        BackgroundColor = Color.FromArgb(0x70, 0xE0, 0x80, 0x00);
+        BackgroundColor = Color.FromRgb(0xD9, 0x8A, 0x1E);
         ForegroundCustomizable = false;
     }
 }
@@ -92,7 +93,20 @@ internal sealed class FillerFormat : EditorFormatDefinition
     public FillerFormat()
     {
         DisplayName = "DiffRapid - Filler (no matching lines)";
-        BackgroundColor = Color.FromArgb(0x24, 0x80, 0x80, 0x80);
+        BackgroundColor = Color.FromRgb(0x80, 0x80, 0x80);
+        ForegroundCustomizable = false;
+    }
+}
+
+[Export(typeof(EditorFormatDefinition))]
+[Name(DiffFormatNames.RemovedLine)]
+[UserVisible(true)]
+internal sealed class RemovedLineFormat : EditorFormatDefinition
+{
+    public RemovedLineFormat()
+    {
+        DisplayName = "DiffRapid - Line only in the left file";
+        BackgroundColor = Color.FromRgb(0xD7, 0x3A, 0x49);
         ForegroundCustomizable = false;
     }
 }

@@ -4,20 +4,23 @@ using System.Windows.Input;
 using System.Windows.Media;
 using DiffRapid.Core.Comparison;
 using DiffRapid.VisualStudio.Editor;
+using Microsoft.VisualStudio.PlatformUI;
 
 namespace DiffRapid.VisualStudio.UI;
 
 /// <summary>
 /// The location pane: a miniature map of all differences with the visible area outlined.
-/// Clicking it scrolls to that position.
+/// Clicking or dragging on it scrolls to that position.
 /// </summary>
 internal sealed class DiffOverviewBar : FrameworkElement
 {
-    private static readonly Brush ChangedBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xE0, 0xA8, 0x00)));
-    private static readonly Brush RemovedBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xD9, 0x4B, 0x4B)));
-    private static readonly Brush AddedBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x2E, 0xA0, 0x43)));
-    private static readonly Brush IgnoredBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x80, 0x80, 0x80, 0x80)));
-    private static readonly Pen ViewportPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0xC0, 0x80, 0x80, 0x80)), 1));
+    public static readonly DependencyProperty TrackBrushProperty = DependencyProperty.Register(
+        nameof(TrackBrush), typeof(Brush), typeof(DiffOverviewBar), new FrameworkPropertyMetadata(Brushes.Transparent, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty LensBrushProperty = DependencyProperty.Register(
+        nameof(LensBrush), typeof(Brush), typeof(DiffOverviewBar), new FrameworkPropertyMetadata(Brushes.Gray, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    private const double Inset = 3;
 
     private DiffModel? _model;
     private double _viewportTopRow;
@@ -27,9 +30,23 @@ internal sealed class DiffOverviewBar : FrameworkElement
 
     public DiffOverviewBar()
     {
-        Width = 14;
+        Width = 18;
         Cursor = Cursors.Hand;
-        ToolTip = "Differences overview: click to jump";
+        ToolTip = "Differences overview: click or drag to jump";
+        SetResourceReference(TrackBrushProperty, EnvironmentColors.ScrollBarBackgroundBrushKey);
+        SetResourceReference(LensBrushProperty, EnvironmentColors.ScrollBarThumbBackgroundBrushKey);
+    }
+
+    public Brush TrackBrush
+    {
+        get => (Brush)GetValue(TrackBrushProperty);
+        set => SetValue(TrackBrushProperty, value);
+    }
+
+    public Brush LensBrush
+    {
+        get => (Brush)GetValue(LensBrushProperty);
+        set => SetValue(LensBrushProperty, value);
     }
 
     public void SetModel(DiffModel? model)
@@ -47,62 +64,87 @@ internal sealed class DiffOverviewBar : FrameworkElement
 
     protected override void OnRender(DrawingContext dc)
     {
-        dc.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
+        dc.DrawRectangle(TrackBrush, null, new Rect(RenderSize));
         var model = _model;
         if (model is null || model.Rows.Count == 0 || ActualHeight <= 0)
         {
             return;
         }
 
-        var scale = ActualHeight / model.Rows.Count;
-        var half = ActualWidth / 2;
-        for (var r = 0; r < model.Rows.Count; r++)
+        var scale = ActualHeight / Math.Max(model.Rows.Count, 1);
+
+        // Viewport lens first, so the difference marks stay readable on top of it.
+        var lensTop = _viewportTopRow * scale;
+        var lensHeight = Math.Max(_viewportRows * scale, 6);
+        dc.PushOpacity(0.45);
+        dc.DrawRoundedRectangle(LensBrush, null, new Rect(1, lensTop, Math.Max(ActualWidth - 2, 1), lensHeight), 3, 3);
+        dc.Pop();
+
+        var width = ActualWidth - (2 * Inset);
+        var half = width / 2;
+        var r = 0;
+        while (r < model.Rows.Count)
         {
-            var row = model.Rows[r];
-            if (row.Kind == AlignedRowKind.Equal)
+            var kind = model.Rows[r].Kind;
+            var start = r;
+            while (r < model.Rows.Count && model.Rows[r].Kind == kind)
+            {
+                r++;
+            }
+
+            if (kind == AlignedRowKind.Equal)
             {
                 continue;
             }
 
-            var y = r * scale;
-            var h = Math.Max(scale, 2);
-            switch (row.Kind)
+            // One rounded mark per run of rows of the same kind.
+            var y = start * scale;
+            var h = Math.Max((r - start) * scale, 3);
+            var (brush, x, w) = kind switch
             {
-                case AlignedRowKind.Changed:
-                    dc.DrawRectangle(ChangedBrush, null, new Rect(0, y, ActualWidth, h));
-                    break;
-                case AlignedRowKind.Removed:
-                    dc.DrawRectangle(RemovedBrush, null, new Rect(0, y, half, h));
-                    break;
-                case AlignedRowKind.Added:
-                    dc.DrawRectangle(AddedBrush, null, new Rect(half, y, half, h));
-                    break;
-                default:
-                    dc.DrawRectangle(IgnoredBrush, null, new Rect(0, y, ActualWidth, h));
-                    break;
-            }
+                AlignedRowKind.Changed => (DiffTheme.ChangedBrush, Inset, width),
+                AlignedRowKind.Removed => (DiffTheme.RemovedBrush, Inset, half - 0.5),
+                AlignedRowKind.Added => (DiffTheme.AddedBrush, Inset + half + 0.5, half - 0.5),
+                _ => (DiffTheme.IgnoredBrush, Inset, width),
+            };
+            dc.DrawRoundedRectangle(brush, null, new Rect(x, y, Math.Max(w, 1), h), 1.5, 1.5);
         }
-
-        var top = _viewportTopRow * scale;
-        var height = Math.Max(_viewportRows * scale, 4);
-        dc.DrawRectangle(null, ViewportPen, new Rect(0.5, top, Math.Max(ActualWidth - 1, 1), height));
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
-        if (_model is { Rows.Count: > 0 } model && ActualHeight > 0)
+        if (RequestRowAt(e.GetPosition(this).Y))
         {
-            var row = (int)(e.GetPosition(this).Y / ActualHeight * model.Rows.Count);
-            RowRequested?.Invoke(this, Math.Max(0, Math.Min(model.Rows.Count - 1, row)));
+            CaptureMouse();
             e.Handled = true;
         }
     }
 
-    private static T Freeze<T>(T freezable)
-        where T : Freezable
+    protected override void OnMouseMove(MouseEventArgs e)
     {
-        freezable.Freeze();
-        return freezable;
+        base.OnMouseMove(e);
+        if (IsMouseCaptured)
+        {
+            RequestRowAt(e.GetPosition(this).Y);
+        }
+    }
+
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonUp(e);
+        ReleaseMouseCapture();
+    }
+
+    private bool RequestRowAt(double y)
+    {
+        if (_model is not { Rows.Count: > 0 } model || ActualHeight <= 0)
+        {
+            return false;
+        }
+
+        var row = (int)(y / ActualHeight * model.Rows.Count);
+        RowRequested?.Invoke(this, Math.Max(0, Math.Min(model.Rows.Count - 1, row)));
+        return true;
     }
 }

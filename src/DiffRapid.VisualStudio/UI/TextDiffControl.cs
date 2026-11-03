@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -7,6 +9,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using DiffRapid.Core.Algorithms;
 using DiffRapid.Core.Comparison;
@@ -14,6 +17,8 @@ using DiffRapid.VisualStudio.Editor;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.Imaging;
+using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -36,11 +41,22 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
     private readonly Pane _left;
     private readonly Pane _right;
     private readonly DiffOverviewBar _overview = new();
-    private readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0) };
+    private readonly FileHeader _leftHeader;
+    private readonly FileHeader _rightHeader;
+    private readonly TextBlock _verdict = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 14, 0) };
+    private readonly TextBlock _changed;
+    private readonly TextBlock _added;
+    private readonly TextBlock _removed;
+    private readonly TextBlock _moved;
+    private readonly FrameworkElement _metrics;
+    private readonly FrameworkElement _movedMetric;
+    private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _details = new() { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
     private readonly DispatcherTimer _recompareTimer;
     private CompareOptions _options = CompareOptions.Default;
     private CancellationTokenSource? _compareCancellation;
     private DiffModel? _model;
+    private int _currentDifference = -1;
     private bool _syncingScroll;
     private bool _disposed;
 
@@ -49,6 +65,21 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         _package = package;
         _left = left;
         _right = right;
+        _leftHeader = new FileHeader("LEFT", left.Path, DiffTheme.RemovedBrush);
+        _rightHeader = new FileHeader("RIGHT", right.Path, DiffTheme.AddedBrush);
+
+        FrameworkElement changed, added, removed, moved;
+        (changed, _changed) = DiffTheme.Metric(DiffTheme.ChangedBrush, "Lines changed on both sides");
+        (added, _added) = DiffTheme.Metric(DiffTheme.AddedBrush, "Lines only in the right file");
+        (removed, _removed) = DiffTheme.Metric(DiffTheme.RemovedBrush, "Lines only in the left file");
+        (moved, _moved) = DiffTheme.Metric(DiffTheme.MovedBrush, "Blocks moved to another position");
+        var metrics = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        metrics.Children.Add(changed);
+        metrics.Children.Add(added);
+        metrics.Children.Add(removed);
+        metrics.Children.Add(moved);
+        _metrics = metrics;
+        _movedMetric = moved;
 
         SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
         SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
@@ -60,6 +91,9 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         var toolbar = BuildToolbar();
         SetDock(toolbar, Dock.Top);
         Children.Add(toolbar);
+        var footer = BuildFooter();
+        SetDock(footer, Dock.Bottom);
+        Children.Add(footer);
         Children.Add(BuildPanes());
 
         _left.Buffer.Changed += OnBufferChanged;
@@ -73,8 +107,8 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
     public static async Task<TextDiffControl> CreateAsync(AsyncPackage package, string leftPath, string rightPath)
     {
         await package.JoinableTaskFactory.SwitchToMainThreadAsync();
-        EnsureText(leftPath);
-        EnsureText(rightPath);
+        Diagnostics.Step("Reading " + System.IO.Path.GetFileName(leftPath), () => EnsureText(leftPath));
+        Diagnostics.Step("Reading " + System.IO.Path.GetFileName(rightPath), () => EnsureText(rightPath));
 
         var componentModel = (IComponentModel)(await package.GetServiceAsync(typeof(SComponentModel))
             ?? throw new InvalidOperationException("Component model is unavailable."));
@@ -85,7 +119,7 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
 
         var left = Pane.Open(leftPath, invisibleEditors, adapters, editorFactory);
         var right = Pane.Open(rightPath, invisibleEditors, adapters, editorFactory);
-        var control = new TextDiffControl(package, left, right);
+        var control = Diagnostics.Step("Building the comparison view", () => new TextDiffControl(package, left, right));
         control.StartCompare();
         return control;
     }
@@ -125,13 +159,27 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
 
     private FrameworkElement BuildToolbar()
     {
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(4) };
+        var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
 
-        bar.Children.Add(Button("▲ Previous", "Previous difference (Alt+Up)", () => NavigateDifference(-1)));
-        bar.Children.Add(Button("▼ Next", "Next difference (Alt+Down)", () => NavigateDifference(+1)));
-        bar.Children.Add(_status);
+        var summary = new StackPanel { Orientation = Orientation.Horizontal };
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.MoveUp, "Previous"), "Previous difference (Alt+Up)", () => NavigateDifference(-1)));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.MoveDown, "Next"), "Next difference (Alt+Down)", () => NavigateDifference(+1)));
+        summary.Children.Add(DiffTheme.Separator());
+        summary.Children.Add(_verdict);
+        summary.Children.Add(_metrics);
+        SetDock(summary, Dock.Left);
+        bar.Children.Add(summary);
 
-        var algorithm = new ComboBox { Margin = new Thickness(8, 0, 0, 0), MinWidth = 110, ToolTip = "Diff algorithm" };
+        var settings = new StackPanel { Orientation = Orientation.Horizontal };
+        settings.Children.Add(DiffTheme.Caption("IGNORE"));
+        settings.Children.Add(DiffTheme.OptionToggle("Whitespace", "Ignore changes in whitespace", v => UpdateOptions(_options with { Whitespace = v ? WhitespaceMode.IgnoreChange : WhitespaceMode.Compare })));
+        settings.Children.Add(DiffTheme.OptionToggle("Case", "Ignore differences in letter case", v => UpdateOptions(_options with { IgnoreCase = v })));
+        settings.Children.Add(DiffTheme.OptionToggle("Blank lines", "Ignore inserted or deleted blank lines", v => UpdateOptions(_options with { IgnoreBlankLines = v })));
+        settings.Children.Add(DiffTheme.OptionToggle("Line endings", "Ignore CRLF / LF differences", v => UpdateOptions(_options with { IgnoreLineEndings = v })));
+        settings.Children.Add(DiffTheme.Separator());
+
+        settings.Children.Add(DiffTheme.Caption("ALGORITHM"));
+        var algorithm = new ComboBox { MinWidth = 110, VerticalAlignment = VerticalAlignment.Center, ToolTip = "How lines are matched between the two files" };
         algorithm.SetResourceReference(StyleProperty, VsResourceKeys.ComboBoxStyleKey);
         foreach (var kind in (DiffAlgorithmKind[])Enum.GetValues(typeof(DiffAlgorithmKind)))
         {
@@ -140,31 +188,54 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
 
         algorithm.SelectedItem = _options.Algorithm;
         algorithm.SelectionChanged += (_, _) => UpdateOptions(_options with { Algorithm = (DiffAlgorithmKind)algorithm.SelectedItem });
-        bar.Children.Add(algorithm);
+        settings.Children.Add(algorithm);
+        settings.Children.Add(DiffTheme.Separator());
+        settings.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Compare again", StartCompare));
+        SetDock(settings, Dock.Right);
+        bar.Children.Add(settings);
 
-        bar.Children.Add(Toggle("Ignore whitespace", v => _options with { Whitespace = v ? WhitespaceMode.IgnoreChange : WhitespaceMode.Compare }));
-        bar.Children.Add(Toggle("Ignore case", v => _options with { IgnoreCase = v }));
-        bar.Children.Add(Toggle("Ignore blank lines", v => _options with { IgnoreBlankLines = v }));
-        bar.Children.Add(Toggle("Ignore line endings", v => _options with { IgnoreLineEndings = v }));
-        return bar;
+        var chrome = new Border { Child = bar, BorderThickness = new Thickness(0, 0, 0, 1) };
+        chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);
+        chrome.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.CommandBarToolBarBorderBrushKey);
+        chrome.SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.CommandBarTextActiveBrushKey);
+        chrome.SetResourceReference(ImageThemingUtilities.ImageBackgroundColorProperty, EnvironmentColors.CommandBarGradientBeginColorKey);
+        return chrome;
+    }
+
+    private FrameworkElement BuildFooter()
+    {
+        var panel = new DockPanel { Margin = new Thickness(10, 3, 10, 3) };
+        SetDock(_position, Dock.Left);
+        panel.Children.Add(_position);
+        panel.Children.Add(_details);
+
+        var chrome = new Border { Child = panel, BorderThickness = new Thickness(0, 1, 0, 0) };
+        chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);
+        chrome.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.CommandBarToolBarBorderBrushKey);
+        chrome.SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
+        return chrome;
     }
 
     private UIElement BuildPanes()
     {
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        AddCell(grid, Header(_left.Path), 0, 0);
-        AddCell(grid, Header(_right.Path), 0, 2);
+        AddCell(grid, _leftHeader, 0, 0);
+        AddCell(grid, _rightHeader, 0, 2);
         AddCell(grid, _left.Host.HostControl, 1, 0);
-        AddCell(grid, new GridSplitter { Width = 4, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeBehavior = GridResizeBehavior.PreviousAndNext }, 1, 1);
         AddCell(grid, _right.Host.HostControl, 1, 2);
         AddCell(grid, _overview, 1, 3);
+
+        var splitter = new GridSplitter { Width = 5, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeBehavior = GridResizeBehavior.PreviousAndNext, ToolTip = "Drag to resize" };
+        splitter.SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+        Grid.SetRowSpan(splitter, 2);
+        AddCell(grid, splitter, 0, 1);
         return grid;
     }
 
@@ -175,29 +246,14 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         grid.Children.Add(element);
     }
 
-    private static TextBlock Header(string path) => new()
-    {
-        Text = path,
-        ToolTip = path,
-        TextTrimming = TextTrimming.CharacterEllipsis,
-        Margin = new Thickness(6, 2, 6, 4),
-    };
+    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
 
-    private static Button Button(string text, string tooltip, Action onClick)
+    private static StackPanel IconLabel(ImageMoniker moniker, string text)
     {
-        var button = new Button { Content = text, ToolTip = tooltip, Margin = new Thickness(0, 0, 4, 0), Padding = new Thickness(6, 1, 6, 1) };
-        button.SetResourceReference(StyleProperty, VsResourceKeys.ButtonStyleKey);
-        button.Click += (_, _) => onClick();
-        return button;
-    }
-
-    private CheckBox Toggle(string text, Func<bool, CompareOptions> apply)
-    {
-        var box = new CheckBox { Content = text, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        box.SetResourceReference(StyleProperty, VsResourceKeys.CheckBoxStyleKey);
-        box.Checked += (_, _) => UpdateOptions(apply(true));
-        box.Unchecked += (_, _) => UpdateOptions(apply(false));
-        return box;
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(Icon(moniker));
+        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+        return panel;
     }
 
     private void UpdateOptions(CompareOptions options)
@@ -227,17 +283,21 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         var leftText = _left.Buffer.CurrentSnapshot.GetText();
         var rightText = _right.Buffer.CurrentSnapshot.GetText();
         var options = _options;
-        _status.Text = "Comparing…";
+        _verdict.Text = "Comparing…";
+        _verdict.ClearValue(TextBlock.ForegroundProperty);
+        _metrics.Visibility = Visibility.Collapsed;
 
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
             try
             {
+                var stopwatch = Stopwatch.StartNew();
                 var model = await Task.Run(() => DiffModel.Build(leftText, rightText, options, cancellation.Token), cancellation.Token);
+                var elapsed = stopwatch.Elapsed;
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation.Token);
                 if (!_disposed && !cancellation.IsCancellationRequested)
                 {
-                    Apply(model);
+                    Apply(model, options, elapsed);
                 }
             }
             catch (OperationCanceledException)
@@ -246,14 +306,17 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
             catch (Exception ex)
             {
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
-                _status.Text = "Compare failed: " + ex.Message;
+                _verdict.Text = "Compare failed";
+                _verdict.Foreground = DiffTheme.RemovedBrush;
+                _position.Text = ex.Message;
             }
         }).FileAndForget("DiffRapid/Compare");
     }
 
-    private void Apply(DiffModel model)
+    private void Apply(DiffModel model, CompareOptions options, TimeSpan elapsed)
     {
         _model = model;
+        _currentDifference = -1;
         DiffPaneState.Set(_left.View, model.Left);
         DiffPaneState.Set(_right.View, model.Right);
         Relayout(_left.View);
@@ -261,12 +324,63 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         SyncScroll(_left, _right);
         _overview.SetModel(model);
 
+        int changed = 0, added = 0, removed = 0;
+        foreach (var row in model.Rows)
+        {
+            switch (row.Kind)
+            {
+                case AlignedRowKind.Changed:
+                    changed++;
+                    break;
+                case AlignedRowKind.Added:
+                    added++;
+                    break;
+                case AlignedRowKind.Removed:
+                    removed++;
+                    break;
+            }
+        }
+
         var count = model.HunkRows.Count;
         var moved = model.Result.MovedBlocks.Count;
-        _status.Text = count == 0
-            ? "Identical"
-            : $"{count} difference{(count == 1 ? string.Empty : "s")}" + (moved > 0 ? $", {moved} moved" : string.Empty);
+        if (count == 0)
+        {
+            _verdict.Text = "✔  Files are identical";
+            _verdict.Foreground = DiffTheme.AddedBrush;
+            _metrics.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            _verdict.Text = Plural(count, "difference");
+            _verdict.ClearValue(TextBlock.ForegroundProperty);
+            _changed.Text = $"{changed:N0} changed";
+            _added.Text = $"{added:N0} added";
+            _removed.Text = $"{removed:N0} removed";
+            _moved.Text = $"{moved:N0} moved";
+            _movedMetric.Visibility = moved > 0 ? Visibility.Visible : Visibility.Collapsed;
+            _metrics.Visibility = Visibility.Visible;
+        }
+
+        _leftHeader.SetLineCount(_left.Buffer.CurrentSnapshot.LineCount);
+        _rightHeader.SetLineCount(_right.Buffer.CurrentSnapshot.LineCount);
+        UpdatePosition();
+        _details.Text = $"{options.Algorithm} algorithm  ·  {model.Rows.Count:N0} rows  ·  compared in {FormatElapsed(elapsed)}";
     }
+
+    private void UpdatePosition()
+    {
+        var count = _model?.HunkRows.Count ?? 0;
+        _position.Text = count == 0
+            ? "No differences"
+            : _currentDifference < 0
+                ? $"{Plural(count, "difference")}  ·  press Alt+Down to step through them"
+                : $"Difference {_currentDifference + 1} of {count:N0}";
+    }
+
+    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
+
+    private static string FormatElapsed(TimeSpan elapsed) =>
+        elapsed.TotalMilliseconds < 1000 ? $"{Math.Max(1, (int)elapsed.TotalMilliseconds)} ms" : $"{elapsed.TotalSeconds:0.0} s";
 
     // Forces the editor to re-query line transforms and repaint adornments.
     private static void Relayout(IWpfTextView view)
@@ -353,11 +467,11 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
         var target = -1;
         if (direction > 0)
         {
-            foreach (var row in model.HunkRows)
+            for (var i = 0; i < model.HunkRows.Count; i++)
             {
-                if (row > anchorRow)
+                if (model.HunkRows[i] > anchorRow)
                 {
-                    target = row;
+                    target = i;
                     break;
                 }
             }
@@ -368,7 +482,7 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
             {
                 if (model.HunkRows[i] < anchorRow)
                 {
-                    target = model.HunkRows[i];
+                    target = i;
                     break;
                 }
             }
@@ -376,7 +490,9 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
 
         if (target >= 0)
         {
-            ScrollToRow(target);
+            _currentDifference = target;
+            UpdatePosition();
+            ScrollToRow(model.HunkRows[target]);
         }
     }
 
@@ -387,6 +503,54 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
             NavigateDifference(e.SystemKey == Key.Down ? +1 : -1);
             e.Handled = true;
         }
+    }
+
+    /// <summary>Title block above each editor: side badge, file name, folder and line count.</summary>
+    private sealed class FileHeader : Border
+    {
+        private readonly TextBlock _lines = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+
+        public FileHeader(string side, string path, Brush accent)
+        {
+            BorderThickness = new Thickness(0, 0, 0, 1);
+            Padding = new Thickness(10, 7, 10, 7);
+            SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
+            SetResourceReference(BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+            ToolTip = path;
+
+            var badge = new Border
+            {
+                Background = accent,
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(6, 1, 6, 1),
+                Margin = new Thickness(0, 0, 10, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock { Text = side, FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Brushes.White },
+            };
+
+            var name = new TextBlock { Text = System.IO.Path.GetFileName(path), FontWeight = FontWeights.SemiBold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+            var folder = new TextBlock
+            {
+                Text = System.IO.Path.GetDirectoryName(path) ?? string.Empty,
+                Margin = new Thickness(10, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            folder.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
+            _lines.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
+
+            var row = new DockPanel();
+            DockPanel.SetDock(badge, Dock.Left);
+            DockPanel.SetDock(name, Dock.Left);
+            DockPanel.SetDock(_lines, Dock.Right);
+            row.Children.Add(badge);
+            row.Children.Add(name);
+            row.Children.Add(_lines);
+            row.Children.Add(folder);
+            Child = row;
+        }
+
+        public void SetLineCount(int lines) => _lines.Text = lines == 1 ? "1 line" : $"{lines:N0} lines";
     }
 
     /// <summary>One side of the comparison: the document buffer and the editor view showing it.</summary>
@@ -417,36 +581,47 @@ internal sealed class TextDiffControl : DockPanel, IDisposable
             ITextEditorFactoryService editorFactory)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            ErrorHandler.ThrowOnFailure(invisibleEditors.RegisterInvisibleEditor(
-                path, null, (uint)_EDITORREGFLAGS.RIEF_ENABLECACHING, null, out var invisibleEditor));
-
-            var iid = typeof(IVsTextLines).GUID;
-            ErrorHandler.ThrowOnFailure(invisibleEditor.GetDocData(0, ref iid, out var docDataPtr));
-            ITextBuffer buffer;
-            try
+            var name = System.IO.Path.GetFileName(path);
+            var invisibleEditor = Diagnostics.Step($"Opening {name} in the editor", () =>
             {
-                var textLines = (IVsTextLines)Marshal.GetObjectForIUnknown(docDataPtr);
-                buffer = adapters.GetDocumentBuffer(textLines)
-                    ?? throw new InvalidOperationException($"Could not load '{path}' into an editor buffer.");
-            }
-            finally
-            {
-                Marshal.Release(docDataPtr);
-            }
+                ErrorHandler.ThrowOnFailure(invisibleEditors.RegisterInvisibleEditor(
+                    path, null, (uint)_EDITORREGFLAGS.RIEF_ENABLECACHING, null, out var editor));
+                return editor;
+            });
 
-            var roles = editorFactory.CreateTextViewRoleSet(
-                PredefinedTextViewRoles.Document,
-                PredefinedTextViewRoles.Analyzable,
-                PredefinedTextViewRoles.Interactive,
-                PredefinedTextViewRoles.Zoomable,
-                DiffRapidRoles.Pane);
-            var view = editorFactory.CreateTextView(buffer, roles);
-            view.Options.SetOptionValue(DefaultTextViewOptions.ViewProhibitUserInputId, true);
-            view.Options.SetOptionValue(DefaultTextViewOptions.WordWrapStyleId, WordWrapStyles.None);
-            view.Options.SetOptionValue(DefaultTextViewHostOptions.LineNumberMarginId, true);
-            view.Options.SetOptionValue(DefaultTextViewHostOptions.GlyphMarginId, false);
-            view.Options.SetOptionValue(DefaultTextViewHostOptions.OutliningMarginId, false);
-            var host = editorFactory.CreateTextViewHost(view, setFocus: false);
+            var buffer = Diagnostics.Step($"Getting the text buffer of {name}", () =>
+            {
+                var iid = typeof(IVsTextLines).GUID;
+                ErrorHandler.ThrowOnFailure(invisibleEditor.GetDocData(0, ref iid, out var docDataPtr));
+                try
+                {
+                    var textLines = (IVsTextLines)Marshal.GetObjectForIUnknown(docDataPtr);
+                    return adapters.GetDocumentBuffer(textLines)
+                        ?? throw new InvalidOperationException("The document has no text buffer.");
+                }
+                finally
+                {
+                    Marshal.Release(docDataPtr);
+                }
+            });
+
+            var host = Diagnostics.Step($"Creating the editor view for {name}", () =>
+            {
+                var roles = editorFactory.CreateTextViewRoleSet(
+                    PredefinedTextViewRoles.Document,
+                    PredefinedTextViewRoles.Analyzable,
+                    PredefinedTextViewRoles.Interactive,
+                    PredefinedTextViewRoles.Zoomable,
+                    DiffRapidRoles.Pane);
+                var view = editorFactory.CreateTextView(buffer, roles);
+                view.Options.SetOptionValue(DefaultTextViewOptions.ViewProhibitUserInputId, true);
+                view.Options.SetOptionValue(DefaultTextViewOptions.WordWrapStyleId, WordWrapStyles.None);
+                view.Options.SetOptionValue(DefaultTextViewHostOptions.LineNumberMarginId, true);
+                view.Options.SetOptionValue(DefaultTextViewHostOptions.GlyphMarginId, false);
+                view.Options.SetOptionValue(DefaultTextViewHostOptions.OutliningMarginId, false);
+                return editorFactory.CreateTextViewHost(view, setFocus: false);
+            });
+
             return new Pane(path, invisibleEditor, buffer, host);
         }
 

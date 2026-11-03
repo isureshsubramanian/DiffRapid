@@ -37,8 +37,8 @@ internal sealed class DiffModel
         var result = TextComparer.Compare(leftDoc, rightDoc, options, cancellationToken);
         var rows = DiffAlignment.Build(result);
 
-        var left = new DiffPaneState(leftDoc.LineCount);
-        var right = new DiffPaneState(rightDoc.LineCount);
+        var left = new DiffPaneState(leftDoc.LineCount, isLeft: true);
+        var right = new DiffPaneState(rightDoc.LineCount, isLeft: false);
         var hunkRows = new List<int>();
         int leftFillers = 0, rightFillers = 0, lastHunk = -1;
 

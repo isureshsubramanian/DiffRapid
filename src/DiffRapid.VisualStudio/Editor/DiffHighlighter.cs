@@ -36,6 +36,9 @@ internal sealed class DiffHighlighterProvider : IWpfTextViewCreationListener
 /// <summary>Paints line backgrounds, filler areas and intra-line changes behind the text.</summary>
 internal sealed class DiffHighlighter
 {
+    private const double AccentWidth = 3;
+    private const double AccentStrength = 0.9;
+
     private readonly IWpfTextView _view;
     private readonly IAdornmentLayer _layer;
     private readonly IEditorFormatMap _formatMap;
@@ -95,7 +98,7 @@ internal sealed class DiffHighlighter
             var format = state.LineKind[lineNumber] switch
             {
                 PaneLineKind.Changed => DiffFormatNames.ChangedLine,
-                PaneLineKind.Inserted => DiffFormatNames.InsertedLine,
+                PaneLineKind.Inserted => state.IsLeft ? DiffFormatNames.RemovedLine : DiffFormatNames.InsertedLine,
                 PaneLineKind.Moved => DiffFormatNames.MovedLine,
                 PaneLineKind.Ignored => DiffFormatNames.IgnoredLine,
                 _ => null,
@@ -107,6 +110,7 @@ internal sealed class DiffHighlighter
             }
 
             Add(new Rect(left, line.TextTop, width, line.TextHeight), Brush(format));
+            Add(new Rect(left, line.TextTop, AccentWidth, line.TextHeight), Brush(format, AccentStrength));
             DrawInline(line, state, lineNumber);
         }
     }
@@ -148,23 +152,53 @@ internal sealed class DiffHighlighter
         _layer.AddAdornment(AdornmentPositioningBehavior.OwnerControlled, null, null, shape, null);
     }
 
-    private Brush Brush(string formatName)
+    private Brush Brush(string formatName, double? strength = null)
     {
-        if (_brushes.TryGetValue(formatName, out var brush))
+        var key = strength is null ? formatName : formatName + "#" + strength;
+        if (_brushes.TryGetValue(key, out var brush))
         {
             return brush;
         }
 
+        // Fonts and Colors stores opaque colours, so the user picks the hue and the strength is fixed here;
+        // translucent tints keep the editor's syntax colouring readable on light and dark themes.
         var properties = _formatMap.GetProperties(formatName);
-        brush = properties[EditorFormatDefinition.BackgroundBrushId] as Brush
-            ?? (properties[EditorFormatDefinition.BackgroundColorId] is Color c ? new SolidColorBrush(c) : Brushes.Transparent);
-        if (brush.CanFreeze)
-        {
-            brush = brush.Clone();
-            brush.Freeze();
-        }
+        var color = properties[EditorFormatDefinition.BackgroundColorId] is Color c
+            ? c
+            : (properties[EditorFormatDefinition.BackgroundBrushId] as SolidColorBrush)?.Color ?? Colors.Gray;
+        color.A = 0xFF;
 
-        _brushes[formatName] = brush;
+        brush = formatName == DiffFormatNames.Filler && strength is null
+            ? Hatch(color)
+            : new SolidColorBrush(color) { Opacity = strength ?? TintStrength(formatName) };
+        brush.Freeze();
+        _brushes[key] = brush;
+        return brush;
+    }
+
+    private static double TintStrength(string formatName) => formatName switch
+    {
+        DiffFormatNames.ChangedText => 0.38,
+        DiffFormatNames.IgnoredLine => 0.10,
+        _ => 0.16,
+    };
+
+    // Diagonal stripes for rows that exist only on the other side.
+    private static Brush Hatch(Color color)
+    {
+        var faint = Color.FromArgb(0x10, color.R, color.G, color.B);
+        var strong = Color.FromArgb(0x30, color.R, color.G, color.B);
+        var brush = new LinearGradientBrush
+        {
+            MappingMode = BrushMappingMode.Absolute,
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(6, 6),
+            SpreadMethod = GradientSpreadMethod.Repeat,
+        };
+        brush.GradientStops.Add(new GradientStop(strong, 0));
+        brush.GradientStops.Add(new GradientStop(strong, 0.3));
+        brush.GradientStops.Add(new GradientStop(faint, 0.3));
+        brush.GradientStops.Add(new GradientStop(faint, 1));
         return brush;
     }
 }
