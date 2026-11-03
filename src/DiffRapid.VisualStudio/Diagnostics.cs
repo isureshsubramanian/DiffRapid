@@ -54,6 +54,13 @@ internal static class Diagnostics
         AppendToLogFile($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ERROR {details}");
     }
 
+    /// <summary>Records something that went wrong without interrupting the user (activity log and log file).</summary>
+    public static void LogWarning(string message)
+    {
+        ActivityLog.TryLogWarning("DiffRapid", message);
+        AppendToLogFile($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] WARNING {message}");
+    }
+
     /// <summary>%LOCALAPPDATA%\DiffRapid\diffrapid.log, so errors survive after Visual Studio closes.</summary>
     public static string LogFilePath { get; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiffRapid", "diffrapid.log");

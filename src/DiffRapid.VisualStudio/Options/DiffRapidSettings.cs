@@ -8,6 +8,7 @@ using DiffRapid.Core.Comparison;
 using DiffRapid.Core.Folders;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Utilities.UnifiedSettings;
+using Newtonsoft.Json.Linq;
 
 namespace DiffRapid.VisualStudio.Options;
 
@@ -77,7 +78,13 @@ internal sealed class DiffRapidSettings
         }
 
         var read = reader.GetValue<T>(moniker, SettingReadOptions.RequireValidation);
-        return read.Outcome == SettingRetrievalOutcome.Success && read.Value is not null ? read.Value : fallback;
+        if (read.Outcome == SettingRetrievalOutcome.Success && read.Value is not null)
+        {
+            return read.Value;
+        }
+
+        Diagnostics.LogWarning($"Could not read the {moniker} setting ({read.Outcome}: {read.Message}); using {fallback}.");
+        return fallback;
     }
 
     // Enum settings are stored as the camel-cased member name ("ignoreChange" for IgnoreChange).
@@ -85,7 +92,9 @@ internal sealed class DiffRapidSettings
         where TEnum : struct =>
         System.Enum.TryParse<TEnum>(Value(reader, moniker, string.Empty), ignoreCase: true, out var value) ? value : fallback;
 
-    // Blank entries are dropped; patterns are not trimmed, since spaces can be part of a regular expression.
+    // The settings page only edits lists of objects, so each row of a list setting is an object with a
+    // single "pattern" (line filters) or "mask" (folder lists) property. Blank rows are dropped; patterns
+    // are not trimmed, since spaces can be part of a regular expression.
     private static IEnumerable<string> List(ISettingsReader? reader, string moniker)
     {
         if (reader is null)
@@ -93,19 +102,47 @@ internal sealed class DiffRapidSettings
             return Array.Empty<string>();
         }
 
-        var read = reader.GetArray<ListEntry>(moniker, SettingReadOptions.RequireValidation);
-        return read.Outcome == SettingRetrievalOutcome.Success && read.Value is not null
-            ? read.Value.Select(e => e?.Pattern ?? e?.Mask).Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!)
-            : Array.Empty<string>();
+        var read = reader.GetArray<object>(moniker, SettingReadOptions.NoRequirements);
+        if (read.Outcome != SettingRetrievalOutcome.Success || read.Value is null)
+        {
+            Diagnostics.LogWarning($"Could not read the {moniker} setting ({read.Outcome}: {read.Message}).");
+            return Array.Empty<string>();
+        }
+
+        var values = new List<string>();
+        foreach (var row in read.Value)
+        {
+            var text = RowText(row);
+            if (text is null)
+            {
+                Diagnostics.LogWarning($"Skipped a row of the {moniker} setting that has no pattern or mask: {row?.GetType().FullName} {row}");
+            }
+            else if (text.Trim().Length > 0)
+            {
+                values.Add(text);
+            }
+        }
+
+        return values;
     }
 
-    // One row of a list setting. The settings page only edits lists of objects, so each row is an object
-    // with a single "pattern" (line filters) or "mask" (folder lists) property.
-    private sealed class ListEntry
+    // Rows come back as JSON objects; which JSON library represents them is up to Visual Studio.
+    private static string? RowText(object? row)
     {
-        public string? Pattern { get; set; }
-
-        public string? Mask { get; set; }
+        switch (row)
+        {
+            case null:
+                return null;
+            case string text:
+                return text;
+            case System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.Object } element:
+                return element.TryGetProperty("pattern", out var pattern) ? pattern.GetString()
+                    : element.TryGetProperty("mask", out var mask) ? mask.GetString()
+                    : null;
+            default:
+                var token = row as JToken ?? JToken.FromObject(row);
+                return token is JObject item ? (string?)(item["pattern"] ?? item["mask"]) : null;
+        }
     }
 
     // The service identifier lives in an internal interop assembly that is not referenceable; the
