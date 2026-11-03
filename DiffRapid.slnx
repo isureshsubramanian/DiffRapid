@@ -9,7 +9,9 @@
   <Folder Name="/src/">
     <Project Path="src/DiffRapid.Cli/DiffRapid.Cli.csproj" />
     <Project Path="src/DiffRapid.Core/DiffRapid.Core.csproj" />
-    <Project Path="src/DiffRapid.VisualStudio/DiffRapid.VisualStudio.csproj" />
+    <Project Path="src/DiffRapid.VisualStudio/DiffRapid.VisualStudio.csproj">
+      <Deploy />
+    </Project>
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DiffRapid.Core.Tests/DiffRapid.Core.Tests.csproj" />
