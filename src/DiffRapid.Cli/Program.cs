@@ -33,6 +33,8 @@ internal static partial class Program
                          Report format defaults to the extension (.html/.htm/.csv).
           diffrapid diff  <left> <right> [options]
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
+          diffrapid split-conflicts <file> [--out-dir <dir>]
+                         Writes the left, right and (diff3) base versions of a file with conflict markers.
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
 
         Compare options:
@@ -91,6 +93,7 @@ internal static partial class Program
                 "diff" => RunDiff(parsed),
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
+                "split-conflicts" => RunSplitConflicts(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
         }
@@ -99,6 +102,10 @@ internal static partial class Program
             return Fail(ex.Message);
         }
         catch (ArgumentException ex)
+        {
+            return Fail(ex.Message);
+        }
+        catch (FormatException ex)
         {
             return Fail(ex.Message);
         }
@@ -231,7 +238,7 @@ internal static partial class Program
         private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
         {
             "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
-            "method", "include", "exclude", "only", "line-filter", "substitute", "cp", "report", "report-format",
+            "method", "include", "exclude", "only", "line-filter", "substitute", "cp", "report", "report-format", "out-dir",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
