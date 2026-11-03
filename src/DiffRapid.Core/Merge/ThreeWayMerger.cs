@@ -89,17 +89,7 @@ public sealed class MergeResult
                     Append(sb, Right, chunk.RightStart, chunk.RightEnd, newline);
                     break;
                 case MergeChunkKind.Conflict:
-                    sb.Append("<<<<<<< ").Append(labels.Left).Append(newline);
-                    Append(sb, Left, chunk.LeftStart, chunk.LeftEnd, newline, forceTerminator: true);
-                    if (includeBase)
-                    {
-                        sb.Append("||||||| ").Append(labels.Base).Append(newline);
-                        Append(sb, Base, chunk.BaseStart, chunk.BaseEnd, newline, forceTerminator: true);
-                    }
-
-                    sb.Append("=======").Append(newline);
-                    Append(sb, Right, chunk.RightStart, chunk.RightEnd, newline, forceTerminator: true);
-                    sb.Append(">>>>>>> ").Append(labels.Right).Append(newline);
+                    AppendConflict(sb, chunk, labels, includeBase, newline);
                     break;
             }
         }
@@ -107,7 +97,22 @@ public sealed class MergeResult
         return sb.ToString();
     }
 
-    private static void Append(StringBuilder sb, TextDocument doc, int start, int end, string newline, bool forceTerminator = false)
+    internal void AppendConflict(StringBuilder sb, MergeChunk chunk, ConflictLabels labels, bool includeBase, string newline)
+    {
+        sb.Append("<<<<<<< ").Append(labels.Left).Append(newline);
+        Append(sb, Left, chunk.LeftStart, chunk.LeftEnd, newline, forceTerminator: true);
+        if (includeBase)
+        {
+            sb.Append("||||||| ").Append(labels.Base).Append(newline);
+            Append(sb, Base, chunk.BaseStart, chunk.BaseEnd, newline, forceTerminator: true);
+        }
+
+        sb.Append("=======").Append(newline);
+        Append(sb, Right, chunk.RightStart, chunk.RightEnd, newline, forceTerminator: true);
+        sb.Append(">>>>>>> ").Append(labels.Right).Append(newline);
+    }
+
+    internal static void Append(StringBuilder sb, TextDocument doc, int start, int end, string newline, bool forceTerminator = false)
     {
         for (var i = start; i < end; i++)
         {
@@ -117,7 +122,7 @@ public sealed class MergeResult
         }
     }
 
-    private string DetectNewline()
+    internal string DetectNewline()
     {
         foreach (var doc in new[] { Base, Left, Right })
         {
