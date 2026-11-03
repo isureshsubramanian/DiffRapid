@@ -1,12 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using DiffRapid.Core.Algorithms;
-using DiffRapid.Core.Comparison;
-using DiffRapid.Core.Merge;
-using DiffRapid.Core.Output;
-using DiffRapid.Core.Text;
 
 namespace DiffRapid.Cli;
 
@@ -36,6 +30,9 @@ internal static partial class Program
                          [--report <file>] [--report-format html|csv] [--include-identical]
                          Report format defaults to the extension (.html/.htm/.csv).
           diffrapid diff  <left> <right> [options]
+          diffrapid diff <file> --rev <revision> [options]
+          diffrapid log <file> [-n <count>]
+                         Git: HEAD, HEAD~1, :0; TFVC: C123, T, W.
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
@@ -66,6 +63,7 @@ internal static partial class Program
         Exit codes: 0 identical/clean, 1 different/conflicts, 2 error.
         """;
 
+    /// <summary>Runs the requested command and returns its exit code.</summary>
     public static int Main(string[] args)
     {
         try
@@ -80,14 +78,7 @@ internal static partial class Program
             var command = args[0].ToLowerInvariant();
             if (command == "git-config")
             {
-                if (args.Length > 2 || (args.Length == 2 && args[1] != "--global"))
-                {
-                    throw new UsageException("git-config accepts only --global.");
-                }
-
-                var executable = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "diffrapid.exe" : "diffrapid");
-                Console.Out.WriteLine(GitConfiguration.Format(executable, args.Length == 2));
-                return ExitSame;
+                return RunGitConfiguration(args);
             }
 
             var parsed = ParsedArgs.Parse(args, 1);
@@ -97,11 +88,13 @@ internal static partial class Program
                 "apply" => RunApply(parsed),
                 "dir" => RunDirectory(parsed),
                 "diff" => RunDiff(parsed),
+                "log" => RunLog(parsed),
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
+
         }
         catch (UsageException ex)
         {
@@ -122,276 +115,6 @@ internal static partial class Program
         catch (UnauthorizedAccessException ex)
         {
             return Fail(ex.Message);
-        }
-    }
-
-    private static int RunInfo(ParsedArgs args)
-    {
-        if (args.Positionals.Count != 1)
-        {
-            throw new UsageException("info needs exactly one file.");
-        }
-
-        Console.Out.Write(FormatInfo(TextFileReader.ReadFile(args.Positionals[0]).Info));
-        return ExitSame;
-    }
-
-    internal static string FormatInfo(TextFileInfo info) =>
-        $"Encoding: {info.EncodingName}\nHas BOM: {info.HasBom}\n" +
-        $"Dominant line ending: {info.DominantLineEnding.ToString().ToUpperInvariant()}\n" +
-        $"Mixed line endings: {info.IsMixedLineEndings}\n" +
-        $"Trailing line ending: {info.HasTrailingLineEnding}\nLine count: {info.LineCount}\n";
-
-    private static int RunDiff(ParsedArgs args)
-    {
-        if (args.Positionals.Count != 2)
-        {
-            throw new UsageException("diff needs exactly two files.");
-        }
-
-        var leftPath = args.Positionals[0];
-        var rightPath = args.Positionals[1];
-        var options = args.ToCompareOptions();
-
-        var encoding = args.Has("cp") ? Encoding.GetEncoding(args.IntValue("cp", 0)) : null;
-        var result = TextComparer.Compare(Load(leftPath, encoding), Load(rightPath, encoding), options);
-        if (!args.Has("quiet"))
-        {
-            var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { NewLine = "\n" };
-            UnifiedDiffWriter.Write(
-                stdout,
-                result,
-                args.Value("left-label") ?? leftPath,
-                args.Value("right-label") ?? rightPath,
-                args.IntValue("context", 3));
-            stdout.Flush();
-        }
-
-        return result.AreEqual ? ExitSame : ExitDifferent;
-    }
-
-    private static int RunMerge(ParsedArgs args)
-    {
-        if (args.Positionals.Count != 3)
-        {
-            throw new UsageException("merge needs three files: <base> <left> <right>.");
-        }
-
-        var result = ThreeWayMerger.Merge(
-            Load(args.Positionals[0]),
-            Load(args.Positionals[1]),
-            Load(args.Positionals[2]),
-            args.ToCompareOptions());
-
-        var labels = new ConflictLabels(
-            args.Value("left-label") ?? Path.GetFileName(args.Positionals[1]),
-            args.Value("base-label") ?? Path.GetFileName(args.Positionals[0]),
-            args.Value("right-label") ?? Path.GetFileName(args.Positionals[2]));
-        var text = result.ToText(labels, includeBase: args.Has("diff3"));
-
-        var output = args.Value("output");
-        if (output is null)
-        {
-            Console.Out.Write(text);
-        }
-        else
-        {
-            File.WriteAllText(output, text, new UTF8Encoding(false));
-        }
-
-        if (result.HasConflicts)
-        {
-            Console.Error.WriteLine($"{result.ConflictCount} conflict(s) remain.");
-            return ExitDifferent;
-        }
-
-        return ExitSame;
-    }
-
-    private static TextDocument Load(string path, Encoding? overrideEncoding = null)
-    {
-        var decoded = TextFileReader.ReadFile(path, fallback: null, overrideEncoding: overrideEncoding);
-        if (decoded.IsBinary)
-        {
-            throw new UsageException($"'{path}' looks like a binary file; binary compare is not available yet.");
-        }
-
-        return TextDocument.Parse(decoded.Text);
-    }
-
-    private static int Fail(string message)
-    {
-        Console.Error.WriteLine("diffrapid: " + message);
-        return ExitError;
-    }
-
-    private sealed class UsageException(string message) : Exception(message);
-
-    internal sealed class ParsedArgs
-    {
-        private static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["u"] = "context",
-            ["o"] = "output",
-            ["dl"] = "left-label",
-            ["dm"] = "base-label",
-            ["dr"] = "right-label",
-            ["ignorecase"] = "ignore-case",
-            ["ignoreblanklines"] = "ignore-blank-lines",
-            ["ignoreeol"] = "ignore-eol",
-        };
-
-        private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
-            "method", "include", "exclude", "only", "line-filter", "substitute", "cp", "report", "report-format", "out-dir",
-            "filter-file", "dir", "fuzz",
-        };
-
-        private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
-
-        private readonly Dictionary<string, string?> _options = new(StringComparer.OrdinalIgnoreCase);
-        private readonly List<LineFilter> _lineFilters = [];
-        private readonly List<SubstitutionFilter> _substitutions = [];
-
-        public List<string> Positionals { get; } = [];
-
-        public static ParsedArgs Parse(string[] args, int start)
-        {
-            var parsed = new ParsedArgs();
-            for (var i = start; i < args.Length; i++)
-            {
-                var arg = args[i];
-                string? name = null;
-                string? inlineValue = null;
-
-                if (arg.StartsWith("--", StringComparison.Ordinal))
-                {
-                    name = arg[2..];
-                }
-                else if (arg.Length > 1 && (arg[0] == '-' || (arg[0] == '/' && !File.Exists(arg) && !Directory.Exists(arg))))
-                {
-                    name = arg[1..];
-                }
-
-                if (name is null)
-                {
-                    parsed.Positionals.Add(arg);
-                    continue;
-                }
-
-                var separator = name.IndexOfAny([':', '=']);
-                if (separator > 0)
-                {
-                    inlineValue = name[(separator + 1)..];
-                    name = name[..separator];
-                }
-
-                if (Aliases.TryGetValue(name, out var canonical))
-                {
-                    name = canonical;
-                }
-
-                // WinMerge style: /ignorews, /ignorews:1 (change), /ignorews:2 (all).
-                if (name.Equals("ignorews", StringComparison.OrdinalIgnoreCase))
-                {
-                    name = "ignore-whitespace";
-                    inlineValue = inlineValue == "2" ? "all" : "change";
-                }
-
-                if (ValueOptions.Contains(name) && inlineValue is null && !(args[0].Equals("apply", StringComparison.OrdinalIgnoreCase) && name == "ignore-whitespace"))
-                {
-                    if (i + 1 >= args.Length)
-                    {
-                        throw new UsageException($"Option '{arg}' needs a value.");
-                    }
-
-                    inlineValue = args[++i];
-                }
-
-                parsed._options[name] = inlineValue;
-                if ((name is "include" or "exclude") && inlineValue is not null)
-                {
-                    if (!parsed._repeated.TryGetValue(name, out var masks))
-                    {
-                        parsed._repeated[name] = masks = [];
-                    }
-
-                    masks.Add(inlineValue);
-                }
-                else if (name.Equals("line-filter", StringComparison.OrdinalIgnoreCase))
-                {
-                    parsed._lineFilters.Add(new LineFilter(inlineValue!));
-                }
-                else if (name.Equals("substitute", StringComparison.OrdinalIgnoreCase))
-                {
-                    var equals = inlineValue!.IndexOf('=');
-                    if (equals < 0)
-                    {
-                        throw new UsageException("--substitute needs <find>=<replace>.");
-                    }
-
-                    parsed._substitutions.Add(new SubstitutionFilter(inlineValue[..equals], inlineValue[(equals + 1)..], true, true, false));
-                }
-            }
-
-            return parsed;
-        }
-
-        public IReadOnlyList<string> Values(string name) => _repeated.TryGetValue(name, out var values) ? values : Array.Empty<string>();
-
-        public bool Has(string name) => _options.ContainsKey(name);
-
-        public string? Value(string name) => _options.TryGetValue(name, out var v) ? v : null;
-
-        public int IntValue(string name, int fallback)
-        {
-            var value = Value(name);
-            if (value is null)
-            {
-                return fallback;
-            }
-
-            if (!int.TryParse(value, out var n) || n < 0)
-            {
-                throw new UsageException($"'{value}' is not a valid value for --{name}.");
-            }
-
-            return n;
-        }
-
-        public CompareOptions ToCompareOptions()
-        {
-            var algorithm = Value("algorithm")?.ToLowerInvariant() switch
-            {
-                null or "histogram" => DiffAlgorithmKind.Histogram,
-                "default" or "myers" => DiffAlgorithmKind.Default,
-                "minimal" => DiffAlgorithmKind.Minimal,
-                "patience" => DiffAlgorithmKind.Patience,
-                "none" => DiffAlgorithmKind.None,
-                var other => throw new UsageException($"Unknown algorithm '{other}'."),
-            };
-
-            var whitespace = Value("ignore-whitespace")?.ToLowerInvariant() switch
-            {
-                null => Has("ignore-whitespace") ? WhitespaceMode.IgnoreChange : WhitespaceMode.Compare,
-                "change" => WhitespaceMode.IgnoreChange,
-                "all" => WhitespaceMode.IgnoreAll,
-                var other => throw new UsageException($"Unknown whitespace mode '{other}'."),
-            };
-
-            return new CompareOptions
-            {
-                Algorithm = algorithm,
-                LineFilters = _lineFilters,
-                Substitutions = _substitutions,
-                Whitespace = whitespace,
-                IgnoreCase = Has("ignore-case"),
-                IgnoreBlankLines = Has("ignore-blank-lines"),
-                IgnoreLineEndings = Has("ignore-eol"),
-                IgnoreNumbers = Has("ignore-numbers"),
-                IgnoreMissingTrailingLineEnding = Has("ignore-missing-trailing-eol"),
-            };
         }
     }
 }
