@@ -72,6 +72,31 @@ public sealed class FolderCliTests : IDisposable
     }
 
     [Fact]
+    public void Reports_keep_difference_exit_code_and_json_output()
+    {
+        File.WriteAllText(Path.Combine(Left, "different"), "left");
+        File.WriteAllText(Path.Combine(Left, "same"), "same");
+        File.WriteAllText(Path.Combine(Right, "same"), "same");
+        foreach (var extension in new[] { "html", "htm", "csv" })
+        {
+            var path = Path.Combine(_root, "report." + extension);
+            var (code, output) = Run("--report", path, "--json", "--include-identical");
+            Assert.Equal(1, code);
+            using var json = JsonDocument.Parse(output);
+            Assert.Contains("same", File.ReadAllText(path));
+            var bytes = File.ReadAllBytes(path);
+            Assert.Equal(extension == "csv", bytes.Take(3).SequenceEqual(new byte[] { 239, 187, 191 }));
+        }
+        var custom = Path.Combine(_root, "report.txt");
+        Assert.Equal(1, Run("--report", custom, "--report-format", "csv").code);
+        Assert.DoesNotContain("\"same\"", File.ReadAllText(custom));
+        Assert.Equal(2, Run("--report", _root, "--report-format", "html").code);
+        Assert.Equal(2, Run("--report", custom).code);
+        Assert.Equal(2, Run("--report", custom, "--report-format", "invalid").code);
+        Assert.Equal(2, Run("--report-format", "csv").code);
+    }
+
+    [Fact]
     public void Invalid_options_and_missing_roots_return_error()
     {
         Assert.Equal(2, Run("--method", "invalid").code);

@@ -29,6 +29,8 @@ internal static partial class Program
           diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence]
                          [--no-recurse] [--include <glob>] [--exclude <glob>] [--json]
                          [--only different|left|right|all]
+                         [--report <file>] [--report-format html|csv] [--include-identical]
+                         Report format defaults to the extension (.html/.htm/.csv).
           diffrapid diff  <left> <right> [options]
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
@@ -229,7 +231,7 @@ internal static partial class Program
         private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
         {
             "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
-            "method", "include", "exclude", "only", "line-filter", "substitute", "cp",
+            "method", "include", "exclude", "only", "line-filter", "substitute", "cp", "report", "report-format",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);

@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DiffRapid.Core.Folders;
@@ -30,6 +32,27 @@ internal static partial class Program
         if (only is not ("all" or "different" or "left" or "right"))
         {
             throw new UsageException($"Unknown --only value '{only}'.");
+        }
+
+        var reportPath = args.Value("report");
+        var reportFormat = args.Value("report-format")?.ToLowerInvariant();
+        if (reportPath is null && args.Has("report-format"))
+        {
+            throw new UsageException("--report-format requires --report <file>.");
+        }
+
+        if (reportPath is not null)
+        {
+            reportFormat ??= Path.GetExtension(reportPath).ToLowerInvariant() switch
+            {
+                ".html" or ".htm" => "html",
+                ".csv" => "csv",
+                _ => throw new UsageException("Use .html, .htm or .csv, or specify --report-format html|csv."),
+            };
+            if (reportFormat is not ("html" or "csv"))
+            {
+                throw new UsageException($"Unknown report format '{reportFormat}'.");
+            }
         }
 
         var result = FolderComparer.Compare(args.Positionals[0], args.Positionals[1], new FolderCompareOptions
@@ -79,6 +102,28 @@ internal static partial class Program
 
             Console.Out.WriteLine(string.Join(", ", result.Counts.Select(c => $"{c.Key}: {c.Value}")));
         }
+
+        if (reportPath is not null)
+        {
+            using var writer = new StreamWriter(reportPath, false, new UTF8Encoding(reportFormat == "csv"));
+            var options = new FolderReportOptions
+            {
+                LeftRoot = args.Positionals[0],
+                RightRoot = args.Positionals[1],
+                GeneratedAt = DateTimeOffset.UtcNow,
+                MethodLabel = method.ToString(),
+                IncludeIdentical = args.Has("include-identical"),
+            };
+            if (reportFormat == "csv")
+            {
+                FolderReportWriter.WriteCsv(result, options, writer);
+            }
+            else
+            {
+                FolderReportWriter.WriteHtml(result, options, writer);
+            }
+        }
+
         return result.Root.Status == FolderCompareStatus.Error ? ExitError :
             result.Root.Status is FolderCompareStatus.Identical or FolderCompareStatus.Skipped ? ExitSame : ExitDifferent;
     }
