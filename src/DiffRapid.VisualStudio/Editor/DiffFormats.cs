@@ -18,6 +18,8 @@ internal static class DiffFormatNames
     public const string IgnoredLine = "DiffRapid.IgnoredLine";
     public const string ChangedText = "DiffRapid.ChangedText";
     public const string Filler = "DiffRapid.Filler";
+    public const string ConflictLine = "DiffRapid.ConflictLine";
+    public const string ResolvedLine = "DiffRapid.ResolvedLine";
 }
 
 [Export(typeof(EditorFormatDefinition))]
@@ -107,6 +109,32 @@ internal sealed class RemovedLineFormat : EditorFormatDefinition
     {
         DisplayName = "DiffRapid - Line only in the left file";
         BackgroundColor = Color.FromRgb(0xD7, 0x3A, 0x49);
+        ForegroundCustomizable = false;
+    }
+}
+
+[Export(typeof(EditorFormatDefinition))]
+[Name(DiffFormatNames.ConflictLine)]
+[UserVisible(true)]
+internal sealed class ConflictLineFormat : EditorFormatDefinition
+{
+    public ConflictLineFormat()
+    {
+        DisplayName = "DiffRapid - Unresolved merge conflict";
+        BackgroundColor = Color.FromRgb(0xE5, 0x48, 0x4D);
+        ForegroundCustomizable = false;
+    }
+}
+
+[Export(typeof(EditorFormatDefinition))]
+[Name(DiffFormatNames.ResolvedLine)]
+[UserVisible(true)]
+internal sealed class ResolvedLineFormat : EditorFormatDefinition
+{
+    public ResolvedLineFormat()
+    {
+        DisplayName = "DiffRapid - Resolved merge conflict";
+        BackgroundColor = Color.FromRgb(0x8B, 0x5C, 0xF6);
         ForegroundCustomizable = false;
     }
 }

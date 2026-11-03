@@ -45,6 +45,14 @@
           <LocCanonicalName>.DiffRapid.CompareFiles</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidMergeFiles" priority="0x0102" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" />
+        <Strings>
+          <ButtonText>DiffRapid: Merge Files...</ButtonText>
+          <CanonicalName>.DiffRapid.MergeFiles</CanonicalName>
+          <LocCanonicalName>.DiffRapid.MergeFiles</LocCanonicalName>
+        </Strings>
+      </Button>
 
       <!-- File comparison window commands: only on keys (see KeyBindings) and in Tools > Options > Keyboard. -->
       <Button guid="guidDiffRapidCommandSet" id="cmdidPreviousDifference" priority="0x0200" type="Button">
@@ -121,6 +129,7 @@
       <IDSymbol name="cmdidCompareSelected" value="0x0100" />
       <IDSymbol name="cmdidCompareFiles" value="0x0101" />
       <IDSymbol name="cmdidCompareFolders" value="0x0102" />
+      <IDSymbol name="cmdidMergeFiles" value="0x0103" />
       <IDSymbol name="cmdidPreviousDifference" value="0x0200" />
       <IDSymbol name="cmdidNextDifference" value="0x0201" />
       <IDSymbol name="cmdidCopyToLeft" value="0x0202" />

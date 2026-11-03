@@ -18,6 +18,9 @@ internal enum ComparisonTarget
 {
     Files,
     Folders,
+
+    /// <summary>Three files and a result file for a three-way merge.</summary>
+    Merge,
 }
 
 /// <summary>Lets the user pick the left and right files (or folders) in one place.</summary>
@@ -25,14 +28,19 @@ internal sealed class SelectFilesDialog : DialogWindow
 {
     private const int MaxPath = 32767;
 
-    private static readonly string?[] LastLeft = new string?[2];
-    private static readonly string?[] LastRight = new string?[2];
+    private static readonly string?[] LastLeft = new string?[3];
+    private static readonly string?[] LastRight = new string?[3];
+    private static string? _lastBase;
+    private static string? _lastResult;
 
     private readonly ComparisonTarget _target;
     private readonly TextBox _left = PathBox();
     private readonly TextBox _right = PathBox();
+    private readonly TextBox _base = PathBox();
+    private readonly TextBox _result = PathBox();
     private readonly TextBlock _error = new() { Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
     private readonly Button _compare;
+    private bool _resultFollowsLeft;
 
     public SelectFilesDialog(ComparisonTarget target, string? left = null, string? right = null)
     {
@@ -52,21 +60,37 @@ internal sealed class SelectFilesDialog : DialogWindow
 
         _left.Text = left ?? LastLeft[(int)target] ?? string.Empty;
         _right.Text = right ?? LastRight[(int)target] ?? string.Empty;
+        _base.Text = _lastBase ?? string.Empty;
+        // The result starts as the left file (what Save writes over), unless this is the same merge as last time.
+        var sameMerge = !string.IsNullOrEmpty(_lastResult) && string.Equals(Normalize(_left.Text), LastLeft[(int)target], StringComparison.OrdinalIgnoreCase);
+        _result.Text = sameMerge ? _lastResult! : _left.Text;
+        _resultFollowsLeft = !sameMerge;
         _error.SetResourceReference(TextBlock.ForegroundProperty, ThemedDialogColors.ValidationErrorTextBrushKey);
 
         var grid = new Grid { Margin = new Thickness(20, 0, 20, 10) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 5; i++)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         }
 
-        AddRow(grid, 0, "_Left:", _left, $"Select the left {noun}");
-        AddRow(grid, 1, "_Right:", _right, $"Select the right {noun}");
+        var row = 0;
+        AddRow(grid, row++, "_Left:", _left, $"Select the left {noun}");
+        if (Merging)
+        {
+            AddRow(grid, row++, "_Base:", _base, "Select the common ancestor of the left and right files");
+        }
 
-        Grid.SetRow(_error, 2);
+        AddRow(grid, row++, "_Right:", _right, $"Select the right {noun}");
+        if (Merging)
+        {
+            AddRow(grid, row++, "Res_ult:", _result, "Choose where to save the merged file");
+            _result.ToolTip = "Where Save writes the merged file. It starts as the left file; choose another file to leave the left one unchanged.";
+        }
+
+        Grid.SetRow(_error, row);
         Grid.SetColumn(_error, 1);
         Grid.SetColumnSpan(_error, 2);
         grid.Children.Add(_error);
@@ -74,7 +98,7 @@ internal sealed class SelectFilesDialog : DialogWindow
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var swap = DialogButton("_Swap", (_, _) => (_left.Text, _right.Text) = (_right.Text, _left.Text));
         swap.ToolTip = $"Exchange the left and right {noun}s";
-        _compare = DialogButton("_Compare", (_, _) => Accept());
+        _compare = DialogButton(Merging ? "_Merge" : "_Compare", (_, _) => Accept());
         _compare.IsDefault = true;
         var cancel = DialogButton("Cancel", (_, _) => DialogResult = false);
         cancel.IsCancel = true;
@@ -93,10 +117,12 @@ internal sealed class SelectFilesDialog : DialogWindow
         footer.SetResourceReference(Border.BorderBrushProperty, ThemedDialogColors.WindowBorderBrushKey);
 
         var heading = new StackPanel { Margin = new Thickness(20, 18, 20, 14) };
-        heading.Children.Add(new TextBlock { Text = Folders ? "Compare folders" : "Compare files", FontSize = 18, FontWeight = FontWeights.SemiBold });
+        heading.Children.Add(new TextBlock { Text = Merging ? "Merge files" : Folders ? "Compare folders" : "Compare files", FontSize = 18, FontWeight = FontWeights.SemiBold });
         var subtitle = new TextBlock
         {
-            Text = Folders
+            Text = Merging
+                ? "Choose two changed versions of a file and the base they both started from. Changes made on one side are taken automatically; you pick a side for each conflict."
+                : Folders
                 ? "Choose the two folders to compare. Results appear while the scan runs; double-click a file to compare it."
                 : "Choose the two files to compare side by side. Unsaved edits in open documents are included.",
             Margin = new Thickness(0, 4, 0, 0),
@@ -112,8 +138,18 @@ internal sealed class SelectFilesDialog : DialogWindow
         layout.Children.Add(footer);
         layout.Children.Add(grid);
         Content = layout;
-        _left.TextChanged += (_, _) => Validate(showErrors: false);
+        _left.TextChanged += (_, _) =>
+        {
+            if (_resultFollowsLeft)
+            {
+                _result.Text = _left.Text;
+            }
+
+            Validate(showErrors: false);
+        };
+        _result.TextChanged += (_, _) => _resultFollowsLeft = _result.Text.Length == 0 || _result.Text == _left.Text;
         _right.TextChanged += (_, _) => Validate(showErrors: false);
+        _base.TextChanged += (_, _) => Validate(showErrors: false);
         Loaded += (_, _) =>
         {
             Validate(showErrors: false);
@@ -127,7 +163,14 @@ internal sealed class SelectFilesDialog : DialogWindow
 
     public string RightPath => Normalize(_right.Text);
 
+    public string BasePath => Normalize(_base.Text);
+
+    /// <summary>Where the merge is saved: the result box, or the left file when it is empty.</summary>
+    public string ResultPath => Normalize(_result.Text) is { Length: > 0 } result ? result : LeftPath;
+
     private bool Folders => _target == ComparisonTarget.Folders;
+
+    private bool Merging => _target == ComparisonTarget.Merge;
 
     private static TextBox PathBox()
     {
@@ -171,7 +214,9 @@ internal sealed class SelectFilesDialog : DialogWindow
             var current = Normalize(box.Text);
             var other = Normalize(ReferenceEquals(box, _left) ? _right.Text : _left.Text);
             var start = Directory.Exists(current) ? current : SafeDirectory(current) ?? SafeDirectory(other);
-            var chosen = Folders ? BrowseForFolder(browseTitle, start) : BrowseForFile(browseTitle, start, current);
+            var chosen = Folders ? BrowseForFolder(browseTitle, start)
+                : ReferenceEquals(box, _result) ? BrowseForResult(browseTitle, start, current)
+                : BrowseForFile(browseTitle, start, current);
             if (chosen is not null)
             {
                 box.Text = chosen;
@@ -192,6 +237,20 @@ internal sealed class SelectFilesDialog : DialogWindow
             Filter = "All files (*.*)|*.*",
             InitialDirectory = start ?? string.Empty,
             FileName = File.Exists(current) ? Path.GetFileName(current) : string.Empty,
+        };
+        return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+    }
+
+    // The merge result may not exist yet, so it is chosen with a save dialog.
+    private string? BrowseForResult(string title, string? start, string current)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = title,
+            Filter = "All files (*.*)|*.*",
+            InitialDirectory = start ?? SafeDirectory(LeftPath) ?? string.Empty,
+            FileName = Path.GetFileName(current.Length > 0 ? current : LeftPath),
+            OverwritePrompt = false,
         };
         return dialog.ShowDialog(this) == true ? dialog.FileName : null;
     }
@@ -263,6 +322,18 @@ internal sealed class SelectFilesDialog : DialogWindow
         {
             problem = $"The right {noun} does not exist.";
         }
+        else if (Merging && BasePath.Length == 0)
+        {
+            problem = "Choose the base file both sides started from.";
+        }
+        else if (Merging && !File.Exists(BasePath))
+        {
+            problem = "The base file does not exist.";
+        }
+        else if (Merging && SafeDirectory(ResultPath) is null)
+        {
+            problem = "The folder for the result file does not exist.";
+        }
 
         _compare.IsEnabled = problem is null || !showErrors;
         _error.Text = showErrors ? problem ?? string.Empty : string.Empty;
@@ -278,6 +349,12 @@ internal sealed class SelectFilesDialog : DialogWindow
 
         LastLeft[(int)_target] = LeftPath;
         LastRight[(int)_target] = RightPath;
+        if (Merging)
+        {
+            _lastBase = BasePath;
+            _lastResult = Normalize(_result.Text);
+        }
+
         DialogResult = true;
     }
 

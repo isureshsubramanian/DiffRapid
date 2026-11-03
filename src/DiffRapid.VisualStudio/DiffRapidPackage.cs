@@ -48,6 +48,14 @@ public sealed class DiffRapidPackage : AsyncPackage
             FolderName(leftPath) + " ↔ " + FolderName(rightPath),
             hostsEditors: false);
 
+    /// <summary>Opens a three-way merge of two changed versions of a file and their common base.</summary>
+    public Task OpenMergeAsync(string leftPath, string basePath, string rightPath, string resultPath) =>
+        OpenDocumentAsync(
+            "Loading the merge",
+            async () => await MergeControl.CreateAsync(this, leftPath, basePath, rightPath, resultPath, (await DiffRapidSettings.ReadAsync(this)).Compare),
+            Path.GetFileName(resultPath) + " (merge)",
+            hostsEditors: false);
+
     private static string FolderName(string path)
     {
         var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

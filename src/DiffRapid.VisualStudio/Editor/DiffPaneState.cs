@@ -19,6 +19,12 @@ internal enum PaneLineKind : byte
     Inserted,
     Ignored,
     Moved,
+
+    /// <summary>Part of a merge conflict that is not resolved yet.</summary>
+    Conflict,
+
+    /// <summary>Part of a merge conflict the user has resolved.</summary>
+    Resolved,
 }
 
 /// <summary>

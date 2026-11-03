@@ -101,6 +101,8 @@ internal sealed class DiffHighlighter
                 PaneLineKind.Inserted => state.IsLeft ? DiffFormatNames.RemovedLine : DiffFormatNames.InsertedLine,
                 PaneLineKind.Moved => DiffFormatNames.MovedLine,
                 PaneLineKind.Ignored => DiffFormatNames.IgnoredLine,
+                PaneLineKind.Conflict => DiffFormatNames.ConflictLine,
+                PaneLineKind.Resolved => DiffFormatNames.ResolvedLine,
                 _ => null,
             };
 

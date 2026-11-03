@@ -31,6 +31,10 @@ internal static class CompareCommands
         commandService.AddCommand(new OleMenuCommand(
             (_, _) => Run(package, () => CompareFoldersAsync(package)),
             new CommandID(PackageIds.CommandSet, PackageIds.CompareFolders)));
+
+        commandService.AddCommand(new OleMenuCommand(
+            (_, _) => Run(package, () => MergeFilesAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.MergeFiles)));
     }
 
     private static async Task CompareSelectedAsync(DiffRapidPackage package)
@@ -74,6 +78,18 @@ internal static class CompareCommands
         }
 
         await package.OpenFolderComparisonAsync(dialog.LeftPath, dialog.RightPath);
+    }
+
+    private static async Task MergeFilesAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var dialog = new SelectFilesDialog(ComparisonTarget.Merge);
+        if (dialog.ShowModal() != true)
+        {
+            return;
+        }
+
+        await package.OpenMergeAsync(dialog.LeftPath, dialog.BasePath, dialog.RightPath, dialog.ResultPath);
     }
 
     private static void Run(DiffRapidPackage package, Func<Task> action)
