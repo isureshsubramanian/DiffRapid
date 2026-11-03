@@ -9,6 +9,7 @@ namespace DiffRapid.VisualStudio.Editor;
 internal sealed class DiffModel
 {
     private const int MaxInlineLineLength = 4000;
+    private const double MinInlineSimilarity = 0.5;
 
     private DiffModel(TextDiffResult result, IReadOnlyList<AlignedRow> rows, DiffPaneState left, DiffPaneState right, IReadOnlyList<int> hunkRows)
     {
@@ -94,8 +95,13 @@ internal sealed class DiffModel
                 if (a.Length <= MaxInlineLineLength && b.Length <= MaxInlineLineLength)
                 {
                     var inline = InlineDiffer.Compare(a, b, options);
-                    left.Inline[il] = inline.Left;
-                    right.Inline[ir] = inline.Right;
+
+                    // Word marks only help when the lines are mostly alike; on rewritten lines they are noise.
+                    if (Similarity(a, inline.Left, b, inline.Right) >= MinInlineSimilarity)
+                    {
+                        left.Inline[il] = MergeAcrossWhitespace(a, inline.Left);
+                        right.Inline[ir] = MergeAcrossWhitespace(b, inline.Right);
+                    }
                 }
             }
         }
@@ -113,5 +119,69 @@ internal sealed class DiffModel
         }
 
         return new DiffModel(result, rows, left, right, hunkRows);
+    }
+
+    // Share of non-whitespace characters left unchanged, taken from the more changed of the two lines.
+    private static double Similarity(string a, IReadOnlyList<TextSpan> aChanges, string b, IReadOnlyList<TextSpan> bChanges) =>
+        System.Math.Min(UnchangedShare(a, aChanges), UnchangedShare(b, bChanges));
+
+    private static double UnchangedShare(string text, IReadOnlyList<TextSpan> changes)
+    {
+        var total = CountNonWhitespace(text, 0, text.Length);
+        if (total == 0)
+        {
+            return 1;
+        }
+
+        var changed = 0;
+        foreach (var span in changes)
+        {
+            changed += CountNonWhitespace(text, span.Start, System.Math.Min(span.Start + span.Length, text.Length));
+        }
+
+        return 1 - ((double)changed / total);
+    }
+
+    private static int CountNonWhitespace(string text, int start, int end)
+    {
+        var count = 0;
+        for (var i = start; i < end; i++)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    // Joins marks separated only by whitespace, so a changed phrase reads as one block, not a row of boxes.
+    private static IReadOnlyList<TextSpan> MergeAcrossWhitespace(string text, IReadOnlyList<TextSpan> spans)
+    {
+        if (spans.Count < 2)
+        {
+            return spans;
+        }
+
+        var merged = new List<TextSpan>(spans.Count);
+        var current = spans[0];
+        for (var i = 1; i < spans.Count; i++)
+        {
+            var next = spans[i];
+            var gapStart = current.Start + current.Length;
+            if (next.Start >= gapStart && CountNonWhitespace(text, gapStart, System.Math.Min(next.Start, text.Length)) == 0)
+            {
+                current = new TextSpan(current.Start, next.Start + next.Length - current.Start);
+            }
+            else
+            {
+                merged.Add(current);
+                current = next;
+            }
+        }
+
+        merged.Add(current);
+        return merged;
     }
 }
