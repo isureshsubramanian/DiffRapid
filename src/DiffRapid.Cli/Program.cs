@@ -26,6 +26,9 @@ internal static partial class Program
 
         Usage:
           diffrapid info <file>
+          diffrapid patch <left> <right> [-o <file>] [-u <n>] [compare options]
+          diffrapid apply <patchfile> [--dir <root>] [--reverse] [--fuzz <0..2>]
+                          [--dry-run] [--ignore-whitespace]
           diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence]
                          [--no-recurse] [--include <glob>] [--exclude <glob>] [--json]
                          [--only different|left|right|all]
@@ -90,6 +93,8 @@ internal static partial class Program
             var parsed = ParsedArgs.Parse(args, 1);
             return command switch
             {
+                "patch" => RunPatch(parsed),
+                "apply" => RunApply(parsed),
                 "dir" => RunDirectory(parsed),
                 "diff" => RunDiff(parsed),
                 "info" => RunInfo(parsed),
@@ -240,7 +245,7 @@ internal static partial class Program
         {
             "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
             "method", "include", "exclude", "only", "line-filter", "substitute", "cp", "report", "report-format", "out-dir",
-            "filter-file",
+            "filter-file", "dir", "fuzz",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
@@ -294,7 +299,7 @@ internal static partial class Program
                     inlineValue = inlineValue == "2" ? "all" : "change";
                 }
 
-                if (ValueOptions.Contains(name) && inlineValue is null)
+                if (ValueOptions.Contains(name) && inlineValue is null && !(args[0].Equals("apply", StringComparison.OrdinalIgnoreCase) && name == "ignore-whitespace"))
                 {
                     if (i + 1 >= args.Length)
                     {

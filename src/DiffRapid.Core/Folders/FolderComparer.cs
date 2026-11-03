@@ -75,7 +75,7 @@ public static class FolderComparer
             counts[item.Status]++;
         }
 
-        return new FolderCompareResult(root, items.AsReadOnly(), new ReadOnlyDictionary<FolderCompareStatus, int>(counts));
+        return new FolderCompareResult(root, items.AsReadOnly(), new ReadOnlyDictionary<FolderCompareStatus, int>(counts)) { LeftRoot = Path.GetFullPath(left), RightRoot = Path.GetFullPath(right) };
     }
 
     private static void Flatten(FolderCompareItem item, List<FolderCompareItem> items)

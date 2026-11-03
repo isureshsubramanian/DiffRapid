@@ -54,4 +54,10 @@ public sealed record FolderCompareItem(
 public sealed record FolderCompareResult(
     FolderCompareItem Root,
     IReadOnlyList<FolderCompareItem> Items,
-    IReadOnlyDictionary<FolderCompareStatus, int> Counts);
+    IReadOnlyDictionary<FolderCompareStatus, int> Counts)
+{
+    /// <summary>Absolute root of the left comparison tree.</summary>
+    public string LeftRoot { get; init; } = string.Empty;
+    /// <summary>Absolute root of the right comparison tree.</summary>
+    public string RightRoot { get; init; } = string.Empty;
+}
