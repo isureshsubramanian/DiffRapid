@@ -58,7 +58,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _details = new() { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
     private readonly DispatcherTimer _recompareTimer;
-    private CompareOptions _options = CompareOptions.Default;
+    private readonly WhitespaceMode _whitespaceWhenIgnored;
+    private CompareOptions _options;
     private CancellationTokenSource? _compareCancellation;
     private DiffModel? _model;
     private ITextSnapshot? _modelLeftSnapshot;
@@ -69,11 +70,15 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     private bool _syncingScroll;
     private bool _disposed;
 
-    private TextDiffControl(AsyncPackage package, Pane left, Pane right)
+    private TextDiffControl(AsyncPackage package, Pane left, Pane right, CompareOptions options)
     {
         _package = package;
         _left = left;
         _right = right;
+        _options = options;
+
+        // The Whitespace toggle switches between exact compare and the configured ignore mode.
+        _whitespaceWhenIgnored = options.Whitespace == WhitespaceMode.Compare ? WhitespaceMode.IgnoreChange : options.Whitespace;
         _leftHeader = new FileHeader("LEFT", left.Path, DiffTheme.RemovedBrush);
         _rightHeader = new FileHeader("RIGHT", right.Path, DiffTheme.AddedBrush);
 
@@ -118,7 +123,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         _right.View.Caret.PositionChanged += (_, e) => SelectDifferenceAt(_right, e.NewPosition.BufferPosition);
     }
 
-    public static async Task<TextDiffControl> CreateAsync(AsyncPackage package, string leftPath, string rightPath)
+    public static async Task<TextDiffControl> CreateAsync(AsyncPackage package, string leftPath, string rightPath, CompareOptions options)
     {
         await package.JoinableTaskFactory.SwitchToMainThreadAsync();
         Diagnostics.Step("Reading " + System.IO.Path.GetFileName(leftPath), () => EnsureText(leftPath));
@@ -135,7 +140,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
 
         var left = Pane.Open(leftPath, invisibleEditors, adapters, editorFactory, services);
         var right = Pane.Open(rightPath, invisibleEditors, adapters, editorFactory, services);
-        var control = Diagnostics.Step("Building the comparison view", () => new TextDiffControl(package, left, right));
+        var control = Diagnostics.Step("Building the comparison view", () => new TextDiffControl(package, left, right, options));
         control.StartCompare();
         return control;
     }
@@ -192,10 +197,10 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
 
         var settings = new StackPanel { Orientation = Orientation.Horizontal };
         settings.Children.Add(DiffTheme.Caption("IGNORE"));
-        settings.Children.Add(DiffTheme.OptionToggle("Whitespace", "Ignore changes in whitespace", v => UpdateOptions(_options with { Whitespace = v ? WhitespaceMode.IgnoreChange : WhitespaceMode.Compare })));
-        settings.Children.Add(DiffTheme.OptionToggle("Case", "Ignore differences in letter case", v => UpdateOptions(_options with { IgnoreCase = v })));
-        settings.Children.Add(DiffTheme.OptionToggle("Blank lines", "Ignore inserted or deleted blank lines", v => UpdateOptions(_options with { IgnoreBlankLines = v })));
-        settings.Children.Add(DiffTheme.OptionToggle("Line endings", "Ignore CRLF / LF differences", v => UpdateOptions(_options with { IgnoreLineEndings = v })));
+        settings.Children.Add(DiffTheme.OptionToggle("Whitespace", "Ignore changes in whitespace", v => UpdateOptions(_options with { Whitespace = v ? _whitespaceWhenIgnored : WhitespaceMode.Compare }), _options.Whitespace != WhitespaceMode.Compare));
+        settings.Children.Add(DiffTheme.OptionToggle("Case", "Ignore differences in letter case", v => UpdateOptions(_options with { IgnoreCase = v }), _options.IgnoreCase));
+        settings.Children.Add(DiffTheme.OptionToggle("Blank lines", "Ignore inserted or deleted blank lines", v => UpdateOptions(_options with { IgnoreBlankLines = v }), _options.IgnoreBlankLines));
+        settings.Children.Add(DiffTheme.OptionToggle("Line endings", "Ignore CRLF / LF differences", v => UpdateOptions(_options with { IgnoreLineEndings = v }), _options.IgnoreLineEndings));
         settings.Children.Add(DiffTheme.Separator());
 
         settings.Children.Add(DiffTheme.Caption("ALGORITHM"));

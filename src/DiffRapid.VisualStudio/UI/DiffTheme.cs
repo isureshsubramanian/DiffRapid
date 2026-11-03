@@ -40,9 +40,10 @@ internal static class DiffTheme
     }
 
     /// <summary>A pill-shaped on/off option for the command bar.</summary>
-    public static ToggleButton OptionToggle(string text, string tooltip, Action<bool> onChanged)
+    /// <summary>A flat on/off button; <paramref name="isChecked"/> is its starting state and does not call <paramref name="onChanged"/>.</summary>
+    public static ToggleButton OptionToggle(string text, string tooltip, Action<bool> onChanged, bool isChecked = false)
     {
-        var toggle = new ToggleButton { Content = text, ToolTip = tooltip, Style = FlatToggle.Value, Margin = new Thickness(2, 0, 0, 0) };
+        var toggle = new ToggleButton { Content = text, ToolTip = tooltip, Style = FlatToggle.Value, Margin = new Thickness(2, 0, 0, 0), IsChecked = isChecked };
         toggle.Checked += (_, _) => onChanged(true);
         toggle.Unchecked += (_, _) => onChanged(false);
         return toggle;

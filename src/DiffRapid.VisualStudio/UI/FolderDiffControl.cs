@@ -76,7 +76,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private readonly TextBlock _details = new() { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
     private ObservableCollection<FolderRow> _rows = new();
     private Node? _root;
-    private FolderCompareMethod _method = FolderCompareMethod.FullContents;
+    private readonly FolderCompareOptions _baseOptions;
+    private FolderCompareMethod _method;
     private CancellationTokenSource? _scanCancellation;
     private bool _scanning;
     private bool _refreshing;
@@ -85,11 +86,13 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private ViewState? _restoreAfterScan;
     private bool _disposed;
 
-    public FolderDiffControl(DiffRapidPackage package, string leftRoot, string rightRoot)
+    public FolderDiffControl(DiffRapidPackage package, string leftRoot, string rightRoot, FolderCompareOptions options)
     {
         _package = package;
         _leftRoot = Path.GetFullPath(leftRoot);
         _rightRoot = Path.GetFullPath(rightRoot);
+        _baseOptions = options;
+        _method = options.Method;
 
         SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
         SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
@@ -178,7 +181,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             method.Items.Add(label);
         }
 
-        method.SelectedIndex = 0;
+        method.SelectedIndex = Math.Max(0, Array.FindIndex(Methods, m => m.Method == _method));
         method.SelectionChanged += (_, _) =>
         {
             _method = Methods[method.SelectedIndex].Method;
@@ -530,7 +533,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             _details.Text = string.Empty;
         }
 
-        var options = new FolderCompareOptions { Method = _method };
+        var options = _baseOptions with { Method = _method };
         var reporter = new QueueReporter(_pending, cancellation.Token);
         var stopwatch = Stopwatch.StartNew();
         _package.JoinableTaskFactory.RunAsync(async () =>
