@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidDiffRapidPackage">
+    <Groups>
+      <!-- Solution Explorer: single item and multi-selection context menus. -->
+      <Group guid="guidDiffRapidCommandSet" id="SolutionExplorerGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+      </Group>
+      <Group guid="guidDiffRapidCommandSet" id="MultiItemGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_XPROJ_MULTIITEM" />
+      </Group>
+      <Group guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" priority="0x0100">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareSelected" priority="0x0100" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="SolutionExplorerGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Compare Selected with DiffRapid</ButtonText>
+          <CanonicalName>.DiffRapid.CompareSelected</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareSelected</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareFiles" priority="0x0100" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" />
+        <Strings>
+          <ButtonText>DiffRapid: Compare Files...</ButtonText>
+          <CanonicalName>.DiffRapid.CompareFiles</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareFiles</LocCanonicalName>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <CommandPlacements>
+    <CommandPlacement guid="guidDiffRapidCommandSet" id="cmdidCompareSelected" priority="0x0100">
+      <Parent guid="guidDiffRapidCommandSet" id="MultiItemGroup" />
+    </CommandPlacement>
+  </CommandPlacements>
+
+  <VisibilityConstraints>
+    <!-- Load the package for the selection check whenever a solution or folder is open. -->
+    <VisibilityItem guid="guidDiffRapidCommandSet" id="cmdidCompareSelected" context="UICONTEXT_SolutionExists" />
+  </VisibilityConstraints>
+
+  <Symbols>
+    <GuidSymbol name="guidDiffRapidPackage" value="{d62115b4-a651-44ed-87ba-2400bf8f2a7e}" />
+    <GuidSymbol name="guidDiffRapidCommandSet" value="{cd4a73c1-601e-4ff6-83c2-8fef6a7455e5}">
+      <IDSymbol name="SolutionExplorerGroup" value="0x1020" />
+      <IDSymbol name="MultiItemGroup" value="0x1021" />
+      <IDSymbol name="ToolsMenuGroup" value="0x1022" />
+      <IDSymbol name="cmdidCompareSelected" value="0x0100" />
+      <IDSymbol name="cmdidCompareFiles" value="0x0101" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>
