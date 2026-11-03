@@ -42,6 +42,8 @@ internal static partial class Program
           --ignore-missing-trailing-eol
 
         diff options:
+          --line-filter <regex>                 ignore matching changed hunks (repeatable)
+          --substitute <find>=<replace>          regex replacement for comparison (repeatable)
           -u, --context <n>                     lines of context in the unified diff (default: 3)
           --left-label <text>, --right-label <text>
           --quiet                               only set the exit code
@@ -87,6 +89,10 @@ internal static partial class Program
             };
         }
         catch (UsageException ex)
+        {
+            return Fail(ex.Message);
+        }
+        catch (ArgumentException ex)
         {
             return Fail(ex.Message);
         }
@@ -200,12 +206,15 @@ internal static partial class Program
 
         private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
         {
-            "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label", "method", "include", "exclude", "only",
+            "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
+            "method", "include", "exclude", "only", "line-filter", "substitute",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly Dictionary<string, string?> _options = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<LineFilter> _lineFilters = [];
+        private readonly List<SubstitutionFilter> _substitutions = [];
 
         public List<string> Positionals { get; } = [];
 
@@ -265,8 +274,26 @@ internal static partial class Program
                 parsed._options[name] = inlineValue;
                 if ((name is "include" or "exclude") && inlineValue is not null)
                 {
-                    if (!parsed._repeated.TryGetValue(name, out var masks)) parsed._repeated[name] = masks = [];
+                    if (!parsed._repeated.TryGetValue(name, out var masks))
+                    {
+                        parsed._repeated[name] = masks = [];
+                    }
+
                     masks.Add(inlineValue);
+                }
+                else if (name.Equals("line-filter", StringComparison.OrdinalIgnoreCase))
+                {
+                    parsed._lineFilters.Add(new LineFilter(inlineValue!));
+                }
+                else if (name.Equals("substitute", StringComparison.OrdinalIgnoreCase))
+                {
+                    var equals = inlineValue!.IndexOf('=');
+                    if (equals < 0)
+                    {
+                        throw new UsageException("--substitute needs <find>=<replace>.");
+                    }
+
+                    parsed._substitutions.Add(new SubstitutionFilter(inlineValue[..equals], inlineValue[(equals + 1)..], true, true, false));
                 }
             }
 
@@ -318,6 +345,8 @@ internal static partial class Program
             return new CompareOptions
             {
                 Algorithm = algorithm,
+                LineFilters = _lineFilters,
+                Substitutions = _substitutions,
                 Whitespace = whitespace,
                 IgnoreCase = Has("ignore-case"),
                 IgnoreBlankLines = Has("ignore-blank-lines"),

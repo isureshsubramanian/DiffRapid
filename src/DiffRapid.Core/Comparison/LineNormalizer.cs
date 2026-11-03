@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Comparison;
@@ -13,10 +14,26 @@ public sealed class LineNormalizer
     private readonly CompareOptions _options;
     private readonly Dictionary<string, int> _keys = new(System.StringComparer.Ordinal);
     private readonly StringBuilder _buffer = new();
+    private readonly List<(Regex Pattern, string Replacement, bool Literal)> _substitutions = new();
 
     public LineNormalizer(CompareOptions options)
     {
         _options = options;
+        foreach (var filter in options.Substitutions)
+        {
+            if (!filter.Enabled)
+            {
+                continue;
+            }
+
+            var pattern = filter.IsRegex ? filter.Find : Regex.Escape(filter.Find);
+            if (filter.WholeWord)
+            {
+                pattern = @"(?<!\w)(?:" + pattern + @")(?!\w)";
+            }
+
+            _substitutions.Add((FilterRegex.Create(pattern, filter.CaseSensitive, filter.Find), filter.Replace, !filter.IsRegex));
+        }
     }
 
     public int[] ToKeys(TextDocument document)
@@ -48,6 +65,13 @@ public sealed class LineNormalizer
 
     internal string NormalizeContent(string content)
     {
+        foreach (var substitution in _substitutions)
+        {
+            content = substitution.Literal
+                ? substitution.Pattern.Replace(content, _ => substitution.Replacement)
+                : substitution.Pattern.Replace(content, substitution.Replacement);
+        }
+
         var sb = _buffer.Clear();
         var pendingSpace = false;
         var i = 0;

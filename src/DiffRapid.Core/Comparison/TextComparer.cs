@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using DiffRapid.Core.Algorithms;
 using DiffRapid.Core.Text;
@@ -28,6 +29,7 @@ public static class TextComparer
         options ??= CompareOptions.Default;
 
         var normalizer = new LineNormalizer(options);
+        var lineFilters = options.LineFilters.Where(f => f.Enabled).Select(f => FilterRegex.Create(f.Pattern)).ToArray();
         var leftKeys = normalizer.ToKeys(left);
         var rightKeys = normalizer.ToKeys(right);
 
@@ -36,6 +38,15 @@ public static class TextComparer
         if (options.IgnoreBlankLines)
         {
             hunks = ClassifyBlankLineHunks(hunks, left, right);
+        }
+
+        if (lineFilters.Length > 0)
+        {
+            hunks = hunks.Select(hunk =>
+                Enumerable.Range(hunk.LeftStart, hunk.LeftCount).All(i => lineFilters.Any(f => f.IsMatch(left[i].Content))) &&
+                Enumerable.Range(hunk.RightStart, hunk.RightCount).All(i => lineFilters.Any(f => f.IsMatch(right[i].Content)))
+                    ? hunk with { Significance = DiffSignificance.Ignored }
+                    : hunk).ToList();
         }
 
         IReadOnlyList<MovedBlock> moved = options.DetectMovedBlocks

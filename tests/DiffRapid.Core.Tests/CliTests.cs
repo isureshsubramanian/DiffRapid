@@ -4,6 +4,44 @@ namespace DiffRapid.Core.Tests;
 
 public sealed class CliTests
 {
+    [Fact]
+    public void DiffAppliesFiltersAndReportsInvalidArguments()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var left = Path.Combine(directory, "left.txt");
+            var right = Path.Combine(directory, "right.txt");
+            File.WriteAllText(left, "// old\nversion 1\n");
+            File.WriteAllText(right, "// new\nversion 2\n");
+            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet"]));
+            Assert.Equal(0, Program.Main(["diff", left, right, "--quiet",
+                "--line-filter", "^//", "--substitute", @"version \d+=version"]));
+            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--line-filter", "["]));
+            Assert.Equal(2, Program.Main(["diff", left, right, "--substitute", "missing-separator"]));
+            Assert.Equal(2, Program.Main(["diff", left, right, "--line-filter"]));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ParsesRepeatedFiltersAndPreservesReplacementEquals()
+    {
+        var args = Program.ParsedArgs.Parse(["diff", "left", "right",
+            "--line-filter", "^//", "--line-filter=^#",
+            "--substitute", "v[0-9]+=version=stable", "--substitute", "build=release"], 1);
+        var options = args.ToCompareOptions();
+
+        Assert.Equal(["^//", "^#"], options.LineFilters.Select(f => f.Pattern));
+        Assert.Equal(["v[0-9]+", "build"], options.Substitutions.Select(f => f.Find));
+        Assert.Equal(["version=stable", "release"], options.Substitutions.Select(f => f.Replace));
+        Assert.All(options.Substitutions, f => Assert.True(f.IsRegex && f.CaseSensitive && !f.WholeWord));
+    }
+
     [Theory]
     [InlineData("-o")]
     [InlineData("/o")]

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using DiffRapid.Core.Algorithms;
 
 namespace DiffRapid.Core.Comparison;
@@ -25,6 +26,23 @@ public enum InlineGranularity
 /// <summary>Options that control a text comparison. Immutable; use <c>with</c> to derive variants.</summary>
 public sealed record CompareOptions
 {
+    private readonly FilterList<LineFilter> _lineFilters = new(System.Array.Empty<LineFilter>());
+    private readonly FilterList<SubstitutionFilter> _substitutions = new(System.Array.Empty<SubstitutionFilter>());
+
+    /// <summary>Patterns that classify matching changed hunks as ignored.</summary>
+    public IReadOnlyList<LineFilter> LineFilters
+    {
+        get => _lineFilters;
+        init => _lineFilters = new FilterList<LineFilter>(value);
+    }
+
+    /// <summary>Ordered replacements applied to comparison keys before other normalization.</summary>
+    public IReadOnlyList<SubstitutionFilter> Substitutions
+    {
+        get => _substitutions;
+        init => _substitutions = new FilterList<SubstitutionFilter>(value);
+    }
+
     public static readonly CompareOptions Default = new();
 
     public DiffAlgorithmKind Algorithm { get; init; } = DiffAlgorithmKind.Histogram;
