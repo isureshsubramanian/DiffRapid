@@ -152,7 +152,7 @@ internal sealed class MergeLayout
 
         for (var i = 0; i < ranges.Count; i++)
         {
-            var kind = Result.Chunks[i].Kind switch
+            var kind = Session.Resolution(i) == MergeResolution.Custom ? PaneLineKind.Resolved : Result.Chunks[i].Kind switch
             {
                 MergeChunkKind.Unchanged => PaneLineKind.Equal,
                 MergeChunkKind.Conflict => Session.Resolution(i) == MergeResolution.Unresolved ? PaneLineKind.Conflict : PaneLineKind.Resolved,

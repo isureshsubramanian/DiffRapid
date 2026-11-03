@@ -54,7 +54,7 @@ public sealed class DiffRapidPackage : AsyncPackage
             "Loading the merge",
             async () => await MergeControl.CreateAsync(this, leftPath, basePath, rightPath, resultPath, (await DiffRapidSettings.ReadAsync(this)).Compare),
             Path.GetFileName(resultPath) + " (merge)",
-            hostsEditors: false);
+            hostsEditors: true);
 
     private static string FolderName(string path)
     {
