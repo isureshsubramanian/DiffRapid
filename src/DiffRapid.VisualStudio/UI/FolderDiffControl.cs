@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -18,6 +19,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using DiffRapid.Core.Folders;
+using Microsoft.Win32;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Imaging.Interop;
@@ -70,12 +72,14 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private readonly Button _copyToRight;
     private readonly Button _deleteLeft;
     private readonly Button _deleteRight;
+    private readonly Button _exportReport;
     private readonly TextBox _search = new() { Width = 220, VerticalAlignment = VerticalAlignment.Center, ToolTip = "Show only paths containing this text" };
     private readonly TextBlock _verdict = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 14, 0) };
     private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _details = new() { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
     private ObservableCollection<FolderRow> _rows = new();
     private Node? _root;
+    private FolderCompareResult? _result;
     private readonly FolderCompareOptions _baseOptions;
     private FolderCompareMethod _method;
     private CancellationTokenSource? _scanCancellation;
@@ -109,6 +113,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _copyToRight = DiffTheme.CommandButton(IconLabel(KnownMonikers.Forwards, "Copy to right"), "Copy the selected files and folders from the left to the right (Ctrl+F8)", () => CopySelection(toRight: true));
         _deleteLeft = DiffTheme.CommandButton(IconLabel(KnownMonikers.Delete, "Delete left"), "Move the selected files and folders on the left to the Recycle Bin (Delete, for items only on the left)", () => DeleteSelection(fromLeft: true));
         _deleteRight = DiffTheme.CommandButton(IconLabel(KnownMonikers.Delete, "Delete right"), "Move the selected files and folders on the right to the Recycle Bin (Delete, for items only on the right)", () => DeleteSelection(fromLeft: false));
+        _exportReport = DiffTheme.CommandButton(IconLabel(KnownMonikers.Report, "Export report"), "Save the comparison as an HTML or CSV report", ExportReport);
+        _exportReport.IsEnabled = false;
 
         var toolbar = BuildToolbar();
         SetDock(toolbar, Dock.Top);
@@ -159,6 +165,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         summary.Children.Add(_copyToRight);
         summary.Children.Add(_deleteLeft);
         summary.Children.Add(_deleteRight);
+        summary.Children.Add(_exportReport);
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         SetDock(summary, Dock.Left);
@@ -611,6 +618,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _streamed = _scanned;
 
         _root = Node.Build(result.Root);
+        _result = result;
         _counts.Clear();
         foreach (var pair in _root.Summary)
         {
@@ -1119,6 +1127,96 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _copyToRight.IsEnabled = enabled;
         _deleteLeft.IsEnabled = enabled;
         _deleteRight.IsEnabled = enabled;
+        _exportReport.IsEnabled = !_scanning && !_busy && _result is not null;
+    }
+
+    // Saves the last completed comparison as a report; the save dialog's file type picks the format and rows.
+    private void ExportReport()
+    {
+        if (_scanning || _busy || _result is null)
+        {
+            return;
+        }
+
+        // The file name cannot hold a folder separator, so the parent and folder names are joined by a space there.
+        var names = ReportNames();
+        var (left, right) = (names.Left.Replace(Path.DirectorySeparatorChar, ' '), names.Right.Replace(Path.DirectorySeparatorChar, ' '));
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export folder comparison report",
+            FileName = string.Concat((left + " vs " + right + " report")
+                .Select(c => Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            Filter = "HTML report, differences only (*.html)|*.html"
+                + "|HTML report, all files (*.html)|*.html"
+                + "|CSV, differences only (*.csv)|*.csv"
+                + "|CSV, all files (*.csv)|*.csv",
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var html = dialog.FilterIndex <= 2;
+        var options = new FolderReportOptions
+        {
+            LeftRoot = _leftRoot,
+            RightRoot = _rightRoot,
+            Title = names.Left + " ↔ " + names.Right,
+            GeneratedAt = DateTimeOffset.Now,
+            MethodLabel = Methods.First(m => m.Method == _method).Label,
+            IncludeIdentical = dialog.FilterIndex % 2 == 0,
+        };
+
+        try
+        {
+            // CSV gets a byte order mark so Excel reads non-ASCII paths correctly.
+            using (var writer = new StreamWriter(dialog.FileName, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: !html)))
+            {
+                if (html)
+                {
+                    FolderReportWriter.WriteHtml(_result, options, writer);
+                }
+                else
+                {
+                    FolderReportWriter.WriteCsv(_result, options, writer);
+                }
+            }
+
+            _position.Text = $"Saved the report to {dialog.FileName}";
+            if (html)
+            {
+                Process.Start(dialog.FileName);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            _position.Text = $"Could not save the report: {ex.Message}";
+        }
+    }
+
+    // Folders with the same name are told apart by their parent folder, e.g. "Xls" vs "Xls-10272026\Xls".
+    private (string Left, string Right) ReportNames()
+    {
+        var left = FolderName(_leftRoot);
+        var right = FolderName(_rightRoot);
+        return string.Equals(left, right, StringComparison.OrdinalIgnoreCase)
+            ? (WithParent(_leftRoot), WithParent(_rightRoot))
+            : (left, right);
+    }
+
+    private static string WithParent(string path)
+    {
+        var parent = Path.GetDirectoryName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        return string.IsNullOrEmpty(parent) ? FolderName(path) : Path.Combine(FolderName(parent!), FolderName(path));
+    }
+
+    private static string FolderName(string path)
+    {
+        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var name = Path.GetFileName(trimmed);
+        return string.IsNullOrEmpty(name) ? trimmed : name;
     }
 
     // Copies the selected entries to the other side after a confirmation, then compares again.
