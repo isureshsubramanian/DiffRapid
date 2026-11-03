@@ -12,7 +12,8 @@
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <UseCodebase>true</UseCodebase>
-    <DeployExtension Condition="'$(Configuration)' == 'Debug'">true</DeployExtension>
+    <!-- Deploy to the experimental instance only from Visual Studio / MSBuild.exe; 'dotnet build' cannot deploy. -->
+    <DeployExtension Condition="'$(Configuration)' == 'Debug' And '$(MSBuildRuntimeType)' == 'Full'">true</DeployExtension>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>true</IncludeDebugSymbolsInVSIXContainer>
     <IncludeDebugSymbolsInLocalVSIXDeployment>true</IncludeDebugSymbolsInLocalVSIXDeployment>

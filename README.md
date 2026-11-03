@@ -44,7 +44,7 @@ dotnet test --project tests/DiffRapid.Core.Tests
 msbuild src/DiffRapid.VisualStudio/DiffRapid.VisualStudio.csproj -restore
 ```
 
-To debug the extension, open `DiffRapid.sln` in Visual Studio, set `DiffRapid.VisualStudio` as the
+To debug the extension, open `DiffRapid.slnx` in Visual Studio, set `DiffRapid.VisualStudio` as the
 startup project and press F5; it launches the experimental instance (`/rootsuffix Exp`).
 
 ## Repository layout
