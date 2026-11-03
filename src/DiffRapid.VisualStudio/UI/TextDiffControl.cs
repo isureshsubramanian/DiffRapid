@@ -27,6 +27,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
+using DefGuidList = Microsoft.VisualStudio.Editor.DefGuidList;
 using OleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
 using Span = Microsoft.VisualStudio.Text.Span;
 using Task = System.Threading.Tasks.Task;
@@ -892,6 +893,14 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
                 var init = new[] { new INITVIEW { fSelectionMargin = 0, fWidgetMargin = 0, fVirtualSpace = 0, fDragDropMove = 1 } };
                 const uint flags = (uint)TextViewInitFlags.VIF_HSCROLL | (uint)TextViewInitFlags.VIF_VSCROLL | (uint)TextViewInitFlags3.VIF_NO_HWND_SUPPORT;
                 ErrorHandler.ThrowOnFailure(textView.Initialize(textLines, IntPtr.Zero, flags, init));
+
+                // A code window tells its views to use the Text Editor fonts and colors; without that, syntax
+                // colors fall back to the light-theme defaults whatever the current theme.
+                var categories = (IVsTextEditorPropertyCategoryContainer)textView;
+                var masterSettings = DefGuidList.guidEditPropCategoryViewMasterSettings;
+                ErrorHandler.ThrowOnFailure(categories.GetPropertyCategory(ref masterSettings, out var properties));
+                ErrorHandler.ThrowOnFailure(properties.SetProperty(VSEDITPROPID.VSEDITPROPID_ViewGeneral_FontCategory, DefGuidList.guidTextEditorFontCategory));
+                ErrorHandler.ThrowOnFailure(properties.SetProperty(VSEDITPROPID.VSEDITPROPID_ViewGeneral_ColorCategory, DefGuidList.guidTextEditorFontCategory));
 
                 var viewHost = adapters.GetWpfTextViewHost(textView)
                     ?? throw new InvalidOperationException("The editor view has no WPF host.");
