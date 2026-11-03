@@ -41,6 +41,7 @@
 
   <ItemGroup>
     <None Include="source.extension.vsixmanifest" SubType="Designer" />
+    <Content Include="UnifiedSettings/registration.json" CopyToOutputDirectory="PreserveNewest" IncludeInVSIX="true" />
     <VSCTCompile Include="DiffRapidPackage.vsct" ResourceName="Menus.ctmenu" />
     <EmbeddedResource Update="VSPackage.resx">
       <MergeWithCTO>true</MergeWithCTO>

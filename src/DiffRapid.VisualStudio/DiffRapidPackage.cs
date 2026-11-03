@@ -17,7 +17,7 @@ namespace DiffRapid.VisualStudio;
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [Guid(PackageIds.PackageGuidString)]
 [ProvideMenuResource("Menus.ctmenu", 1)]
-[ProvideOptionPage(typeof(DiffRapidOptionsPage), "DiffRapid", "General", 0, 0, true)]
+[ProvideSettingsManifest(PackageRelativeManifestFile = @"UnifiedSettings\registration.json")]
 [ProvideKeyBindingTable(PackageIds.DiffWindowGuidString, PackageIds.KeyBindingScopeNameResource, AllowNavKeyBinding = true)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.FolderOpened_string, PackageAutoLoadFlags.BackgroundLoad)]
@@ -32,21 +32,11 @@ public sealed class DiffRapidPackage : AsyncPackage
         await CompareCommands.InitializeAsync(this);
     }
 
-    /// <summary>The settings new comparisons start with (Tools > Options > DiffRapid).</summary>
-    internal DiffRapidOptionsPage Options
-    {
-        get
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            return (DiffRapidOptionsPage)GetDialogPage(typeof(DiffRapidOptionsPage));
-        }
-    }
-
     /// <summary>Opens a new comparison document tab for two files.</summary>
     public Task OpenComparisonAsync(string leftPath, string rightPath) =>
         OpenDocumentAsync(
             "Loading the comparison",
-            async () => await TextDiffControl.CreateAsync(this, leftPath, rightPath, Options.ToCompareOptions()),
+            async () => await TextDiffControl.CreateAsync(this, leftPath, rightPath, (await DiffRapidSettings.ReadAsync(this)).Compare),
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true);
 
@@ -54,7 +44,7 @@ public sealed class DiffRapidPackage : AsyncPackage
     public Task OpenFolderComparisonAsync(string leftPath, string rightPath) =>
         OpenDocumentAsync(
             "Loading the folder comparison",
-            () => Task.FromResult<FrameworkElement>(new FolderDiffControl(this, leftPath, rightPath, Options.ToFolderOptions())),
+            async () => new FolderDiffControl(this, leftPath, rightPath, (await DiffRapidSettings.ReadAsync(this)).Folder),
             FolderName(leftPath) + " ↔ " + FolderName(rightPath),
             hostsEditors: false);
 

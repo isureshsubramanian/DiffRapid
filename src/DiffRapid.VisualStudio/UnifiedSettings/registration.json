@@ -1,0 +1,210 @@
+{
+  "$schema": "https://aka.ms/unified-settings-experience/registration/schema",
+  "categories": {
+    "diffRapid": {
+      "title": "DiffRapid"
+    },
+    "diffRapid.fileComparison": {
+      "title": "File Comparison",
+      "description": "Settings new file comparisons start with. The comparison toolbar still changes them for one comparison only.",
+      "order": 0
+    },
+    "diffRapid.folderComparison": {
+      "title": "Folder Comparison",
+      "description": "Settings new folder comparisons start with. Files compared by full contents use the file comparison settings.",
+      "order": 1
+    }
+  },
+  "properties": {
+    "diffRapid.fileComparison.whitespace": {
+      "type": "string",
+      "title": "Whitespace",
+      "description": "How differences in spaces and tabs are treated.",
+      "default": "compare",
+      "enum": [ "compare", "ignoreChange", "ignoreAll" ],
+      "enumItemLabels": [ "Compare whitespace", "Ignore changes in the amount of whitespace", "Ignore all whitespace" ],
+      "order": 0
+    },
+    "diffRapid.fileComparison.ignoreCase": {
+      "type": "boolean",
+      "title": "Ignore case",
+      "description": "Lines that differ only in letter case compare equal.",
+      "default": false,
+      "order": 1
+    },
+    "diffRapid.fileComparison.ignoreBlankLines": {
+      "type": "boolean",
+      "title": "Ignore blank lines",
+      "description": "Inserted or deleted blank lines are shown as ignored rather than as differences.",
+      "default": false,
+      "order": 2
+    },
+    "diffRapid.fileComparison.ignoreLineEndings": {
+      "type": "boolean",
+      "title": "Ignore line endings",
+      "description": "CRLF, LF and CR line endings compare equal.",
+      "default": false,
+      "order": 3
+    },
+    "diffRapid.fileComparison.ignoreNumbers": {
+      "type": "boolean",
+      "title": "Ignore numbers",
+      "description": "Sequences of digits compare equal whatever their value.",
+      "default": false,
+      "order": 4
+    },
+    "diffRapid.fileComparison.ignoreMissingFinalLineEnding": {
+      "type": "boolean",
+      "title": "Ignore a missing line ending at the end of the file",
+      "description": "A last line without a line ending compares equal to one with a line ending.",
+      "default": false,
+      "order": 5
+    },
+    "diffRapid.fileComparison.detectMovedBlocks": {
+      "type": "boolean",
+      "title": "Detect moved blocks",
+      "description": "Blocks of lines that moved to another position are shown as moved.",
+      "default": true,
+      "order": 6
+    },
+    "diffRapid.fileComparison.algorithm": {
+      "type": "string",
+      "title": "Algorithm",
+      "description": "How lines are matched between the two files. Histogram usually gives the most readable result.",
+      "default": "histogram",
+      "enum": [ "histogram", "patience", "default", "minimal", "none" ],
+      "enumItemLabels": [ "Histogram", "Patience", "Myers", "Myers (minimal)", "None (common start and end only)" ],
+      "order": 7
+    },
+    "diffRapid.fileComparison.inlineGranularity": {
+      "type": "string",
+      "title": "Mark changes inside a line by",
+      "default": "word",
+      "enum": [ "word", "character" ],
+      "enumItemLabels": [ "Word", "Character" ],
+      "order": 8
+    },
+    "diffRapid.fileComparison.lineFilters": {
+      "type": "array",
+      "title": "Line filters",
+      "description": "Regular expressions. A difference in which every changed line matches one of them is shown as ignored, for example ^\\s*// for comment-only changes.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "title": "Regular expression",
+            "default": "",
+            "minLength": 1
+          }
+        }
+      },
+      "itemsAreOrdered": false,
+      "allowItemEditing": true,
+      "allowAdditionsAndRemovals": true,
+      "default": [],
+      "order": 9
+    },
+    "diffRapid.folderComparison.compareBy": {
+      "type": "string",
+      "title": "Compare by",
+      "description": "How files present on both sides are compared.",
+      "default": "fullContents",
+      "enum": [ "fullContents", "quickContents", "binaryContents", "date", "dateAndSize", "size", "existence" ],
+      "enumItemLabels": [ "Full contents", "Quick contents", "Binary contents", "Modified date", "Modified date and size", "Size", "Existence" ],
+      "order": 0
+    },
+    "diffRapid.folderComparison.includeSubfolders": {
+      "type": "boolean",
+      "title": "Include subfolders",
+      "default": true,
+      "order": 1
+    },
+    "diffRapid.folderComparison.skipCommonFolders": {
+      "type": "boolean",
+      "title": "Skip common build folders",
+      "description": "Leave out .git, .vs, .idea, bin, obj, node_modules, packages and TestResults folders.",
+      "default": true,
+      "order": 2
+    },
+    "diffRapid.folderComparison.caseSensitiveNames": {
+      "type": "boolean",
+      "title": "Case-sensitive names",
+      "description": "Treat File.txt and file.txt as different entries.",
+      "default": false,
+      "order": 3
+    },
+    "diffRapid.folderComparison.timeToleranceSeconds": {
+      "type": "integer",
+      "title": "Time tolerance (seconds)",
+      "description": "Modification times this close count as equal. FAT drives and zip files store times in 2-second steps.",
+      "default": 2,
+      "minimum": 0,
+      "maximum": 86400,
+      "order": 4
+    },
+    "diffRapid.folderComparison.includeFiles": {
+      "type": "array",
+      "title": "Include files",
+      "description": "When set, only files matching one of these masks are compared, for example *.cs.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "mask": {
+            "type": "string",
+            "title": "File mask",
+            "default": "",
+            "minLength": 1
+          }
+        }
+      },
+      "itemsAreOrdered": false,
+      "allowItemEditing": true,
+      "allowAdditionsAndRemovals": true,
+      "default": [],
+      "order": 5
+    },
+    "diffRapid.folderComparison.excludeFiles": {
+      "type": "array",
+      "title": "Exclude files",
+      "description": "File masks to leave out, for example *.min.js.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "mask": {
+            "type": "string",
+            "title": "File mask",
+            "default": "",
+            "minLength": 1
+          }
+        }
+      },
+      "itemsAreOrdered": false,
+      "allowItemEditing": true,
+      "allowAdditionsAndRemovals": true,
+      "default": [],
+      "order": 6
+    },
+    "diffRapid.folderComparison.excludeFolders": {
+      "type": "array",
+      "title": "Exclude folders",
+      "description": "Folder masks to leave out, for example dist or docs/generated.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "mask": {
+            "type": "string",
+            "title": "Folder mask",
+            "default": "",
+            "minLength": 1
+          }
+        }
+      },
+      "itemsAreOrdered": false,
+      "allowItemEditing": true,
+      "allowAdditionsAndRemovals": true,
+      "default": [],
+      "order": 7
+    }
+  }
+}
