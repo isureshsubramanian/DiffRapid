@@ -14,7 +14,7 @@ namespace DiffRapid.Cli;
 /// Headless entry point. Exit codes follow the WinMerge /enableexitcode convention:
 /// 0 = identical (or merged cleanly), 1 = different (or conflicts remain), 2 = error.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     private const int ExitSame = 0;
     private const int ExitDifferent = 1;
@@ -25,6 +25,9 @@ internal static class Program
         DiffRapid command line
 
         Usage:
+          diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence]
+                         [--no-recurse] [--include <glob>] [--exclude <glob>] [--json]
+                         [--only different|left|right|all]
           diffrapid diff  <left> <right> [options]
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
@@ -77,6 +80,7 @@ internal static class Program
             var parsed = ParsedArgs.Parse(args, 1);
             return command switch
             {
+                "dir" => RunDirectory(parsed),
                 "diff" => RunDiff(parsed),
                 "merge" => RunMerge(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
@@ -196,8 +200,10 @@ internal static class Program
 
         private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
         {
-            "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
+            "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label", "method", "include", "exclude", "only",
         };
+
+        private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly Dictionary<string, string?> _options = new(StringComparer.OrdinalIgnoreCase);
 
@@ -216,7 +222,7 @@ internal static class Program
                 {
                     name = arg[2..];
                 }
-                else if (arg.Length > 1 && (arg[0] == '-' || (arg[0] == '/' && !File.Exists(arg))))
+                else if (arg.Length > 1 && (arg[0] == '-' || (arg[0] == '/' && !File.Exists(arg) && !Directory.Exists(arg))))
                 {
                     name = arg[1..];
                 }
@@ -257,10 +263,17 @@ internal static class Program
                 }
 
                 parsed._options[name] = inlineValue;
+                if ((name is "include" or "exclude") && inlineValue is not null)
+                {
+                    if (!parsed._repeated.TryGetValue(name, out var masks)) parsed._repeated[name] = masks = [];
+                    masks.Add(inlineValue);
+                }
             }
 
             return parsed;
         }
+
+        public IReadOnlyList<string> Values(string name) => _repeated.TryGetValue(name, out var values) ? values : Array.Empty<string>();
 
         public bool Has(string name) => _options.ContainsKey(name);
 
