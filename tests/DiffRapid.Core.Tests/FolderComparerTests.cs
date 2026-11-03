@@ -24,6 +24,28 @@ public sealed class FolderComparerTests : IDisposable
         CancellationToken token = default) => FolderComparer.Compare(Left, Right, options, progress, token);
     private static FolderCompareItem Item(FolderCompareResult result, string path) => Assert.Single(result.Items, i => i.RelativePath == path);
 
+    [Fact]
+    public void Filters_combine_with_masks_and_defaults_and_stop_folder_descent()
+    {
+        Write(true, "hidden/deep/file", "a");
+        Write(true, "bin/deep/file", "a");
+        Write(true, "filtered.tmp", "a");
+        Write(true, "masked.txt", "a");
+        Write(true, "outside.cs", "a");
+        Write(true, "kept.txt", "a");
+        var result = Compare(new()
+        {
+            Filter = FolderFilter.Parse("d: ^\\\\hidden$\nf: \\.tmp$"),
+            IncludeFiles = new[] { "*.txt", "*.tmp" },
+            ExcludeFiles = new[] { "masked.txt" },
+        });
+        Assert.Equal(6, result.Items.Count);
+        Assert.Equal(5, result.Counts[FolderCompareStatus.Skipped]);
+        Assert.Empty(Item(result, "hidden").Children);
+        Assert.Empty(Item(result, "bin").Children);
+        Assert.Equal(FolderCompareStatus.LeftOnly, Item(result, "kept.txt").Status);
+    }
+
     [Theory]
     [InlineData(FolderCompareMethod.FullContents, FolderCompareStatus.Different)]
     [InlineData(FolderCompareMethod.QuickContents, FolderCompareStatus.Identical)]

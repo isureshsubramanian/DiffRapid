@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DiffRapid.Core.Folders;
+using DiffRapid.Core.Text;
 
 namespace DiffRapid.Cli;
 
@@ -61,6 +62,8 @@ internal static partial class Program
             Recursive = !args.Has("no-recurse"),
             IncludeFiles = args.Values("include"),
             ExcludeFiles = args.Values("exclude"),
+            Filter = args.Value("filter-file") is { } filterPath
+                ? FolderFilter.Parse(TextFileReader.ReadFile(filterPath).Text) : null,
             TextOptions = args.ToCompareOptions(),
         });
         if (args.Has("json"))

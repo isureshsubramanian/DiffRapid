@@ -26,6 +26,9 @@ public sealed record FolderCompareOptions
     public IReadOnlyList<string> IncludeFolders { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> ExcludeFolders { get; init; } = Array.Empty<string>();
     public bool DefaultExcludes { get; init; } = true;
+
+    /// <summary>Optional .flt rules applied in addition to masks and default exclusions.</summary>
+    public FolderFilter? Filter { get; init; }
     public bool FollowSymlinks { get; init; }
     public bool CaseSensitive { get; init; }
     public CompareOptions TextOptions { get; init; } = CompareOptions.Default;

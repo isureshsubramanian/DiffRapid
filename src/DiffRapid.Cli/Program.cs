@@ -29,6 +29,7 @@ internal static partial class Program
           diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence]
                          [--no-recurse] [--include <glob>] [--exclude <glob>] [--json]
                          [--only different|left|right|all]
+                         [--filter-file <path>]  apply .flt file and folder rules
                          [--report <file>] [--report-format html|csv] [--include-identical]
                          Report format defaults to the extension (.html/.htm/.csv).
           diffrapid diff  <left> <right> [options]
@@ -239,6 +240,7 @@ internal static partial class Program
         {
             "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
             "method", "include", "exclude", "only", "line-filter", "substitute", "cp", "report", "report-format", "out-dir",
+            "filter-file",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);

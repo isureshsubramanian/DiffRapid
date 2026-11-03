@@ -297,6 +297,12 @@ public static class FolderComparer
         private bool IsFiltered(string relativePath, bool isFolder)
         {
             var name = relativePath.Substring(relativePath.LastIndexOf('/') + 1);
+            if (_options.Filter is { } filter
+                && !(isFolder ? filter.IsFolderIncluded(relativePath) : filter.IsFileIncluded(name)))
+            {
+                return true;
+            }
+
             if (isFolder && _options.DefaultExcludes && NoiseFolders.Contains(name, _names))
             {
                 return true;

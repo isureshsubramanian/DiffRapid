@@ -97,6 +97,38 @@ public sealed class FolderCliTests : IDisposable
     }
 
     [Fact]
+    public void Filter_files_are_decoded_and_applied()
+    {
+        File.WriteAllText(Path.Combine(Left, "ignored.tmp"), "left");
+        Directory.CreateDirectory(Path.Combine(Left, "hidden"));
+        File.WriteAllText(Path.Combine(Left, "hidden", "child"), "left");
+        var path = Path.Combine(_root, "test.flt");
+        File.WriteAllText(path, "f: \\.tmp$\nd: ^\\\\hidden$", System.Text.Encoding.Unicode);
+        var (code, output) = Run("--filter-file", path, "--json");
+        Assert.Equal(0, code);
+        using var json = JsonDocument.Parse(output);
+        var items = json.RootElement.GetProperty("Items").EnumerateArray().ToArray();
+        Assert.Equal(2, items.Length);
+        Assert.All(items, item => Assert.Equal("Skipped", item.GetProperty("Status").GetString()));
+        File.WriteAllText(path, "f: unrelated");
+        Assert.Equal(1, Run("--filter-file", path).code);
+    }
+
+    [Theory]
+    [InlineData("f: [")]
+    [InlineData("unknown: value")]
+    public void Invalid_filter_files_report_line_and_error_exit(string rule)
+    {
+        var path = Path.Combine(_root, "invalid.flt");
+        File.WriteAllText(path, "## comment\n\n" + rule);
+        var (code, output) = Run("--filter-file", path);
+        Assert.Equal(2, code);
+        Assert.Contains("line 3", output);
+        Assert.Equal(2, Run("--filter-file").code);
+        Assert.Equal(2, Run("--filter-file", Path.Combine(_root, "missing.flt")).code);
+    }
+
+    [Fact]
     public void Invalid_options_and_missing_roots_return_error()
     {
         Assert.Equal(2, Run("--method", "invalid").code);
