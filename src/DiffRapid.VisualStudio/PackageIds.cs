@@ -15,6 +15,9 @@ internal static class PackageIds
     public const int CompareFiles = 0x0101;
     public const int CompareFolders = 0x0102;
     public const int MergeFiles = 0x0103;
+    public const int CompareWithClipboard = 0x0104;
+    public const int SelectForCompare = 0x0105;
+    public const int CompareWithSelected = 0x0106;
 
     // File comparison window commands, bound to Alt+arrows in its key binding scope (DiffWindowGuid).
     public const int PreviousDifference = 0x0200;

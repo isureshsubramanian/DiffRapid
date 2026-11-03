@@ -9,6 +9,9 @@ namespace DiffRapid.VisualStudio.Commands;
 
 internal static class CompareCommands
 {
+    // The text chosen with "Select for Compare", waiting for the other side.
+    private static EditorSelection? _selectedForCompare;
+
     public static async Task InitializeAsync(DiffRapidPackage package)
     {
         var commandService = await package.GetServiceAsync(typeof(IMenuCommandService)) as OleMenuCommandService
@@ -35,6 +38,47 @@ internal static class CompareCommands
         commandService.AddCommand(new OleMenuCommand(
             (_, _) => Run(package, () => MergeFilesAsync(package)),
             new CommandID(PackageIds.CommandSet, PackageIds.MergeFiles)));
+
+        var compareWithClipboard = new OleMenuCommand(
+            (_, _) => Run(package, () => CompareWithClipboardAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareWithClipboard));
+        compareWithClipboard.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var selection = EditorSelection.FromActiveEditor();
+            compareWithClipboard.Visible = selection is not null;
+            compareWithClipboard.Text = selection is { IsWholeDocument: false }
+                ? "Compare Selection with Clipboard (DiffRapid)"
+                : "Compare with Clipboard (DiffRapid)";
+        };
+        commandService.AddCommand(compareWithClipboard);
+
+        var selectForCompare = new OleMenuCommand(
+            (_, _) => Run(package, () => SelectForCompareAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.SelectForCompare));
+        selectForCompare.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var selection = EditorSelection.FromActiveEditor();
+            selectForCompare.Visible = selection is not null;
+            selectForCompare.Text = selection is { IsWholeDocument: false }
+                ? "Select for Compare (DiffRapid)"
+                : "Select Document for Compare (DiffRapid)";
+        };
+        commandService.AddCommand(selectForCompare);
+
+        var compareWithSelected = new OleMenuCommand(
+            (_, _) => Run(package, () => CompareWithSelectedAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareWithSelected));
+        compareWithSelected.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            compareWithSelected.Visible = _selectedForCompare is not null && EditorSelection.HasActiveEditor();
+            compareWithSelected.Text = _selectedForCompare is { } selected
+                ? $"Compare with {selected.DisplayName} (DiffRapid)"
+                : "Compare with Selected (DiffRapid)";
+        };
+        commandService.AddCommand(compareWithSelected);
     }
 
     private static async Task CompareSelectedAsync(DiffRapidPackage package)
@@ -90,6 +134,55 @@ internal static class CompareCommands
         }
 
         await package.OpenMergeAsync(dialog.LeftPath, dialog.BasePath, dialog.RightPath, dialog.ResultPath);
+    }
+
+    /// <summary>Compares the clipboard (left) with the editor's selection, or its document when nothing is selected.</summary>
+    private static async Task CompareWithClipboardAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var selection = EditorSelection.FromActiveEditor();
+        if (selection is null)
+        {
+            ShowMessage(package, "Open a document in the editor to compare it with the clipboard.");
+            return;
+        }
+
+        var clipboard = System.Windows.Clipboard.ContainsText() ? System.Windows.Clipboard.GetText() : string.Empty;
+        if (clipboard.Length == 0)
+        {
+            ShowMessage(package, "The clipboard has no text to compare.");
+            return;
+        }
+
+        var left = EditorSelection.WriteTemporary(clipboard, "Clipboard", selection.Extension);
+        await package.OpenComparisonAsync(left, selection.ToComparisonFile());
+    }
+
+    private static async Task SelectForCompareAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        _selectedForCompare = EditorSelection.FromActiveEditor();
+        if (_selectedForCompare is not null
+            && await package.GetServiceAsync(typeof(Microsoft.VisualStudio.Shell.Interop.SVsStatusbar)) is Microsoft.VisualStudio.Shell.Interop.IVsStatusbar statusBar)
+        {
+            statusBar.SetText($"DiffRapid: {_selectedForCompare.DisplayName} selected. Right-click other text and choose Compare with {_selectedForCompare.DisplayName}.");
+        }
+    }
+
+    /// <summary>Compares the text chosen with Select for Compare (left) with the current selection or document.</summary>
+    private static async Task CompareWithSelectedAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var selected = _selectedForCompare;
+        var current = EditorSelection.FromActiveEditor();
+        if (selected is null || current is null)
+        {
+            ShowMessage(package, "First right-click some text and choose Select for Compare, then right-click the other text.");
+            return;
+        }
+
+        _selectedForCompare = null;
+        await package.OpenComparisonAsync(selected.ToComparisonFile(), current.ToComparisonFile());
     }
 
     private static void Run(DiffRapidPackage package, Func<Task> action)

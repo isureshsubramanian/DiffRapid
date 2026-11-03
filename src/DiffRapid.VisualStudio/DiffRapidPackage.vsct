@@ -16,6 +16,10 @@
       <Group guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" priority="0x0100">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
       </Group>
+      <!-- Code editor context menu: compare the selection or the document. -->
+      <Group guid="guidDiffRapidCommandSet" id="EditorContextGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_CODEWIN" />
+      </Group>
     </Groups>
 
     <Buttons>
@@ -51,6 +55,38 @@
           <ButtonText>DiffRapid: Merge Files...</ButtonText>
           <CanonicalName>.DiffRapid.MergeFiles</CanonicalName>
           <LocCanonicalName>.DiffRapid.MergeFiles</LocCanonicalName>
+        </Strings>
+      </Button>
+
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareWithClipboard" priority="0x0100" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="EditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>TextChanges</CommandFlag>
+        <Strings>
+          <ButtonText>Compare with Clipboard (DiffRapid)</ButtonText>
+          <CanonicalName>.DiffRapid.CompareWithClipboard</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareWithClipboard</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidSelectForCompare" priority="0x0101" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="EditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>TextChanges</CommandFlag>
+        <Strings>
+          <ButtonText>Select for Compare (DiffRapid)</ButtonText>
+          <CanonicalName>.DiffRapid.SelectForCompare</CanonicalName>
+          <LocCanonicalName>.DiffRapid.SelectForCompare</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareWithSelected" priority="0x0102" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="EditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <CommandFlag>TextChanges</CommandFlag>
+        <Strings>
+          <ButtonText>Compare with Selected (DiffRapid)</ButtonText>
+          <CanonicalName>.DiffRapid.CompareWithSelected</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareWithSelected</LocCanonicalName>
         </Strings>
       </Button>
 
@@ -126,10 +162,14 @@
       <IDSymbol name="SolutionExplorerGroup" value="0x1020" />
       <IDSymbol name="MultiItemGroup" value="0x1021" />
       <IDSymbol name="ToolsMenuGroup" value="0x1022" />
+      <IDSymbol name="EditorContextGroup" value="0x1023" />
       <IDSymbol name="cmdidCompareSelected" value="0x0100" />
       <IDSymbol name="cmdidCompareFiles" value="0x0101" />
       <IDSymbol name="cmdidCompareFolders" value="0x0102" />
       <IDSymbol name="cmdidMergeFiles" value="0x0103" />
+      <IDSymbol name="cmdidCompareWithClipboard" value="0x0104" />
+      <IDSymbol name="cmdidSelectForCompare" value="0x0105" />
+      <IDSymbol name="cmdidCompareWithSelected" value="0x0106" />
       <IDSymbol name="cmdidPreviousDifference" value="0x0200" />
       <IDSymbol name="cmdidNextDifference" value="0x0201" />
       <IDSymbol name="cmdidCopyToLeft" value="0x0202" />
