@@ -30,6 +30,33 @@ Compare and merge files and folders without leaving Visual Studio.
   - Colors are customizable in *Tools > Options > Environment > Fonts and Colors*
     (items starting with "DiffRapid")
 
+## Using DiffRapid with git
+
+Run `diffrapid git-config` to print the commands that register DiffRapid as a git
+difftool and mergetool for the current repository. Use `diffrapid git-config --global`
+to print commands for all repositories. This command only prints text; it does not
+change your git configuration.
+
+Review and run the printed commands in **Git Bash on Windows** or a POSIX shell.
+They quote the executable's full path (including spaces) and preserve Git's file
+variables. Keep the executable in that location after registration. The commands
+are not intended for direct pasting into PowerShell or cmd.exe.
+
+```sh
+diffrapid git-config --global
+# Review and run the printed git config commands, then:
+git difftool --tool=diffrapid
+git mergetool --tool=diffrapid
+```
+
+The difftool prints a unified diff. The mergetool runs
+`diffrapid merge "$BASE" "$LOCAL" "$REMOTE" -o "$MERGED"`, writes the merged
+file, and returns `0` for a clean merge or `1` when conflicts remain. Git trusts
+this exit code. Resolve any remaining conflict markers before staging the file.
+Merge also accepts `/o` for the output and `/dl`, `/dm`, `/dr` for local, base,
+and remote marker labels; labels default to the input file names. Add `--diff3`
+to include the base text in conflicts.
+
 ## Building
 
 Requirements: Windows, .NET 10 SDK, Visual Studio 2026 with the

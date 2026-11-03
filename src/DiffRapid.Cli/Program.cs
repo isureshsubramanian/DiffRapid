@@ -27,6 +27,7 @@ internal static class Program
         Usage:
           diffrapid diff  <left> <right> [options]
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
+          diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -45,6 +46,7 @@ internal static class Program
         merge options:
           -o, --output <file>                   write the merged result to a file (default: stdout)
           --diff3                               include base text in conflict markers
+          /dl <text>, /dm <text>, /dr <text>     local, base, and remote conflict labels
 
         Exit codes: 0 identical/clean, 1 different/conflicts, 2 error.
         """;
@@ -60,6 +62,18 @@ internal static class Program
             }
 
             var command = args[0].ToLowerInvariant();
+            if (command == "git-config")
+            {
+                if (args.Length > 2 || (args.Length == 2 && args[1] != "--global"))
+                {
+                    throw new UsageException("git-config accepts only --global.");
+                }
+
+                var executable = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "diffrapid.exe" : "diffrapid");
+                Console.Out.WriteLine(GitConfiguration.Format(executable, args.Length == 2));
+                return ExitSame;
+            }
+
             var parsed = ParsedArgs.Parse(args, 1);
             return command switch
             {
@@ -123,9 +137,9 @@ internal static class Program
             args.ToCompareOptions());
 
         var labels = new ConflictLabels(
-            Path.GetFileName(args.Positionals[1]),
-            Path.GetFileName(args.Positionals[0]),
-            Path.GetFileName(args.Positionals[2]));
+            args.Value("left-label") ?? Path.GetFileName(args.Positionals[1]),
+            args.Value("base-label") ?? Path.GetFileName(args.Positionals[0]),
+            args.Value("right-label") ?? Path.GetFileName(args.Positionals[2]));
         var text = result.ToText(labels, includeBase: args.Has("diff3"));
 
         var output = args.Value("output");
@@ -166,12 +180,15 @@ internal static class Program
 
     private sealed class UsageException(string message) : Exception(message);
 
-    private sealed class ParsedArgs
+    internal sealed class ParsedArgs
     {
         private static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
         {
             ["u"] = "context",
             ["o"] = "output",
+            ["dl"] = "left-label",
+            ["dm"] = "base-label",
+            ["dr"] = "right-label",
             ["ignorecase"] = "ignore-case",
             ["ignoreblanklines"] = "ignore-blank-lines",
             ["ignoreeol"] = "ignore-eol",
@@ -179,7 +196,7 @@ internal static class Program
 
         private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
         {
-            "algorithm", "ignore-whitespace", "context", "output", "left-label", "right-label",
+            "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
         };
 
         private readonly Dictionary<string, string?> _options = new(StringComparer.OrdinalIgnoreCase);

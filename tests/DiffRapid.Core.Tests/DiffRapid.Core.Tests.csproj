@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\DiffRapid.Core\DiffRapid.Core.csproj" />
+    <ProjectReference Include="..\..\src\DiffRapid.Cli\DiffRapid.Cli.csproj" />
   </ItemGroup>
 
   <ItemGroup>
