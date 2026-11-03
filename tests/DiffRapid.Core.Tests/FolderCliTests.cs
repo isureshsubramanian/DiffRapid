@@ -13,11 +13,7 @@ public sealed class FolderCliTests : IDisposable
 
     private (int code, string output) Run(params string[] args)
     {
-        var repo = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repo is not null && !File.Exists(Path.Combine(repo.FullName, "Directory.Build.props"))) repo = repo.Parent;
-        Assert.NotNull(repo);
-        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
-        var cli = Path.Combine(repo.FullName, "src", "DiffRapid.Cli", "bin", configuration, "net10.0", "diffrapid.dll");
+        var cli = typeof(DiffRapid.Cli.Program).Assembly.Location;
         var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         start.ArgumentList.Add(cli); start.ArgumentList.Add("dir"); start.ArgumentList.Add(Left); start.ArgumentList.Add(Right);
         foreach (var arg in args) start.ArgumentList.Add(arg);

@@ -25,6 +25,7 @@ internal static partial class Program
         DiffRapid command line
 
         Usage:
+          diffrapid info <file>
           diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence]
                          [--no-recurse] [--include <glob>] [--exclude <glob>] [--json]
                          [--only different|left|right|all]
@@ -42,6 +43,7 @@ internal static partial class Program
           --ignore-missing-trailing-eol
 
         diff options:
+          --cp <codepage>                       force encoding for both files
           --line-filter <regex>                 ignore matching changed hunks (repeatable)
           --substitute <find>=<replace>          regex replacement for comparison (repeatable)
           -u, --context <n>                     lines of context in the unified diff (default: 3)
@@ -60,6 +62,7 @@ internal static partial class Program
     {
         try
         {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             if (args.Length == 0 || args[0] is "-h" or "--help" or "/?")
             {
                 Console.Out.WriteLine(Usage);
@@ -84,6 +87,7 @@ internal static partial class Program
             {
                 "dir" => RunDirectory(parsed),
                 "diff" => RunDiff(parsed),
+                "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
@@ -106,6 +110,23 @@ internal static partial class Program
         }
     }
 
+    private static int RunInfo(ParsedArgs args)
+    {
+        if (args.Positionals.Count != 1)
+        {
+            throw new UsageException("info needs exactly one file.");
+        }
+
+        Console.Out.Write(FormatInfo(TextFileReader.ReadFile(args.Positionals[0]).Info));
+        return ExitSame;
+    }
+
+    internal static string FormatInfo(TextFileInfo info) =>
+        $"Encoding: {info.EncodingName}\nHas BOM: {info.HasBom}\n" +
+        $"Dominant line ending: {info.DominantLineEnding.ToString().ToUpperInvariant()}\n" +
+        $"Mixed line endings: {info.IsMixedLineEndings}\n" +
+        $"Trailing line ending: {info.HasTrailingLineEnding}\nLine count: {info.LineCount}\n";
+
     private static int RunDiff(ParsedArgs args)
     {
         if (args.Positionals.Count != 2)
@@ -117,7 +138,8 @@ internal static partial class Program
         var rightPath = args.Positionals[1];
         var options = args.ToCompareOptions();
 
-        var result = TextComparer.Compare(Load(leftPath), Load(rightPath), options);
+        var encoding = args.Has("cp") ? Encoding.GetEncoding(args.IntValue("cp", 0)) : null;
+        var result = TextComparer.Compare(Load(leftPath, encoding), Load(rightPath, encoding), options);
         if (!args.Has("quiet"))
         {
             var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { NewLine = "\n" };
@@ -171,9 +193,9 @@ internal static partial class Program
         return ExitSame;
     }
 
-    private static TextDocument Load(string path)
+    private static TextDocument Load(string path, Encoding? overrideEncoding = null)
     {
-        var decoded = TextFileReader.ReadFile(path);
+        var decoded = TextFileReader.ReadFile(path, fallback: null, overrideEncoding: overrideEncoding);
         if (decoded.IsBinary)
         {
             throw new UsageException($"'{path}' looks like a binary file; binary compare is not available yet.");
@@ -207,7 +229,7 @@ internal static partial class Program
         private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
         {
             "algorithm", "ignore-whitespace", "context", "output", "left-label", "base-label", "right-label",
-            "method", "include", "exclude", "only", "line-filter", "substitute",
+            "method", "include", "exclude", "only", "line-filter", "substitute", "cp",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);

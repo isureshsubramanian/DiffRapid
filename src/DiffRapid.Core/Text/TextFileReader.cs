@@ -7,6 +7,8 @@ namespace DiffRapid.Core.Text;
 /// <summary>Result of decoding a file: the text plus what was detected about it.</summary>
 public sealed class DecodedText
 {
+    private TextFileInfo? _info;
+
     public DecodedText(string text, Encoding encoding, bool hasByteOrderMark, bool isBinary)
     {
         Text = text;
@@ -16,6 +18,9 @@ public sealed class DecodedText
     }
 
     public string Text { get; }
+
+    /// <summary>Encoding and line-ending facts about this file (computed on first use).</summary>
+    public TextFileInfo Info => _info ??= TextFileInfo.Create(Text, Encoding, HasByteOrderMark);
 
     public Encoding Encoding { get; }
 
@@ -32,16 +37,31 @@ public static class TextFileReader
 {
     private const int BinaryProbeLength = 8000;
 
-    public static DecodedText ReadFile(string path, Encoding? fallback = null)
-    {
-        return Decode(File.ReadAllBytes(path), fallback);
-    }
+    /// <summary>Reads a file with an optional encoding override that bypasses detection.</summary>
+    public static DecodedText ReadFile(string path, Encoding? fallback = null, Encoding? overrideEncoding = null)
+        => Decode(File.ReadAllBytes(path), fallback, overrideEncoding);
 
-    public static DecodedText Decode(byte[] bytes, Encoding? fallback = null)
+    /// <summary>Decodes bytes with an optional encoding override that bypasses detection.</summary>
+    public static DecodedText Decode(byte[] bytes, Encoding? fallback = null, Encoding? overrideEncoding = null)
     {
         if (bytes is null)
         {
             throw new ArgumentNullException(nameof(bytes));
+        }
+
+        if (overrideEncoding is not null)
+        {
+            var preamble = overrideEncoding.GetPreamble();
+            var matches = preamble.Length > 0 && bytes.Length >= preamble.Length;
+            for (var i = 0; matches && i < preamble.Length; i++)
+            {
+                matches = bytes[i] == preamble[i];
+            }
+
+            var offset = matches ? preamble.Length : 0;
+            var unicode = overrideEncoding.CodePage is 1200 or 1201 or 12000 or 12001;
+            return new DecodedText(overrideEncoding.GetString(bytes, offset, bytes.Length - offset),
+                overrideEncoding, matches, !unicode && LooksBinary(bytes));
         }
 
         var bom = DetectByteOrderMark(bytes, out var bomLength);
