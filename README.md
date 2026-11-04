@@ -4,12 +4,16 @@
 
 **Fast, thorough compare and merge for Visual Studio 2026, with a matching command line and an MCP server for AI agents.**
 
+[![Visual Studio Marketplace](https://img.shields.io/badge/Visual%20Studio%20Marketplace-DiffRapid-5C2D91?logo=visualstudio&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=SureshSubramanian.DiffRapid)
+[![Release](https://img.shields.io/github/v/release/isureshsubramanian/DiffRapid?include_prereleases&label=release)](https://github.com/isureshsubramanian/DiffRapid/releases)
 [![CI](https://github.com/isureshsubramanian/DiffRapid/actions/workflows/ci.yml/badge.svg)](https://github.com/isureshsubramanian/DiffRapid/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![.NET](https://img.shields.io/badge/.NET-10%20%7C%20Standard%202.0-512BD4)
 ![Visual Studio](https://img.shields.io/badge/Visual%20Studio-2026-5C2D91)
 ![Tests](https://img.shields.io/badge/tests-946%20passing-brightgreen)
 ![Status](https://img.shields.io/badge/status-preview-orange)
+
+**[Install from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=SureshSubramanian.DiffRapid)**
 
 [Features](#features) ·
 [Getting started](#getting-started) ·
@@ -29,8 +33,9 @@ keep working while you compare. The same engine powers the `diffrapid` command l
 agents can call.
 
 > [!NOTE]
-> **Preview.** DiffRapid is under active development and is not yet on the Visual Studio Marketplace.
-> Build it from source as described in [Getting started](#getting-started).
+> **Preview.** DiffRapid is under active development. Install it from the
+> [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=SureshSubramanian.DiffRapid)
+> and please report problems and ideas in [Issues](https://github.com/isureshsubramanian/DiffRapid/issues).
 
 ## Highlights
 
@@ -109,13 +114,29 @@ Behaviour is configured in **Tools > Options > DiffRapid** (File Comparison, Fol
 
 ## Getting started
 
-### Requirements
+### Install
+
+Requires Visual Studio 2026 on Windows (x64 or ARM64). Visual Studio 2022 17.14 can install it too, but is not yet tested.
+
+- **From Visual Studio:** open **Extensions > Manage Extensions**, search for **DiffRapid**, install it and restart
+  Visual Studio.
+- **From the Marketplace:** use the **Install** button on the
+  [DiffRapid listing](https://marketplace.visualstudio.com/items?itemName=SureshSubramanian.DiffRapid).
+- **Offline:** download `DiffRapid-<version>.vsix` from [Releases](https://github.com/isureshsubramanian/DiffRapid/releases)
+  and double-click it.
+
+### First comparison
+
+1. Select two files in Solution Explorer, then right-click and choose **Compare Selected with DiffRapid**.
+2. Or use **Tools > DiffRapid: Compare Files...**, **Compare Folders...** or **Merge Files...**.
+
+### Build from source
+
+Requirements:
 
 - Windows 10 or 11
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - Visual Studio 2026 with the **Visual Studio extension development** workload (for the extension)
-
-### Build
 
 ```powershell
 git clone https://github.com/isureshsubramanian/DiffRapid.git
@@ -132,11 +153,6 @@ msbuild src/DiffRapid.VisualStudio/DiffRapid.VisualStudio.csproj -restore
 The extension package is written to `src/DiffRapid.VisualStudio/bin/<Configuration>/net472/DiffRapid.VisualStudio.vsix`.
 Double-click it to install, or open `DiffRapid.slnx`, set `DiffRapid.VisualStudio` as the startup project and press
 **F5** to run it in the experimental instance.
-
-### First comparison
-
-1. Select two files in Solution Explorer, then right-click and choose **Compare Selected with DiffRapid**.
-2. Or use **Tools > DiffRapid: Compare Files...**, **Compare Folders...** or **Merge Files...**.
 
 ## Command line
 
