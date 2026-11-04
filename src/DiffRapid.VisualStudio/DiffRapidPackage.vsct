@@ -111,6 +111,25 @@
         </Strings>
       </Button>
 
+      <Button guid="guidDiffRapidCommandSet" id="cmdidApplyPatch" priority="0x0103" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" />
+        <Strings>
+          <ButtonText>DiffRapid: Apply Patch...</ButtonText>
+          <CanonicalName>.DiffRapid.ApplyPatch</CanonicalName>
+          <LocCanonicalName>.DiffRapid.ApplyPatch</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidApplySelectedPatch" priority="0x0102" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="SolutionExplorerGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Apply Patch (DiffRapid)...</ButtonText>
+          <CanonicalName>.DiffRapid.ApplySelectedPatch</CanonicalName>
+          <LocCanonicalName>.DiffRapid.ApplySelectedPatch</LocCanonicalName>
+        </Strings>
+      </Button>
+
       <!-- File comparison window commands: only on keys (see KeyBindings) and in Tools > Options > Keyboard. -->
       <Button guid="guidDiffRapidCommandSet" id="cmdidPreviousDifference" priority="0x0200" type="Button">
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -193,6 +212,8 @@
       <IDSymbol name="cmdidCompareWithSelected" value="0x0106" />
       <IDSymbol name="cmdidCompareWithVersion" value="0x0107" />
       <IDSymbol name="cmdidCompareDocumentWithVersion" value="0x0108" />
+      <IDSymbol name="cmdidApplyPatch" value="0x0109" />
+      <IDSymbol name="cmdidApplySelectedPatch" value="0x010A" />
       <IDSymbol name="cmdidPreviousDifference" value="0x0200" />
       <IDSymbol name="cmdidNextDifference" value="0x0201" />
       <IDSymbol name="cmdidCopyToLeft" value="0x0202" />

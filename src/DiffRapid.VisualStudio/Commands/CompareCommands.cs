@@ -100,6 +100,47 @@ internal static class CompareCommands
             compareDocumentWithVersion.Visible = EditorSelection.HasActiveEditor();
         };
         commandService.AddCommand(compareDocumentWithVersion);
+
+        commandService.AddCommand(new OleMenuCommand(
+            (_, _) => Run(package, () => ApplyPatchAsync(package, null)),
+            new CommandID(PackageIds.CommandSet, PackageIds.ApplyPatch)));
+
+        var applySelectedPatch = new OleMenuCommand(
+            (_, _) => Run(package, () => ApplyPatchAsync(package, SolutionSelection.GetSelectedFilePaths()[0])),
+            new CommandID(PackageIds.CommandSet, PackageIds.ApplySelectedPatch));
+        applySelectedPatch.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var paths = SolutionSelection.GetSelectedFilePaths();
+            applySelectedPatch.Visible = paths.Count == 1 && IsPatchFile(paths[0]);
+        };
+        commandService.AddCommand(applySelectedPatch);
+    }
+
+    private static bool IsPatchFile(string path) =>
+        path.EndsWith(".patch", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".diff", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Asks for a patch and where to apply it, then opens the preview. A patch chosen in Solution Explorer
+    /// starts out applied to its repository root (patch paths are usually repository-relative), else its folder.
+    /// </summary>
+    private static async Task ApplyPatchAsync(DiffRapidPackage package, string? patchPath)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        string? target = null;
+        if (patchPath is not null)
+        {
+            target = await Task.Run(() => DiffRapid.Core.Git.GitRepository.Find(patchPath)?.Root ?? System.IO.Path.GetDirectoryName(patchPath));
+            await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        }
+
+        var dialog = new SelectFilesDialog(ComparisonTarget.ApplyPatch, patchPath, target);
+        if (dialog.ShowModal() != true)
+        {
+            return;
+        }
+
+        await package.OpenApplyPatchAsync(dialog.LeftPath, dialog.RightPath);
     }
 
     private static async Task CompareSelectedAsync(DiffRapidPackage package)

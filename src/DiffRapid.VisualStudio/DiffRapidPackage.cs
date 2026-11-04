@@ -59,6 +59,14 @@ public sealed class DiffRapidPackage : AsyncPackage
             Path.GetFileName(resultPath) + " (merge)",
             hostsEditors: true);
 
+    /// <summary>Opens a preview of a patch applied under a folder (or to one file); nothing is written until the user applies it.</summary>
+    public Task OpenApplyPatchAsync(string patchPath, string targetPath) =>
+        OpenDocumentAsync(
+            "Loading the patch",
+            () => Task.FromResult<FrameworkElement>(new ApplyPatchControl(this, patchPath, targetPath)),
+            Path.GetFileName(patchPath) + " → " + FolderName(targetPath),
+            hostsEditors: false);
+
     private static string FolderName(string path)
     {
         var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

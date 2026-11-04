@@ -21,6 +21,9 @@ internal enum ComparisonTarget
 
     /// <summary>Three files and a result file for a three-way merge.</summary>
     Merge,
+
+    /// <summary>A patch file (left box) and the folder or file it applies to (right box).</summary>
+    ApplyPatch,
 }
 
 /// <summary>Lets the user pick the left and right files (or folders) in one place.</summary>
@@ -28,8 +31,8 @@ internal sealed class SelectFilesDialog : DialogWindow
 {
     private const int MaxPath = 32767;
 
-    private static readonly string?[] LastLeft = new string?[3];
-    private static readonly string?[] LastRight = new string?[3];
+    private static readonly string?[] LastLeft = new string?[4];
+    private static readonly string?[] LastRight = new string?[4];
     private static string? _lastBase;
     private static string? _lastResult;
 
@@ -77,13 +80,17 @@ internal sealed class SelectFilesDialog : DialogWindow
         }
 
         var row = 0;
-        AddRow(grid, row++, "_Left:", _left, $"Select the left {noun}");
+        AddRow(grid, row++, Patching ? "_Patch:" : "_Left:", _left, Patching ? "Select the patch file" : $"Select the left {noun}");
         if (Merging)
         {
             AddRow(grid, row++, "_Base:", _base, "Select the common ancestor of the left and right files");
         }
 
-        AddRow(grid, row++, "_Right:", _right, $"Select the right {noun}");
+        AddRow(grid, row++, Patching ? "_Apply to:" : "_Right:", _right, Patching ? "Select the folder the patch paths are relative to" : $"Select the right {noun}");
+        if (Patching)
+        {
+            _right.ToolTip = "The folder the paths in the patch are relative to, usually the repository root. Choose a single file to apply a one-file patch to it whatever its name.";
+        }
         if (Merging)
         {
             AddRow(grid, row++, "Res_ult:", _result, "Choose where to save the merged file");
@@ -98,7 +105,8 @@ internal sealed class SelectFilesDialog : DialogWindow
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var swap = DialogButton("_Swap", (_, _) => (_left.Text, _right.Text) = (_right.Text, _left.Text));
         swap.ToolTip = $"Exchange the left and right {noun}s";
-        _compare = DialogButton(Merging ? "_Merge" : "_Compare", (_, _) => Accept());
+        swap.Visibility = Patching ? Visibility.Collapsed : Visibility.Visible;
+        _compare = DialogButton(Merging ? "_Merge" : Patching ? "_Preview" : "_Compare", (_, _) => Accept());
         _compare.IsDefault = true;
         var cancel = DialogButton("Cancel", (_, _) => DialogResult = false);
         cancel.IsCancel = true;
@@ -108,7 +116,7 @@ internal sealed class SelectFilesDialog : DialogWindow
         var footerRow = new DockPanel();
         DockPanel.SetDock(buttons, Dock.Right);
         footerRow.Children.Add(buttons);
-        var hint = new TextBlock { Text = $"Tip: drag a {noun} from Explorer onto either box.", VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        var hint = new TextBlock { Text = Patching ? "Tip: drag a patch file or a folder from Explorer onto a box." : $"Tip: drag a {noun} from Explorer onto either box.",VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         hint.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
         footerRow.Children.Add(hint);
 
@@ -117,11 +125,13 @@ internal sealed class SelectFilesDialog : DialogWindow
         footer.SetResourceReference(Border.BorderBrushProperty, ThemedDialogColors.WindowBorderBrushKey);
 
         var heading = new StackPanel { Margin = new Thickness(20, 18, 20, 14) };
-        heading.Children.Add(new TextBlock { Text = Merging ? "Merge files" : Folders ? "Compare folders" : "Compare files", FontSize = 18, FontWeight = FontWeights.SemiBold });
+        heading.Children.Add(new TextBlock { Text = Merging ? "Merge files" : Patching ? "Apply patch" : Folders ? "Compare folders" : "Compare files", FontSize = 18, FontWeight = FontWeights.SemiBold });
         var subtitle = new TextBlock
         {
             Text = Merging
                 ? "Choose two changed versions of a file and the base they both started from. Changes made on one side are taken automatically; you pick a side for each conflict."
+                : Patching
+                ? "Choose a patch (unified diff or git diff) and where to apply it. Nothing is written until you review the preview and choose Apply."
                 : Folders
                 ? "Choose the two folders to compare. Results appear while the scan runs; double-click a file to compare it."
                 : "Choose the two files to compare side by side. Unsaved edits in open documents are included.",
@@ -172,6 +182,8 @@ internal sealed class SelectFilesDialog : DialogWindow
 
     private bool Merging => _target == ComparisonTarget.Merge;
 
+    private bool Patching => _target == ComparisonTarget.ApplyPatch;
+
     private static TextBox PathBox()
     {
         var box = new TextBox { Margin = new Thickness(0, 0, 6, 8), MinHeight = 26, AllowDrop = true, VerticalContentAlignment = VerticalAlignment.Center };
@@ -214,7 +226,7 @@ internal sealed class SelectFilesDialog : DialogWindow
             var current = Normalize(box.Text);
             var other = Normalize(ReferenceEquals(box, _left) ? _right.Text : _left.Text);
             var start = Directory.Exists(current) ? current : SafeDirectory(current) ?? SafeDirectory(other);
-            var chosen = Folders ? BrowseForFolder(browseTitle, start)
+            var chosen = Folders || (Patching && ReferenceEquals(box, _right)) ? BrowseForFolder(browseTitle, start)
                 : ReferenceEquals(box, _result) ? BrowseForResult(browseTitle, start, current)
                 : BrowseForFile(browseTitle, start, current);
             if (chosen is not null)
@@ -234,7 +246,7 @@ internal sealed class SelectFilesDialog : DialogWindow
         {
             Title = title,
             CheckFileExists = true,
-            Filter = "All files (*.*)|*.*",
+            Filter = Patching ? "Patch files (*.patch;*.diff)|*.patch;*.diff|All files (*.*)|*.*" : "All files (*.*)|*.*",
             InitialDirectory = start ?? string.Empty,
             FileName = File.Exists(current) ? Path.GetFileName(current) : string.Empty,
         };
@@ -310,7 +322,15 @@ internal sealed class SelectFilesDialog : DialogWindow
     {
         var noun = Folders ? "folder" : "file";
         string? problem = null;
-        if (LeftPath.Length == 0 || RightPath.Length == 0)
+        if (Patching)
+        {
+            problem = LeftPath.Length == 0 ? "Choose the patch file."
+                : !File.Exists(LeftPath) ? "The patch file does not exist."
+                : RightPath.Length == 0 ? "Choose the folder (or file) to apply the patch to."
+                : !Directory.Exists(RightPath) && !File.Exists(RightPath) ? "The folder or file to apply the patch to does not exist."
+                : null;
+        }
+        else if (LeftPath.Length == 0 || RightPath.Length == 0)
         {
             problem = $"Choose a {noun} for both sides.";
         }
