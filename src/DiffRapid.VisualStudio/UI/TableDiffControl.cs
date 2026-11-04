@@ -75,6 +75,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
     private string _appliedKeys = string.Empty;
     private string _appliedIgnore = string.Empty;
     private string _appliedTolerance = string.Empty;
+    private bool _suggestKey = true;
 
     private LoadedTables? _tables;
     private CompareOutcome? _outcome;
@@ -355,6 +356,10 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         _appliedKeys = _keyColumns.Text.Trim();
         _appliedIgnore = _ignoreColumns.Text.Trim();
         _appliedTolerance = _tolerance.Text.Trim();
+
+        // The first comparison picks a key column when none is given; after that an empty box means row order.
+        var suggestKey = _suggestKey && _appliedKeys.Length == 0;
+        _suggestKey = false;
         var readOptions = new DelimitedReadOptions
         {
             Delimiter = Delimiters[Math.Max(0, _delimiter.SelectedIndex)].Delimiter,
@@ -386,7 +391,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         {
             try
             {
-                var outcome = await Task.Run(() => Compute(cached, readOptions, compareOptions, cancellation.Token), cancellation.Token);
+                var outcome = await Task.Run(() => Compute(cached, readOptions, compareOptions, suggestKey, cancellation.Token), cancellation.Token);
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation.Token);
                 if (!_disposed && !cancellation.IsCancellationRequested)
                 {
@@ -442,12 +447,19 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         text.Split(',').Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
 
     // Runs on a background thread: reads the files when needed, compares them and prepares the rows.
-    private CompareOutcome Compute(LoadedTables? cached, DelimitedReadOptions readOptions, TableCompareOptions compareOptions, CancellationToken cancellationToken)
+    private CompareOutcome Compute(LoadedTables? cached, DelimitedReadOptions readOptions, TableCompareOptions compareOptions, bool suggestKey, CancellationToken cancellationToken)
     {
         var tables = cached is not null && cached.Options == readOptions
             ? cached
             : new LoadedTables(readOptions, DelimitedReader.ReadFile(_leftPath, readOptions), DelimitedReader.ReadFile(_rightPath, readOptions));
         cancellationToken.ThrowIfCancellationRequested();
+
+        string? suggestedKey = null;
+        if (suggestKey && compareOptions.KeyColumns.Count == 0 && TableComparer.SuggestKey(tables.Left, tables.Right) is { } key)
+        {
+            suggestedKey = key;
+            compareOptions = compareOptions with { KeyColumns = new[] { key } };
+        }
 
         var result = TableComparer.Compare(tables.Left, tables.Right, compareOptions, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
@@ -465,7 +477,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
             }
         }
 
-        return new CompareOutcome(tables, result, all, differences, EstimateColumnWidths(result));
+        return new CompareOutcome(tables, result, all, differences, EstimateColumnWidths(result)) { SuggestedKey = suggestedKey };
     }
 
     // Sizes each column from its header and the first rows, so short columns stay narrow.
@@ -513,6 +525,13 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         ShowRows();
         ShowSummary(result);
         ShowFooterDetails(result, elapsed);
+        if (outcome.SuggestedKey is { } key)
+        {
+            // Shown in the box so it can be changed; clearing it compares rows by position.
+            _keyColumns.Text = key;
+            _appliedKeys = key;
+            _position.Text = $"Rows matched by {key}, chosen because its values identify the rows. Clear KEY to match rows by position.";
+        }
         UpdateCommands();
         UpdatePosition();
     }
@@ -910,6 +929,9 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         public List<TableRow> Differences { get; }
 
         public double[] ColumnWidths { get; }
+
+        /// <summary>The key column picked for this comparison because none was given, or null.</summary>
+        public string? SuggestedKey { get; set; }
     }
 
     /// <summary>

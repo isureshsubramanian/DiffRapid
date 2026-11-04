@@ -15,6 +15,40 @@ public sealed class TableComparerTests
     private static IEnumerable<TableRowStatus> Statuses(TableDiffResult result) => result.Rows.Select(r => r.Status);
 
     [Fact]
+    public void Suggested_key_prefers_an_identifier_column_over_other_unique_columns()
+    {
+        var left = Csv("Customer,OrderId,City\nAlice,1001,London\nBob,1002,Paris\nCarol,1003,Berlin\n");
+        var right = Csv("Customer,OrderId,City\nCarol,1003,Berlin\nAlice,1001,London\nGrace,1007,Vienna\n");
+
+        Assert.Equal("OrderId", TableComparer.SuggestKey(left, right));
+    }
+
+    [Fact]
+    public void Suggested_key_falls_back_to_the_first_unique_shared_column()
+    {
+        var left = Csv("Name,Qty\nApple,5\nBanana,5\n");
+        var right = Csv("Name,Qty\nBanana,6\nApple,5\n");
+
+        Assert.Equal("Name", TableComparer.SuggestKey(left, right));
+    }
+
+    [Theory]
+    [InlineData("Id,Kind\n1,x\n1,x\n", "Id,Kind\n1,x\n2,x\n")] // repeated on the left
+    [InlineData("Id,Kind\n1,x\n,x\n", "Id,Kind\n1,x\n2,x\n")] // a blank value
+    [InlineData("Id,Kind\n1,x\n2,x\n3,x\n", "Id,Kind\n7,x\n8,x\n9,x\n")] // unique but never shared
+    public void No_key_is_suggested_when_no_column_identifies_rows(string left, string right)
+    {
+        Assert.Null(TableComparer.SuggestKey(Csv(left), Csv(right)));
+    }
+
+    [Fact]
+    public void No_key_is_suggested_without_a_header()
+    {
+        var options = new DelimitedReadOptions { Delimiter = ',', HasHeader = false };
+        Assert.Null(TableComparer.SuggestKey(DelimitedReader.Parse("1,a\n2,b\n", options), DelimitedReader.Parse("2,b\n1,a\n", options)));
+    }
+
+    [Fact]
     public void Identical_tables_are_identical()
     {
         var result = Compare("id,name\n1,a\n2,b\n", "id,name\n1,a\n2,b");

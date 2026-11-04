@@ -44,6 +44,103 @@ public static class TableComparer
         return session.Run();
     }
 
+    /// <summary>
+    /// Suggests a key column for two tables with headers: a column both tables have whose values are present and
+    /// unique on each side, and at least half of whose values appear on both sides (so it identifies the same rows,
+    /// not merely distinct ones). A column named like an identifier (Id, Key, Code, Number, or ending in Id) wins;
+    /// otherwise the first such column. Null when the tables have no header or no column qualifies.
+    /// </summary>
+    public static string? SuggestKey(TableData left, TableData right)
+    {
+        if (left is null)
+        {
+            throw new ArgumentNullException(nameof(left));
+        }
+
+        if (right is null)
+        {
+            throw new ArgumentNullException(nameof(right));
+        }
+
+        if (left.Header is null || right.Header is null || left.Rows.Count == 0 || right.Rows.Count == 0)
+        {
+            return null;
+        }
+
+        string? first = null;
+        for (var l = 0; l < left.Header.Count; l++)
+        {
+            var name = left.Header[l];
+            var r = IndexOf(right.Header, name);
+            if (r < 0 || !IsKey(left, l, right, r))
+            {
+                continue;
+            }
+
+            if (LooksLikeIdentifier(name))
+            {
+                return name;
+            }
+
+            first ??= name;
+        }
+
+        return first;
+    }
+
+    private static int IndexOf(IReadOnlyList<string> header, string name)
+    {
+        for (var i = 0; i < header.Count; i++)
+        {
+            if (string.Equals(header[i].Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsKey(TableData left, int leftColumn, TableData right, int rightColumn)
+    {
+        var leftValues = UniqueValues(left, leftColumn);
+        var rightValues = UniqueValues(right, rightColumn);
+        if (leftValues is null || rightValues is null)
+        {
+            return false;
+        }
+
+        var shared = leftValues.Count(rightValues.Contains);
+        return shared * 2 >= Math.Min(leftValues.Count, rightValues.Count);
+    }
+
+    // The column's values when every row has one and none repeats; otherwise null.
+    private static HashSet<string>? UniqueValues(TableData table, int column)
+    {
+        var values = new HashSet<string>(StringComparer.Ordinal);
+        for (var row = 0; row < table.Rows.Count; row++)
+        {
+            var value = table.Cell(row, column).Trim();
+            if (value.Length == 0 || !values.Add(value))
+            {
+                return null;
+            }
+        }
+
+        return values;
+    }
+
+    private static bool LooksLikeIdentifier(string name)
+    {
+        var trimmed = name.Trim();
+        return trimmed.Equals("Key", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Code", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Number", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("No", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith("Id", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith("Key", StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class Session
     {
         private readonly TableData _left;
