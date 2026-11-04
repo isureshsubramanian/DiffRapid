@@ -954,8 +954,39 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
             view.Options.SetOptionValue(DefaultTextViewHostOptions.LineNumberMarginId, true);
             view.Options.SetOptionValue(DefaultTextViewHostOptions.GlyphMarginId, false);
             view.Options.SetOptionValue(DefaultTextViewHostOptions.OutliningMarginId, false);
+
+            // Four editor status bars are noise. The result keeps its line and column; the source panes
+            // drop the bar entirely. The encoding item is hidden everywhere because it describes the
+            // in-memory buffer, not the file: the result is saved in the left file's encoding.
+            TryHide(view, "EditingState/EncodingMargin");
+            TryHide(view, "EditingState/LineEndingMargin");
+            TryHide(view, "EditingState/IndentationCharacterMargin");
+            TryHide(view, "TextViewHost/FileHealthIndicator");
+            if (readOnly)
+            {
+                view.Options.SetOptionValue(DefaultTextViewHostOptions.ZoomControlId, false);
+                TryHide(view, "EditingState/SelectionStateMargin");
+                TryHide(view, "EditingState/LineColCharMargin");
+                TryHide(view, "EditingState/SelectionInfoMargin");
+                TryHide(view, "EditingState/InsertModeMargin");
+                TryHide(view, "EditingState/EditingStateEndingMargin");
+            }
+
             return new Pane(textView, host, adapters.GetDataBuffer(textBuffer)
                 ?? throw new InvalidOperationException("The editor buffer has no text buffer."));
+        }
+
+        // These options belong to the VS editor and are not in the public SDK; one that this version of
+        // VS does not define throws, and the item simply stays.
+        private static void TryHide(IWpfTextView view, string optionId)
+        {
+            try
+            {
+                view.Options.SetOptionValue(optionId, false);
+            }
+            catch (ArgumentException)
+            {
+            }
         }
 
         public void Close()
