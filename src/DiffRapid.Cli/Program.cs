@@ -61,6 +61,8 @@ internal static partial class Program
                          [--ignore-alpha] [--max-offset <n>]
                          Compares PNG or BMP images; --diff-out writes the differences highlighted.
           diffrapid git-config [--global]      print setup commands for Git Bash / POSIX shells
+          diffrapid api <left.dll|.nupkg> [<right.dll|.nupkg>] [--breaking-only]
+                         One file: print its public API. Two: list API changes, marking breaking ones.
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -122,6 +124,7 @@ internal static partial class Program
                 "hex" => RunHex(parsed, Console.Out),
                 "image" => RunImage(args),
                 "resolve" => RunResolve(parsed),
+                "api" => RunApi(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 

@@ -6,6 +6,12 @@
 |---|---|---|
 | System.Text.Json (and its .NET Standard support packages) | MIT | JSON output of comparisons (DiffRapid.Core) |
 
+## Runtime dependencies
+
+| Component | License | Used for |
+|---|---|---|
+| System.Reflection.Metadata | MIT | Reading assembly metadata for the API compare (part of .NET; a package on .NET Standard 2.0) |
+
 ## Build and test dependencies (not redistributed)
 
 | Component | License | Used for |

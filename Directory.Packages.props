@@ -8,6 +8,8 @@
     <PackageVersion Include="DocumentFormat.OpenXml" Version="3.1.1" />
     <!-- Core (JSON output; the extension already receives this version through the VS SDK) -->
     <PackageVersion Include="System.Text.Json" Version="9.0.0" />
+    <!-- Core: reads .NET assembly metadata for the API compare (MIT) -->
+    <PackageVersion Include="System.Reflection.Metadata" Version="9.0.0" />
     <!-- Tests -->
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <PackageVersion Include="DiffPlex" Version="1.9.0" />
