@@ -12,6 +12,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="DiffRapid.Core.Tests" />
     <ProjectReference Include="..\DiffRapid.Core\DiffRapid.Core.csproj" />
+    <ProjectReference Include="..\DiffRapid.Semantic\DiffRapid.Semantic.csproj" />
   </ItemGroup>
 
 </Project>
