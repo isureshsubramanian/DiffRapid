@@ -2,8 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using DiffRapid.Core.Folders;
 using DiffRapid.Core.Text;
 
@@ -68,9 +66,7 @@ internal static partial class Program
         });
         if (args.Has("json"))
         {
-            var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
-            jsonOptions.Converters.Add(new JsonStringEnumConverter());
-            Console.Out.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
+            WriteFolderJson(result);
         }
         else
         {
@@ -123,7 +119,7 @@ internal static partial class Program
             }
             else
             {
-                FolderReportWriter.WriteHtml(result, options, writer);
+                WriteFolderHtml(args, result, options, writer);
             }
         }
 

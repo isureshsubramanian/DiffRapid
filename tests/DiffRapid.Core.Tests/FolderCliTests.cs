@@ -39,8 +39,8 @@ public sealed class FolderCliTests : IDisposable
         var (code, output) = Run("--method", method, "--json");
         Assert.Equal(0, code);
         using var json = JsonDocument.Parse(output);
-        Assert.Equal("Identical", json.RootElement.GetProperty("Root").GetProperty("Status").GetString());
-        Assert.Single(json.RootElement.GetProperty("Root").GetProperty("Children").EnumerateArray());
+        Assert.Equal("identical", json.RootElement.GetProperty("status").GetString());
+        Assert.Single(json.RootElement.GetProperty("items").EnumerateArray());
     }
 
     [Fact]
@@ -107,9 +107,9 @@ public sealed class FolderCliTests : IDisposable
         var (code, output) = Run("--filter-file", path, "--json");
         Assert.Equal(0, code);
         using var json = JsonDocument.Parse(output);
-        var items = json.RootElement.GetProperty("Items").EnumerateArray().ToArray();
+        var items = json.RootElement.GetProperty("items").EnumerateArray().ToArray();
         Assert.Equal(2, items.Length);
-        Assert.All(items, item => Assert.Equal("Skipped", item.GetProperty("Status").GetString()));
+        Assert.All(items, item => Assert.Equal("skipped", item.GetProperty("status").GetString()));
         File.WriteAllText(path, "f: unrelated");
         Assert.Equal(1, Run("--filter-file", path).code);
     }
