@@ -445,6 +445,31 @@ public sealed class StructuredTests
     }
 
     [Fact]
+    public void CanonicalTextOrdersListsOfNamedObjectsByTheirIdentity()
+    {
+        var left = JsonTreeReader.Read("""{"f": [{"id": "search", "on": true}, {"id": "cart", "on": true}]}""");
+        var right = JsonTreeReader.Read("""{"f": [{"on": true, "id": "cart"}, {"on": false, "id": "search"}]}""");
+
+        var leftText = StructuredTextWriter.Write(left, StructuredFormat.Json);
+        var rightText = StructuredTextWriter.Write(right, StructuredFormat.Json);
+
+        Assert.True(leftText.IndexOf("cart", StringComparison.Ordinal) < leftText.IndexOf("search", StringComparison.Ordinal));
+        Assert.Equal(leftText.Replace("\"on\": true\n    }\n  ]", "\"on\": false\n    }\n  ]"), rightText);
+        Assert.Contains("- name: a", StructuredTextWriter.Write(YamlTreeReader.Read("l:\n  - name: b\n  - name: a\n"), StructuredFormat.Yaml).Split('\n')[1]);
+    }
+
+    [Theory]
+    [InlineData("""{"l": ["b", "a"]}""")]
+    [InlineData("""{"l": [{"id": 2}, {"id": 1}, {"x": 0}]}""")]
+    [InlineData("""{"l": [{"id": 2}, {"id": 2, "v": 1}, {"id": 1}]}""")]
+    public void CanonicalTextKeepsTheOrderOfOtherLists(string json)
+    {
+        var text = StructuredTextWriter.Write(JsonTreeReader.Read(json), StructuredFormat.Json);
+
+        Assert.True(text.IndexOf('2') < text.IndexOf('1') || text.IndexOf("\"b\"", StringComparison.Ordinal) < text.IndexOf("\"a\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void YamlCanonicalTextReadsBackUnchanged()
     {
         var root = YamlTreeReader.Read("""

@@ -46,16 +46,52 @@ public static class StructuredTextWriter
         return builder.ToString();
     }
 
+    // The member names that identify an object in a JSON or YAML list, as for XML elements.
+    private static readonly string[] ItemIdentities = ["id", "Id", "ID", "name", "Name", "key", "Key"];
+
     private static IEnumerable<StructuredNode> KeyOrder(StructuredNode node)
     {
-        // Items matched by position keep their order; everything else is sorted by key.
+        // Items matched by position keep their order, unless every item is an object that names itself;
+        // everything else is sorted by key.
         if (node.Children.Any(child => child.IsKeyedByIndex))
         {
-            return node.Children;
+            return IdentityOf(node) is { } identity
+                ? node.Children.OrderBy(child => IdentityValue(child, identity), StringComparer.Ordinal)
+                : node.Children;
         }
 
         return node.Children.OrderBy(child => child.Key, StringComparer.Ordinal);
     }
+
+    /// <summary>
+    /// The member that identifies every item of a list of objects: present in each item with a scalar value
+    /// and unique across them. Null when there is none, so the list keeps its order.
+    /// </summary>
+    private static string? IdentityOf(StructuredNode list)
+    {
+        if (list.Kind != StructuredNodeKind.Array || list.Children.Count < 2
+            || list.Children.Any(child => child.Kind != StructuredNodeKind.Object))
+        {
+            return null;
+        }
+
+        foreach (var identity in ItemIdentities)
+        {
+            var values = list.Children.Select(child => IdentityValue(child, identity)).ToList();
+            if (values.All(value => value is not null) && values.Distinct(StringComparer.Ordinal).Count() == values.Count)
+            {
+                return identity;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? IdentityValue(StructuredNode item, string identity) =>
+        item.Children.FirstOrDefault(member => member.Name == identity) is { } member
+            && member.Kind is StructuredNodeKind.String or StructuredNodeKind.Number or StructuredNodeKind.Boolean
+            ? member.Value
+            : null;
 
     private static void WriteXml(StringBuilder builder, StructuredNode node, int indent)
     {
