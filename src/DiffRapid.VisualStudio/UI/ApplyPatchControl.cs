@@ -511,6 +511,11 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
             get
             {
                 var outcomes = Plan.Outcomes;
+                if (outcomes.Count == 0)
+                {
+                    return Plan.Action == FilePatchAction.Rename ? "No content change" : string.Empty;
+                }
+
                 var parts = new List<string> { outcomes.Count == 1 ? "1 hunk" : $"{outcomes.Count} hunks" };
                 AddCount(parts, outcomes.Count(o => o.Status == HunkStatus.AppliedWithOffset), "moved");
                 AddCount(parts, outcomes.Count(o => o.Status == HunkStatus.AppliedWithFuzz), "fuzzy");
@@ -520,8 +525,8 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
             }
         }
 
-        public string Details => Plan.Message
-            ?? (Plan.Action == FilePatchAction.Rename && Plan.TargetPath is { } target ? "to " + target : string.Empty);
+        // The File column already names both paths of a rename.
+        public string Details => Plan.Message ?? string.Empty;
 
         private static void AddCount(List<string> parts, int count, string label)
         {
