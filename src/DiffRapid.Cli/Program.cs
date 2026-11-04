@@ -30,6 +30,7 @@ internal static partial class Program
                          [--report <file>] [--report-format html|csv] [--include-identical]
                          Report format defaults to the extension (.html/.htm/.csv).
           diffrapid diff  <left> <right> [options]
+                         .docx, .xlsx and .pptx files are compared as their text.
           diffrapid diff <file> --rev <revision> [options]
           diffrapid log <file> [-n <count>]
                          Git: HEAD, HEAD~1, :0; TFVC: C123, T, W.
