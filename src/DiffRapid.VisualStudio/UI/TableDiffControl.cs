@@ -98,7 +98,11 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
         SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
 
-        _headerRow = DiffTheme.OptionToggle("Header row", "The first line of each file names the columns", _ => StartCompare(), isChecked: true);
+        _headerRow = DiffTheme.OptionToggle("Header row", "The first line of each file names the columns", _ =>
+        {
+            NumberNamedColumns();
+            StartCompare();
+        }, isChecked: true);
         _ignoreCase = DiffTheme.OptionToggle("Ignore case", "Cells that differ only in letter case compare equal", _ => StartCompare());
         _trim = DiffTheme.OptionToggle("Trim", "Ignore spaces at the start and end of cells", _ => StartCompare());
         _showIdentical = DiffTheme.OptionToggle("Show identical rows", "Also list the rows that are the same on both sides", _ => ShowRows());
@@ -470,6 +474,33 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         return true;
     }
 
+    /// <summary>
+    /// Without a header row the columns have no names, so the column names in KEY and IGNORE become the
+    /// 1-based numbers they had ("Item" → "1"); numbers keep working when the header row comes back.
+    /// </summary>
+    private void NumberNamedColumns()
+    {
+        if (_headerRow.IsChecked == true || _outcome?.Result.Columns is not { } columns)
+        {
+            return;
+        }
+
+        foreach (var box in new[] { _keyColumns, _ignoreColumns })
+        {
+            var references = SplitColumns(box.Text).Select(reference =>
+            {
+                var column = columns.FirstOrDefault(c =>
+                    string.Equals(c.Name, reference, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(c.LeftName, reference, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(c.RightName, reference, StringComparison.OrdinalIgnoreCase));
+                return (column?.LeftIndex ?? column?.RightIndex) is int index
+                    ? (index + 1).ToString(CultureInfo.InvariantCulture)
+                    : reference;
+            });
+            box.Text = string.Join(", ", references);
+        }
+    }
+
     private static IReadOnlyList<string> SplitColumns(string text) =>
         text.Split(',').Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
 
@@ -641,7 +672,10 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         _view.Columns.Clear();
         _verdict.Text = "Compare failed";
         _verdict.Foreground = DiffTheme.RemovedBrush;
-        _position.Text = ex.Message;
+        // "Unknown column 'Item'." without .NET's "Parameter name: reference" line.
+        _position.Text = ex is ArgumentException { ParamName: not null } argument
+            ? argument.Message.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0]
+            : ex.Message;
         _details.Text = string.Empty;
         _details.ToolTip = null;
         UpdateCommands();
