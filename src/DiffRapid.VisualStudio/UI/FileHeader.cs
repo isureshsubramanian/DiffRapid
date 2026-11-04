@@ -20,6 +20,9 @@ internal sealed class FileHeader : Border
         ToolTip = "This file has changes that are not saved yet (Ctrl+S saves)",
     };
 
+    private readonly TextBlock _name;
+    private readonly TextBlock _folder;
+
     public FileHeader(string side, string path, Brush accent)
     {
         BorderThickness = new Thickness(0, 0, 0, 1);
@@ -38,27 +41,27 @@ internal sealed class FileHeader : Border
             Child = new TextBlock { Text = side, FontSize = 10, FontWeight = FontWeights.Bold, Foreground = Brushes.White },
         };
 
-        var name = new TextBlock { Text = System.IO.Path.GetFileName(path), FontWeight = FontWeights.SemiBold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
-        var folder = new TextBlock
+        _name = new TextBlock { Text = System.IO.Path.GetFileName(path), FontWeight = FontWeights.SemiBold, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        _folder = new TextBlock
         {
             Text = System.IO.Path.GetDirectoryName(path) ?? string.Empty,
             Margin = new Thickness(10, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        folder.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
+        _folder.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
         _lines.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
 
         var row = new DockPanel();
         DockPanel.SetDock(badge, Dock.Left);
-        DockPanel.SetDock(name, Dock.Left);
+        DockPanel.SetDock(_name, Dock.Left);
         DockPanel.SetDock(_lines, Dock.Right);
         DockPanel.SetDock(_modified, Dock.Right);
         row.Children.Add(badge);
-        row.Children.Add(name);
+        row.Children.Add(_name);
         row.Children.Add(_lines);
         row.Children.Add(_modified);
-        row.Children.Add(folder);
+        row.Children.Add(_folder);
         Child = row;
     }
 
@@ -69,6 +72,13 @@ internal sealed class FileHeader : Border
     /// <summary>Shows a "Read-only" mark for a pane that holds text taken from <paramref name="source"/>.</summary>
     public void SetReadOnly(string source)
     {
+        // The pane holds a temporary copy: name the original file and what was taken from it instead, such as
+        // "left.json (PrettifyJson sort)" in the original's folder. The label's suffix comes from a file name,
+        // so it holds no path separators.
+        _name.Text = System.IO.Path.GetFileName(source);
+        _folder.Text = System.IO.Path.GetDirectoryName(source) ?? string.Empty;
+        ToolTip = source;
+
         var mark = new TextBlock
         {
             Text = "Read-only",
