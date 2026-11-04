@@ -58,6 +58,8 @@ internal static partial class Program
                          Resolves identical, whitespace-only and different-line conflicts; exit 1 if any remain.
           diffrapid struct <left> <right> [--format auto|xml|json|yaml|msbuild|resx] [--array-key <name>]
                          [--ordered]  compare by keys; --ordered also reports moved entries
+          diffrapid semantic <left.cs> <right.cs> [--ignore usings,format,comments,regions]
+                         Compares C# files member by member and prints the member tree.
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
           diffrapid image <left> <right> [--tolerance <0..255>] [--diff-out <file.png>]
                          [--ignore-alpha] [--max-offset <n>]
@@ -132,6 +134,7 @@ internal static partial class Program
                 "api" => RunApi(parsed),
                 "plugins" => RunPlugins(parsed),
                 "struct" => RunStructured(parsed),
+                "semantic" => RunSemantic(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 

@@ -54,6 +54,7 @@ internal static partial class Program
             "prediffer",
             "format",
             "array-key",
+            "ignore",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
