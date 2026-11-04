@@ -47,6 +47,8 @@ internal static partial class Program
             "count",
             "dir",
             "fuzz",
+            "unpacker",
+            "prediffer",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
