@@ -81,10 +81,10 @@ public sealed class DiffRapidPackage : AsyncPackage
     private static bool IsHexFile(string path) => IsBinaryFile(path) && AssemblyApiText(path) is null;
 
     /// <summary>
-    /// Opens a new text comparison document tab for two files. Word, Excel and PowerPoint files are compared as
-    /// their text, through temporary copies (editing those does not change the documents).
+    /// Opens a new text comparison document tab for two files and returns its window. Word, Excel and PowerPoint
+    /// files are compared as their text, through temporary copies (editing those does not change the documents).
     /// </summary>
-    public Task OpenTextComparisonAsync(string leftPath, string rightPath) =>
+    public Task<IVsWindowFrame> OpenTextComparisonAsync(string leftPath, string rightPath) =>
         OpenDocumentAsync(
             "Loading the comparison",
             async () =>
@@ -246,7 +246,7 @@ public sealed class DiffRapidPackage : AsyncPackage
     /// True when the view is made of text editors: the window then uses the DiffRapid key binding scope,
     /// which inherits the text editor's bindings so arrows, Enter, Backspace and the rest reach them.
     /// </param>
-    private async Task OpenDocumentAsync(string loadStep, Func<Task<FrameworkElement>> createView, string caption, bool hostsEditors)
+    private async Task<IVsWindowFrame> OpenDocumentAsync(string loadStep, Func<Task<FrameworkElement>> createView, string caption, bool hostsEditors)
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
 
@@ -268,6 +268,7 @@ public sealed class DiffRapidPackage : AsyncPackage
         {
             var frame = Diagnostics.Step("Creating the comparison window", () => CreateDocumentWindow(shell, document, caption, hostsEditors));
             Diagnostics.Step("Showing the comparison window", () => ErrorHandler.ThrowOnFailure(frame.Show()));
+            return frame;
         }
         catch
         {

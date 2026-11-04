@@ -75,6 +75,11 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     private bool _syncingScroll;
     private bool _disposed;
 
+    // The tab "Compare structure" opened, the canonical text it shows, and whether it is still being opened.
+    private IVsWindowFrame? _structureFrame;
+    private string? _structureKey;
+    private bool _structureOpening;
+
     private TextDiffControl(AsyncPackage package, Pane left, Pane right, CompareOptions options)
     {
         _package = package;
@@ -196,7 +201,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.SaveAll, "Save"), "Save both files (Ctrl+S)", Save));
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.CompareFiles, "Create patch"), "Save the changes from the left file to the right file as a patch (unified diff)", CreatePatch));
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Report, "Export report"), "Save the comparison as a side-by-side HTML page or as Markdown for a pull request", ExportReport));
-        if (IsStructuredFile(_left.Path) && IsStructuredFile(_right.Path))
+        // A structure comparison is already in canonical form, so it does not offer the button again.
+        if (IsStructuredFile(_left.Path) && IsStructuredFile(_right.Path) && !IsStructureView(_left.Path))
         {
             summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.TreeView, "Compare structure"), "Compare the two files with keys, items and attributes in a fixed order, so reordering and layout do not count", CompareStructure));
         }
@@ -553,16 +559,28 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         }
     }
 
+    private const string StructureSuffix = " (structure)";
+
+    private static bool IsStructureView(string path) =>
+        System.IO.Path.GetFileNameWithoutExtension(path).EndsWith(StructureSuffix, StringComparison.Ordinal);
+
     private static bool IsStructuredFile(string path) =>
         System.IO.Path.GetExtension(path).ToLowerInvariant() is ".json" or ".xml" or ".yml" or ".yaml" or ".config" or ".resx"
             or ".csproj" or ".vbproj" or ".fsproj" or ".vcxproj" or ".sqlproj" or ".proj" or ".props" or ".targets" or ".nuspec";
 
     /// <summary>
     /// Opens a second comparison of both files (with unsaved edits) rewritten in a canonical, key-ordered layout:
-    /// moved properties, items and attributes line up, and only real changes remain.
+    /// moved properties, items and attributes line up, and only real changes remain. Clicking again brings that
+    /// tab back while the structure is unchanged, and replaces it after an edit.
     /// </summary>
     private void CompareStructure()
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_structureOpening)
+        {
+            return;
+        }
+
         try
         {
             var leftText = _left.Buffer.CurrentSnapshot.GetText();
@@ -570,23 +588,56 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             var format = DiffRapid.Core.Structured.StructuredReader.DetectFormat(_left.Path, leftText);
             var left = Canonical(leftText, format);
             var right = Canonical(rightText, format);
+            var key = left + "\0" + right;
+            if (_structureFrame is { } open && IsOpen(open))
+            {
+                if (key == _structureKey)
+                {
+                    ErrorHandler.ThrowOnFailure(open.Show());
+                    return;
+                }
+
+                // Its files are temporary copies, so there is nothing to save.
+                open.CloseFrame((uint)__FRAMECLOSE.FRAMECLOSE_NoSave);
+            }
+
+            _structureFrame = null;
             var extension = format switch
             {
                 DiffRapid.Core.Structured.StructuredFormat.Json => ".json",
                 DiffRapid.Core.Structured.StructuredFormat.Yaml => ".yaml",
                 _ => ".xml",
             };
-            var leftTemp = DiffRapid.VisualStudio.Commands.EditorSelection.WriteTemporary(left, System.IO.Path.GetFileName(_left.Path) + " (structure)", extension);
-            var rightTemp = DiffRapid.VisualStudio.Commands.EditorSelection.WriteTemporary(right, System.IO.Path.GetFileName(_right.Path) + " (structure)", extension);
+            var leftTemp = DiffRapid.VisualStudio.Commands.EditorSelection.WriteTemporary(left, System.IO.Path.GetFileName(_left.Path) + StructureSuffix, extension);
+            var rightTemp = DiffRapid.VisualStudio.Commands.EditorSelection.WriteTemporary(right, System.IO.Path.GetFileName(_right.Path) + StructureSuffix, extension);
             if (_package is DiffRapidPackage package)
             {
-                package.JoinableTaskFactory.RunAsync(() => package.OpenComparisonAsync(leftTemp, rightTemp)).FileAndForget("DiffRapid/CompareStructure");
+                _structureOpening = true;
+                package.JoinableTaskFactory.RunAsync(async () =>
+                {
+                    try
+                    {
+                        _structureFrame = await package.OpenTextComparisonAsync(leftTemp, rightTemp);
+                        _structureKey = key;
+                    }
+                    finally
+                    {
+                        _structureOpening = false;
+                    }
+                }).FileAndForget("DiffRapid/CompareStructure");
             }
         }
         catch (Exception ex) when (ex is DiffRapid.Core.Structured.StructuredFormatException or ArgumentException)
         {
             _position.Text = "Cannot compare the structure: " + ex.Message;
         }
+    }
+
+    // A closed window's frame stays usable as an object but no longer has a document view.
+    private static bool IsOpen(IVsWindowFrame frame)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        return ErrorHandler.Succeeded(frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out var view)) && view is not null;
     }
 
     private static string Canonical(string text, DiffRapid.Core.Structured.StructuredFormat format) =>
