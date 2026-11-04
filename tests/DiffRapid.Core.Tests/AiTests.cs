@@ -362,6 +362,21 @@ public sealed class AiTests
         Assert.Contains("[REDACTED", result);
     }
 
+    [Theory]
+    [InlineData(
+        "+    // Discount over 10 items; connection=Server=db;Password=hunter2",
+        "+    // Discount over 10 items; connection=[REDACTED CONNECTION STRING]")]
+    [InlineData(
+        "    var c = \"Server=db;Database=app\";",
+        "    var c = \"[REDACTED CONNECTION STRING]\";")]
+    [InlineData(
+        "- x = 1; // User Id=bob;Server=internal",
+        "- x = 1; // [REDACTED CONNECTION STRING]")]
+    public void ConnectionStringMaskKeepsTheRestOfTheLine(string text, string expected)
+    {
+        Assert.Equal(expected, SecretRedactor.Redact(text));
+    }
+
     [Fact]
     public void RedactionPreservesOrdinaryCodeAndText()
     {

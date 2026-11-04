@@ -11,8 +11,10 @@ public static class SecretRedactor
         @"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|\z)");
     private static readonly Regex Bearer = Create(@"\bBearer[ \t]+[A-Za-z0-9._~+/\-]+=*");
     private static readonly Regex ConnectionUri = Create(@"\b[a-z][a-z0-9+.-]*://[^\s/:""']+:[^\s@""']+@[^\s""']+");
+    // The run of "key=value;" pairs around a server-like key, up to a quote or the end of the line. What comes
+    // before the run stays, so a diff keeps its "+" marker, indentation and "//", and code keeps its quotes.
     private static readonly Regex ConnectionString = Create(
-        @"(?m)^[^\r\n]*\b(?:Server|Data Source|Host|AccountName|DefaultEndpointsProtocol|Database)\s*=[^\r\n]*");
+        @"\b(?:[A-Za-z][A-Za-z0-9 _]*=[^;\r\n""']*;[ \t]*)*\b(?:Server|Data Source|Host|AccountName|DefaultEndpointsProtocol|Database)\s*=[^\r\n""']*");
     private static readonly Regex Assignment = Create(
         @"(?<prefix>[""']?\b(?:password|pwd|secret|api[_-]?key|token|access[_-]?token|client[_-]?secret|connection[_ ]?strings?)[""']?\s*[:=]\s*)(?:""[^""\r\n]*""|'[^'\r\n]*'|[^\s;,&\r\n]+)");
 
