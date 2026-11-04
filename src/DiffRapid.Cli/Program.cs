@@ -36,6 +36,11 @@ internal static partial class Program
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
+          diffrapid table <left> <right> [--delimiter <c|tab|auto>] [--quote <c>] [--no-header]
+                         [--key <col,...>] [--ignore-column <col>] [--by-position] [--ignore-case] [--trim]
+                         [--tolerance <n>] [--relative-tolerance <n>] [--ignore-order] (with --key)
+                         [--report md|html [-o <file>]] [--quiet]
+                         Compares CSV/TSV/delimited files by row and cell; columns are header names or numbers from 1.
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
 
         Compare options:
@@ -92,6 +97,7 @@ internal static partial class Program
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
+                "table" => RunTable(args),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
