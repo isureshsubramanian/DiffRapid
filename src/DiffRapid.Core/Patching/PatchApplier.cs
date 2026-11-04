@@ -122,7 +122,7 @@ public static class PatchApplier
         for (var fuzz = 0; fuzz <= options.Fuzz; fuzz++)
         {
             var leading = Math.Min(fuzz, body.TakeWhile(l => l.Kind == ' ').Count());
-            var trailing = Math.Min(fuzz, body.Reverse().TakeWhile(l => l.Kind == ' ').Count());
+            var trailing = Math.Min(fuzz, Enumerable.Reverse(body).TakeWhile(l => l.Kind == ' ').Count());
             if (expected >= boundary && Matches(lines, body, expected, leading, trailing, false, options))
             {
                 return (expected, fuzz);

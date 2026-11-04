@@ -2,6 +2,12 @@
 
 DiffRapid does not currently redistribute any third-party code.
 
+## Runtime dependencies
+
+| Component | License | Used for |
+|---|---|---|
+| System.Reflection.Metadata | MIT | Reading assembly metadata for the API compare (part of .NET; a package on .NET Standard 2.0) |
+
 ## Build and test dependencies (not redistributed)
 
 | Component | License | Used for |
