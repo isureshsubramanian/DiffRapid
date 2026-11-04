@@ -41,6 +41,13 @@ internal static partial class Program
           diffrapid diff <file> --rev <revision> [options]
           diffrapid log <file> [-n <count>]
                          Git: HEAD, HEAD~1, :0; TFVC: C123, T, W.
+          diffrapid history list <file> [--store <dir>]
+          diffrapid history show <file> <n> [--store <dir>]
+          diffrapid history diff <file> <n> [<m>] [--store <dir>] [compare options]
+          diffrapid history snapshot <file> [--label <text>] [--store <dir>]
+          diffrapid history prune [--store <dir>]
+                         Snapshot 1 is newest; diff without <m> compares against the current file.
+                         Default store: %LOCALAPPDATA%\DiffRapid\History. Default label: Saved.
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
@@ -124,6 +131,7 @@ internal static partial class Program
                 "dir3" => RunDirectory3(parsed),
                 "diff" => RunDiff(parsed),
                 "log" => RunLog(parsed),
+                "history" => RunHistory(args),
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
