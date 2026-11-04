@@ -119,6 +119,41 @@ public sealed class FolderPatchApplierTests : IDisposable
     }
 
     [Fact]
+    public void PureRenameIsPlannedAppliedAndThenAlreadyApplied()
+    {
+        Directory.CreateDirectory(At("docs"));
+        File.WriteAllText(At("README.md"), "# Samples\n");
+        var patch = Parse(
+            "diff --git a/README.md b/docs/README.md\nsimilarity index 100%\nrename from README.md\nrename to docs/README.md\n" +
+            "diff --git a/a.txt b/a.txt\nindex 1..2 100644\n" + ChangeA);
+        Assert.Equal(2, patch.Files.Count);
+        Assert.Empty(patch.Files[0].Hunks);
+
+        File.WriteAllText(At("a.txt"), "one\ntwo\nthree\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        var rename = plan.Files[0];
+        Assert.Equal(FilePatchAction.Rename, rename.Action);
+        Assert.Equal(FilePatchStatus.Ready, rename.Status);
+        Assert.Equal("README.md → docs/README.md", rename.DisplayPath);
+
+        Assert.All(FolderPatchApplier.Apply(plan), r => Assert.True(r.Written));
+        Assert.False(File.Exists(At("README.md")));
+        Assert.Equal("# Samples\n", File.ReadAllText(At("docs/README.md")));
+
+        var again = FolderPatchApplier.Plan(patch, _root);
+        Assert.All(again.Files, f => Assert.Equal(FilePatchStatus.AlreadyApplied, f.Status));
+    }
+
+    [Fact]
+    public void RenameWithChangesIsAlreadyAppliedAfterApply()
+    {
+        File.WriteAllText(At("a.txt"), "one\ntwo\nthree\n");
+        var patch = Parse("diff --git a/a.txt b/b.txt\n--- a/a.txt\n+++ b/b.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n");
+        FolderPatchApplier.Apply(FolderPatchApplier.Plan(patch, _root));
+        Assert.Equal(FilePatchStatus.AlreadyApplied, Assert.Single(FolderPatchApplier.Plan(patch, _root).Files).Status);
+    }
+
+    [Fact]
     public void ReverseUndoesTheChange()
     {
         File.WriteAllText(At("a.txt"), "one\nTWO\nthree\n");

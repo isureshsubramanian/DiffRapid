@@ -207,6 +207,17 @@ public static class FolderPatchApplier
     /// <summary>Reads the source, applies the hunks in memory and decides whether the result can be written.</summary>
     private static FilePatchPlan PlanContent(FilePatch patch, string display, string? source, string? target, FilePatchAction action, PatchApplyOptions options)
     {
+        // A rename whose old file is gone and whose new file already holds the result has been applied.
+        if (action == FilePatchAction.Rename && !File.Exists(source) && File.Exists(target))
+        {
+            var atTarget = PlanContent(patch, display, target, target, FilePatchAction.Modify, options);
+            var applied = atTarget.Status == FilePatchStatus.AlreadyApplied || (patch.Hunks.Count == 0 && atTarget.Status == FilePatchStatus.Ready);
+            if (applied)
+            {
+                return atTarget with { SourcePath = source, Action = FilePatchAction.Rename, Status = FilePatchStatus.AlreadyApplied };
+            }
+        }
+
         var readPath = source ?? target!;
         var exists = File.Exists(readPath);
         var decoded = exists ? TextFileReader.ReadFile(readPath) : new DecodedText(string.Empty, new UTF8Encoding(false), false, false);

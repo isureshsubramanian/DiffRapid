@@ -64,6 +64,7 @@ public sealed record Patch(IReadOnlyList<FilePatch> Files)
         var binary = false;
         var added = false;
         var deleted = false;
+        var renamed = false;
         while (end < input.LineCount && !input[end].Content.StartsWith("diff --git ", StringComparison.Ordinal)
             && !input[end].Content.StartsWith("--- ", StringComparison.Ordinal))
         {
@@ -71,11 +72,14 @@ public sealed record Patch(IReadOnlyList<FilePatch> Files)
             binary |= metadata.StartsWith("Binary files ", StringComparison.Ordinal) || metadata == "GIT binary patch";
             added |= metadata.StartsWith("new file mode ", StringComparison.Ordinal);
             deleted |= metadata.StartsWith("deleted file mode ", StringComparison.Ordinal);
+            renamed |= metadata.StartsWith("rename from ", StringComparison.Ordinal);
             end++;
         }
 
+        // Without ---/+++ lines the header alone describes the change: an empty file added or deleted, a binary
+        // change, or a rename that keeps the content (similarity index 100%).
         var hasFileHeader = end < input.LineCount && input[end].Content.StartsWith("--- ", StringComparison.Ordinal);
-        if (binary || ((added || deleted) && !hasFileHeader))
+        if (binary || ((added || deleted || renamed) && !hasFileHeader))
         {
             if (!paths.Success)
             {
