@@ -4,6 +4,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
 using DiffRapid.Ai;
 using DiffRapid.VisualStudio.Options;
 using Microsoft.VisualStudio.PlatformUI;
@@ -25,13 +28,25 @@ internal sealed class AiPanel : Border
     private readonly DiffRapidPackage _package;
     private readonly TextBlock _title = new() { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+    private const double MinPanelHeight = 90;
+
+    // The panel's height is kept for the session, so every comparison opens it at the size last dragged to.
+    private static double s_height = 220;
+
+    // A selectable answer in its own scroll viewer: the text box's built-in scrolling lost its place on every update.
     private readonly TextBox _text = new()
     {
         IsReadOnly = true,
         TextWrapping = TextWrapping.Wrap,
-        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         BorderThickness = new Thickness(0),
         Padding = new Thickness(10, 6, 10, 8),
+    };
+
+    private readonly ScrollViewer _scroller = new()
+    {
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        CanContentScroll = false,
     };
 
     private readonly Button _use;
@@ -43,7 +58,7 @@ internal sealed class AiPanel : Border
     {
         _package = package;
         Visibility = Visibility.Collapsed;
-        Height = 220;
+        Height = s_height;
         BorderThickness = new Thickness(0, 1, 0, 0);
         SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
         SetResourceReference(BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
@@ -69,11 +84,46 @@ internal sealed class AiPanel : Border
         heading.Children.Add(_status);
         header.Children.Add(heading);
 
+        // The top edge is a drag handle: dragging it up makes the panel taller and the comparison shorter.
+        var resize = new Thumb { Height = 5, Cursor = Cursors.SizeNS, ToolTip = "Drag to resize the panel" };
+        var grip = new FrameworkElementFactory(typeof(Border));
+        grip.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        resize.Template = new ControlTemplate(typeof(Thumb)) { VisualTree = grip };
+        resize.DragDelta += (_, e) => Resize(Height - e.VerticalChange);
+
+        _text.TextChanged += (_, _) =>
+        {
+            if (_followEnd)
+            {
+                _scroller.ScrollToEnd();
+            }
+        };
+        _scroller.ScrollChanged += (_, e) =>
+        {
+            // Follow the answer as it streams only while the reader is at the bottom; scrolling up stops that.
+            if (e.ExtentHeightChange == 0)
+            {
+                _followEnd = _scroller.VerticalOffset >= _scroller.ScrollableHeight - 2;
+            }
+        };
+        _scroller.Content = _text;
+
         var layout = new DockPanel();
+        DockPanel.SetDock(resize, Dock.Top);
         DockPanel.SetDock(header, Dock.Top);
+        layout.Children.Add(resize);
         layout.Children.Add(header);
-        layout.Children.Add(_text);
+        layout.Children.Add(_scroller);
         Child = layout;
+    }
+
+    private bool _followEnd = true;
+
+    private void Resize(double height)
+    {
+        // Leave the comparison above at least a few lines.
+        var available = Parent is FrameworkElement host ? host.ActualHeight - 150 : double.MaxValue;
+        Height = s_height = Math.Max(MinPanelHeight, Math.Min(height, Math.Max(MinPanelHeight, available)));
     }
 
     /// <summary>
@@ -145,7 +195,12 @@ internal sealed class AiPanel : Border
                 return;
             }
 
-            _text.Text = reply;
+            // The streamed text is normally the whole reply already; setting it again would lose the reader's place.
+            if (_text.Text != reply)
+            {
+                _text.Text = reply;
+            }
+
             _status.Text = "AI answer: check it before relying on it";
             onReply?.Invoke(reply);
         }
@@ -178,7 +233,6 @@ internal sealed class AiPanel : Border
             if (_cancellation == cancellation)
             {
                 _text.AppendText(delta);
-                _text.ScrollToEnd();
             }
         }).FileAndForget("DiffRapid/AiAppend");
     }
@@ -188,7 +242,9 @@ internal sealed class AiPanel : Border
         ThreadHelper.ThrowIfNotOnUIThread();
         _title.Text = title;
         _status.Text = status;
+        _followEnd = true;
         _text.Text = text;
+        _scroller.ScrollToTop();
         _use.Visibility = Visibility.Collapsed;
         _stop.Visibility = Visibility.Collapsed;
         _useAction = null;
