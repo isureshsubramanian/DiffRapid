@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Merge;
 
@@ -36,6 +37,7 @@ public sealed class MergeSession
     private readonly string _newline;
     private readonly MergeResolution[] _resolutions;
     private readonly string[]?[] _custom;
+    private readonly string[]?[] _customEndings;
 
     /// <summary>Creates a session with automatic choices for non-conflicting chunks.</summary>
     public MergeSession(MergeResult result)
@@ -44,16 +46,10 @@ public sealed class MergeSession
         _newline = result.DetectNewline();
         _resolutions = new MergeResolution[result.Chunks.Count];
         _custom = new string[]?[result.Chunks.Count];
+        _customEndings = new string[]?[result.Chunks.Count];
         for (var i = 0; i < _resolutions.Length; i++)
         {
-            _resolutions[i] = result.Chunks[i].Kind switch
-            {
-                MergeChunkKind.Unchanged => MergeResolution.Base,
-                MergeChunkKind.LeftOnly => MergeResolution.Left,
-                MergeChunkKind.RightOnly => MergeResolution.Right,
-                MergeChunkKind.BothSame => MergeResolution.Left,
-                _ => MergeResolution.Unresolved,
-            };
+            _resolutions[i] = AutomaticResolution(result.Chunks[i].Kind);
         }
     }
 
@@ -72,6 +68,30 @@ public sealed class MergeSession
             foreach (var resolution in _resolutions)
             {
                 if (resolution == MergeResolution.Unresolved)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>The number of conflict chunks in the merge.</summary>
+    public int ConflictCount => _result.ConflictCount;
+
+    /// <summary>The number of conflict chunks that have a choice other than Unresolved.</summary>
+    public int ResolvedConflictCount => ConflictCount - RemainingConflictCount;
+
+    /// <summary>The number of conflict chunks still awaiting resolution.</summary>
+    public int RemainingConflictCount
+    {
+        get
+        {
+            var count = 0;
+            for (var i = 0; i < _resolutions.Length; i++)
+            {
+                if (_result.Chunks[i].Kind == MergeChunkKind.Conflict && _resolutions[i] == MergeResolution.Unresolved)
                 {
                     count++;
                 }
@@ -123,6 +143,50 @@ public sealed class MergeSession
         }
 
         _custom[chunk] = copy;
+        _customEndings[chunk] = null;
+        _resolutions[chunk] = MergeResolution.Custom;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Keeps both sides of a chunk, the left lines first or the right lines first.</summary>
+    public void AcceptBoth(int chunk, bool leftFirst)
+    {
+        Resolve(chunk, leftFirst ? MergeResolution.LeftThenRight : MergeResolution.RightThenLeft);
+    }
+
+    /// <summary>
+    /// Returns a chunk to the choice the session started with (Unresolved for a conflict) and forgets its
+    /// custom text.
+    /// </summary>
+    public void ResetConflict(int chunk)
+    {
+        ValidateChunk(chunk);
+        var initial = AutomaticResolution(_result.Chunks[chunk].Kind);
+        if (_resolutions[chunk] == initial && _custom[chunk] is null)
+        {
+            return;
+        }
+
+        _resolutions[chunk] = initial;
+        _custom[chunk] = null;
+        _customEndings[chunk] = null;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Selects Custom with lines that keep their own terminators.</summary>
+    internal void SetCustomLines(int chunk, IReadOnlyList<TextLine> lines)
+    {
+        ValidateChunk(chunk);
+        var contents = new string[lines.Count];
+        var endings = new string[lines.Count];
+        for (var i = 0; i < lines.Count; i++)
+        {
+            contents[i] = lines[i].Content;
+            endings[i] = lines[i].EndingText;
+        }
+
+        _custom[chunk] = contents;
+        _customEndings[chunk] = endings;
         _resolutions[chunk] = MergeResolution.Custom;
         Changed?.Invoke(this, EventArgs.Empty);
     }
@@ -280,13 +344,31 @@ public sealed class MergeSession
                 MergeResult.Append(sb, _result.Base, c.BaseStart, c.BaseEnd, newline);
                 break;
             case MergeResolution.Custom:
-                foreach (var line in _custom[index]!)
-                {
-                    sb.Append(line).Append(newline);
-                }
-
+                AppendCustom(sb, index, newline);
                 break;
         }
+    }
+
+    private void AppendCustom(StringBuilder sb, int index, string newline)
+    {
+        var lines = _custom[index]!;
+        var endings = _customEndings[index];
+        for (var i = 0; i < lines.Length; i++)
+        {
+            sb.Append(lines[i]).Append(endings is null ? newline : endings[i]);
+        }
+    }
+
+    private static MergeResolution AutomaticResolution(MergeChunkKind kind)
+    {
+        return kind switch
+        {
+            MergeChunkKind.Unchanged => MergeResolution.Base,
+            MergeChunkKind.LeftOnly => MergeResolution.Left,
+            MergeChunkKind.RightOnly => MergeResolution.Right,
+            MergeChunkKind.BothSame => MergeResolution.Left,
+            _ => MergeResolution.Unresolved,
+        };
     }
 
     private void ValidateChunk(int chunk)
