@@ -29,6 +29,11 @@ internal static partial class Program
             leftPath += "@" + args.Value("rev");
         }
 
+        if (TryWriteDiffReport(args, result, args.Value("left-label") ?? leftPath, args.Value("right-label") ?? rightPath))
+        {
+            return result.AreEqual ? ExitSame : ExitDifferent;
+        }
+
         if (!args.Has("quiet"))
         {
             var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))

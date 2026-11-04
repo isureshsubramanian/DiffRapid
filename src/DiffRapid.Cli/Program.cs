@@ -29,8 +29,11 @@ internal static partial class Program
                          [--filter-file <path>]  apply .flt file and folder rules
                          [--report <file>] [--report-format html|csv] [--include-identical]
                          Report format defaults to the extension (.html/.htm/.csv).
+                         [--include-diffs]  embed each changed file's side-by-side diff in an HTML report
+                         --json prints a versioned schema ("version": 1) with camelCase names.
           diffrapid diff  <left> <right> [options]
                          .docx, .xlsx and .pptx files are compared as their text.
+          diffrapid diff  <left> <right> --report html|md|json [-o <file>]   report instead of the unified diff
           diffrapid diff <file> --rev <revision> [options]
           diffrapid log <file> [-n <count>]
                          Git: HEAD, HEAD~1, :0; TFVC: C123, T, W.

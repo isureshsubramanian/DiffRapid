@@ -12,4 +12,8 @@
     <InternalsVisibleTo Include="DiffRapid.Core.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
 </Project>
