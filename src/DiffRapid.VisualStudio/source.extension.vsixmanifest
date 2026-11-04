@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="DiffRapid.d62115b4-a651-44ed-87ba-2400bf8f2a7e" Version="0.1.0" Language="en-US" Publisher="DiffRapid" />
+    <Identity Id="DiffRapid.d62115b4-a651-44ed-87ba-2400bf8f2a7e" Version="0.1.0" Language="en-US" Publisher="Suresh Subramanian" />
     <DisplayName>DiffRapid</DisplayName>
-    <Description xml:space="preserve">Compare and merge files and folders inside Visual Studio.</Description>
-    <Tags>diff, merge, compare, folder compare, 3-way merge</Tags>
+    <Description xml:space="preserve">Fast compare and merge in Visual Studio: files, folders, three-way merge, hex, images, CSV and Excel tables, Office documents, JSON/XML structure, C# members and .NET APIs, with local history and opt-in AI explanations.</Description>
+    <MoreInfo>https://github.com/isureshsubramanian/DiffRapid</MoreInfo>
+    <License>LICENSE.txt</License>
+    <GettingStartedGuide>https://github.com/isureshsubramanian/DiffRapid#getting-started</GettingStartedGuide>
+    <ReleaseNotes>https://github.com/isureshsubramanian/DiffRapid/releases</ReleaseNotes>
+    <Icon>Resources\DiffRapid-icon.png</Icon>
+    <PreviewImage>Resources\DiffRapid-preview.png</PreviewImage>
+    <Tags>diff, merge, compare, folder compare, 3-way merge, hex, image compare, csv, excel, local history</Tags>
+    <Preview>true</Preview>
   </Metadata>
   <Installation>
     <!-- VS 2026 first. To add VS 2022 later, lower both ranges to [17.14,) (ADR-0001). -->

@@ -46,11 +46,20 @@
   <ItemGroup>
     <None Include="source.extension.vsixmanifest" SubType="Designer" />
     <Content Include="UnifiedSettings/registration.json" CopyToOutputDirectory="PreserveNewest" IncludeInVSIX="true" />
+    <!-- Marketplace and Extension Manager: icon, preview image and the license shown before installing. -->
+    <Content Include="Resources/DiffRapid-icon.png" IncludeInVSIX="true" />
+    <Content Include="Resources/DiffRapid-preview.png" IncludeInVSIX="true" />
+    <!-- The VSIX packs files under their own names, so the repository's LICENSE is copied to LICENSE.txt first. -->
+    <Content Include="$(BaseIntermediateOutputPath)LICENSE.txt" IncludeInVSIX="true" Link="LICENSE.txt" Visible="false" />
     <VSCTCompile Include="DiffRapidPackage.vsct" ResourceName="Menus.ctmenu" />
     <EmbeddedResource Update="VSPackage.resx">
       <MergeWithCTO>true</MergeWithCTO>
       <ManifestResourceName>VSPackage</ManifestResourceName>
     </EmbeddedResource>
   </ItemGroup>
+
+  <Target Name="CopyLicenseForVsix" BeforeTargets="BeforeBuild">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\LICENSE" DestinationFiles="$(BaseIntermediateOutputPath)LICENSE.txt" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>
