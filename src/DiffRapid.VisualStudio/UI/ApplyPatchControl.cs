@@ -336,6 +336,7 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         var done = rows.Count(r => r.Plan.Status == FilePatchStatus.AlreadyApplied);
         var problems = rows.Count - ready - done;
         _verdict.Text = plan is null ? "Cannot read the patch"
+            : problems > 0 && (ready > 0 || done > 0) ? string.Join("  ·  ", new[] { ready > 0 ? $"{ready} ready" : null, done > 0 ? $"{done} already applied" : null, $"{problems} cannot be applied" }.Where(p => p is not null))
             : problems > 0 ? $"{problems} of {rows.Count} files cannot be applied"
             : ready > 0 ? $"{ready} of {rows.Count} files ready"
             : "Already applied";
