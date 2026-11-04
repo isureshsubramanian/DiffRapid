@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
+using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Patching;
 
@@ -92,12 +95,20 @@ public sealed record FilePatchWriteResult(FilePatchPlan File, bool Written, stri
 /// <summary>Previews and applies a patch to files under a folder, or to a single chosen file.</summary>
 public static class FolderPatchApplier
 {
+    private static readonly IReadOnlyList<HunkOutcome> NoOutcomes = Array.Empty<HunkOutcome>();
+
+    private static StringComparison PathComparison =>
+        RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     /// <summary>
     /// Plans every file of <paramref name="patch"/> relative to <paramref name="root"/> without writing anything.
     /// </summary>
     public static FolderPatchPlan Plan(Patch patch, string root, PatchApplyOptions? options = null)
     {
-        throw new NotImplementedException();
+        options ??= new PatchApplyOptions();
+        var fullRoot = Path.GetFullPath(root);
+        var files = patch.Files.Select(file => PlanUnderRoot(file, fullRoot, options)).ToList();
+        return new FolderPatchPlan(fullRoot, options, files.AsReadOnly());
     }
 
     /// <summary>
@@ -106,7 +117,12 @@ public static class FolderPatchApplier
     /// </summary>
     public static FilePatchPlan PlanFile(FilePatch patch, string filePath, PatchApplyOptions? options = null)
     {
-        throw new NotImplementedException();
+        options ??= new PatchApplyOptions();
+        var fullPath = Path.GetFullPath(filePath);
+        var deletes = (options.Reverse ? patch.OldPath : patch.NewPath) is null;
+        var target = deletes ? null : fullPath;
+        var action = deletes ? FilePatchAction.Delete : FilePatchAction.Modify;
+        return PlanContent(patch, Path.GetFileName(fullPath), fullPath, target, action, options);
     }
 
     /// <summary>
@@ -115,12 +131,261 @@ public static class FolderPatchApplier
     /// </summary>
     public static IReadOnlyList<FilePatchWriteResult> Apply(FolderPatchPlan plan, Func<FilePatchPlan, bool>? include = null)
     {
-        throw new NotImplementedException();
+        var results = new List<FilePatchWriteResult>();
+        foreach (var file in plan.Files)
+        {
+            if (include is not null && !include(file))
+            {
+                continue;
+            }
+
+            results.Add(ApplyFile(file));
+        }
+
+        return results.AsReadOnly();
     }
 
     /// <summary>Writes one planned file; see <see cref="Apply(FolderPatchPlan, Func{FilePatchPlan, bool}?)"/>.</summary>
     public static FilePatchWriteResult ApplyFile(FilePatchPlan file)
     {
-        throw new NotImplementedException();
+        if (!file.CanApply)
+        {
+            return new FilePatchWriteResult(file, false, file.Message ?? "The file is not ready to apply.");
+        }
+
+        try
+        {
+            var stale = StaleReason(file);
+            if (stale is not null)
+            {
+                return new FilePatchWriteResult(file, false, stale);
+            }
+
+            WriteChange(file);
+            return new FilePatchWriteResult(file, true, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return new FilePatchWriteResult(file, false, ex.Message);
+        }
+    }
+
+    private static FilePatchPlan PlanUnderRoot(FilePatch patch, string root, PatchApplyOptions options)
+    {
+        var sourceName = options.Reverse ? patch.NewPath : patch.OldPath;
+        var targetName = options.Reverse ? patch.OldPath : patch.NewPath;
+        var display = targetName ?? sourceName ?? string.Empty;
+        if (sourceName is not null && targetName is not null && sourceName != targetName)
+        {
+            display = sourceName + " → " + targetName;
+        }
+
+        if (sourceName is null && targetName is null)
+        {
+            return Rejected(patch, display, FilePatchStatus.Failed, "The patch has no file path.");
+        }
+
+        string? source;
+        string? target;
+        try
+        {
+            source = sourceName is null ? null : Resolve(root, sourceName);
+            target = targetName is null ? null : Resolve(root, targetName);
+        }
+        catch (UnsafePathException ex)
+        {
+            return Rejected(patch, display, FilePatchStatus.Unsafe, ex.Message);
+        }
+
+        var action = source is null ? FilePatchAction.Add
+            : target is null ? FilePatchAction.Delete
+            : string.Equals(source, target, PathComparison) ? FilePatchAction.Modify
+            : FilePatchAction.Rename;
+        return PlanContent(patch, display, source, target, action, options);
+    }
+
+    /// <summary>Reads the source, applies the hunks in memory and decides whether the result can be written.</summary>
+    private static FilePatchPlan PlanContent(FilePatch patch, string display, string? source, string? target, FilePatchAction action, PatchApplyOptions options)
+    {
+        var readPath = source ?? target!;
+        var exists = File.Exists(readPath);
+        var decoded = exists ? TextFileReader.ReadFile(readPath) : new DecodedText(string.Empty, new UTF8Encoding(false), false, false);
+        if (decoded.IsBinary || patch.IsBinary)
+        {
+            return Rejected(patch, display, FilePatchStatus.Binary, "Binary changes cannot be applied from a text patch.") with { SourcePath = source, TargetPath = target, Action = action };
+        }
+
+        var result = PatchApplier.Apply(decoded.Text, patch, options);
+        var allAlreadyApplied = result.Outcomes.Count > 0 && result.Outcomes.All(o => o.Status == HunkStatus.AlreadyApplied);
+        var problem = FileStateProblem(action, exists, decoded.Text, result, allAlreadyApplied);
+        problem ??= FirstFailure(patch, result, options);
+
+        var status = problem is not null ? FilePatchStatus.Failed
+            : allAlreadyApplied || (action == FilePatchAction.Delete && !exists) ? FilePatchStatus.AlreadyApplied
+            : FilePatchStatus.Ready;
+        return new FilePatchPlan(
+            patch,
+            display,
+            source,
+            target,
+            action,
+            status,
+            source is null ? string.Empty : decoded.Text,
+            action == FilePatchAction.Delete ? string.Empty : result.Text,
+            result.Outcomes,
+            problem)
+        {
+            Encoding = decoded.Encoding,
+            HasByteOrderMark = decoded.HasByteOrderMark,
+        };
+    }
+
+    /// <summary>Checks that the file's presence fits the action (the rules of patch(1) and git apply).</summary>
+    private static string? FileStateProblem(FilePatchAction action, bool exists, string original, PatchApplyResult result, bool allAlreadyApplied)
+    {
+        switch (action)
+        {
+            case FilePatchAction.Add:
+            {
+                // An existing file is only acceptable when it already holds the added content.
+                var acceptable = !exists || ((result.Outcomes.Count > 0 || original.Length == 0) && allAlreadyApplied);
+                return acceptable ? null : "The file to add already exists with other content.";
+            }
+
+            case FilePatchAction.Delete:
+            {
+                // A deletion must consume the whole file, or the file must already be gone.
+                var acceptable = !exists || (result.Succeeded && result.Text.Length == 0);
+                return acceptable ? null : "The file to delete has content the patch does not remove.";
+            }
+
+            default:
+                return exists ? null : "The file does not exist.";
+        }
+    }
+
+    private static string? FirstFailure(FilePatch patch, PatchApplyResult result, PatchApplyOptions options)
+    {
+        for (var i = 0; i < result.Outcomes.Count; i++)
+        {
+            if (result.Outcomes[i].Status == HunkStatus.Failed)
+            {
+                var hunk = patch.Hunks[i];
+                var line = options.Reverse ? hunk.NewStart : hunk.OldStart;
+                return $"Hunk {i + 1} did not match near line {line}.";
+            }
+        }
+
+        return null;
+    }
+
+    private static FilePatchPlan Rejected(FilePatch patch, string display, FilePatchStatus status, string message) =>
+        new(patch, display, null, null, FilePatchAction.Modify, status, string.Empty, string.Empty, NoOutcomes, message);
+
+    /// <summary>Rejects absolute paths, parent traversal, drive-qualified components, and links on the way.</summary>
+    private static string Resolve(string root, string path)
+    {
+        var components = path.Split('/', '\\');
+        if (Path.IsPathRooted(path) || components.Any(c => c == ".." || c.IndexOf(':') >= 0))
+        {
+            throw new UnsafePathException("Unsafe patch path: " + path);
+        }
+
+        var resolved = Path.GetFullPath(Path.Combine(root, path));
+        var trimmedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var rootPrefix = trimmedRoot + Path.DirectorySeparatorChar;
+        if (!resolved.StartsWith(rootPrefix, PathComparison))
+        {
+            throw new UnsafePathException("The patch path leaves the folder: " + path);
+        }
+
+        // Existing links can redirect an otherwise safe path outside the root.
+        var current = resolved;
+        while (current is not null && current.Length > trimmedRoot.Length)
+        {
+            var entryExists = File.Exists(current) || Directory.Exists(current);
+            if (entryExists && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new UnsafePathException("The patch path goes through a link: " + path);
+            }
+
+            current = Path.GetDirectoryName(current);
+        }
+
+        return resolved;
+    }
+
+    /// <summary>Returns why the disk no longer matches the preview, or null when it still does.</summary>
+    private static string? StaleReason(FilePatchPlan file)
+    {
+        if (file.SourcePath is null)
+        {
+            return file.TargetPath is not null && File.Exists(file.TargetPath) ? "The file was created since the preview." : null;
+        }
+
+        if (!File.Exists(file.SourcePath))
+        {
+            return "The file was removed since the preview.";
+        }
+
+        var current = TextFileReader.ReadFile(file.SourcePath).Text;
+        return current == file.OriginalText ? null : "The file changed since the preview.";
+    }
+
+    private static void WriteChange(FilePatchPlan file)
+    {
+        if (file.TargetPath is null)
+        {
+            File.Delete(file.SourcePath!);
+            return;
+        }
+
+        WriteAtomically(file.TargetPath, file.PatchedText, file.Encoding, file.HasByteOrderMark);
+        if (file.Action == FilePatchAction.Rename)
+        {
+            File.Delete(file.SourcePath!);
+        }
+    }
+
+    /// <summary>Writes through a temporary file in the same folder so a failure never leaves a half-written file.</summary>
+    private static void WriteAtomically(string path, string text, Encoding encoding, bool byteOrderMark)
+    {
+        var folder = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(folder);
+        var temporary = Path.Combine(folder, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp");
+        try
+        {
+            var preamble = byteOrderMark ? encoding.GetPreamble() : Array.Empty<byte>();
+            var content = encoding.GetBytes(text);
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write))
+            {
+                stream.Write(preamble, 0, preamble.Length);
+                stream.Write(content, 0, content.Length);
+            }
+
+            if (File.Exists(path))
+            {
+                File.Replace(temporary, path, null);
+            }
+            else
+            {
+                File.Move(temporary, path);
+            }
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private sealed class UnsafePathException : Exception
+    {
+        public UnsafePathException(string message)
+            : base(message)
+        {
+        }
     }
 }
