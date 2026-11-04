@@ -14,16 +14,16 @@
     <Preview>true</Preview>
   </Metadata>
   <Installation>
-    <!-- VS 2026 first. To add VS 2022 later, lower both ranges to [17.14,) (ADR-0001). -->
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[18.0,)">
+    <!-- The Marketplace requires 17.14 as the lower bound (aka.ms/vs2026extensioncompat); VS 2026 is the primary target and VS 2022 17.14 can install it too. -->
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,)">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[18.0,)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14,)">
       <ProductArchitecture>arm64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
   <Prerequisites>
-    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[18.0,)" DisplayName="Visual Studio core editor" />
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.14,)" DisplayName="Visual Studio core editor" />
   </Prerequisites>
   <Assets>
     <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
