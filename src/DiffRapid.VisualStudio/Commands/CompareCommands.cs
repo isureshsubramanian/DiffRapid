@@ -404,7 +404,7 @@ internal static class CompareCommands
             versions.Add(new VersionInfo(index.ToString(System.Globalization.CultureInfo.InvariantCulture), "#" + (index + 1), entry.Label, entry.TimestampUtc.ToLocalTime(), subject, path));
         }
 
-        var dialog = new VersionPickerDialog(name, "the local history", versions);
+        var dialog = new VersionPickerDialog(name, "the local history", versions, authorHeader: "Saved as", descriptionHeader: "Size");
         if (dialog.ShowModal() != true || dialog.SelectedVersion is not { } version)
         {
             return;

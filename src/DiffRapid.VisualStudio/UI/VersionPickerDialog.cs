@@ -16,7 +16,14 @@ internal sealed class VersionPickerDialog : DialogWindow
     private readonly ListView _list = new() { SelectionMode = SelectionMode.Single, MinHeight = 260 };
     private readonly Button _compare;
 
-    public VersionPickerDialog(string fileName, string provider, IReadOnlyList<VersionInfo> versions)
+    /// <param name="authorHeader">The Author column's title; the local history shows how a version was kept there.</param>
+    /// <param name="descriptionHeader">The Description column's title; the local history shows the size there.</param>
+    public VersionPickerDialog(
+        string fileName,
+        string provider,
+        IReadOnlyList<VersionInfo> versions,
+        string authorHeader = "Author",
+        string descriptionHeader = "Description")
     {
         Title = "DiffRapid";
         Width = 760;
@@ -43,10 +50,14 @@ internal sealed class VersionPickerDialog : DialogWindow
         var view = new GridView();
         view.Columns.Add(Column("Version", nameof(VersionInfo.ShortId), 90));
         view.Columns.Add(Column("Date", nameof(VersionInfo.Date), 140, "{0:yyyy-MM-dd HH:mm}"));
-        view.Columns.Add(Column("Author", nameof(VersionInfo.Author), 140));
-        view.Columns.Add(Column("Description", nameof(VersionInfo.Subject), 340));
+        view.Columns.Add(Column(authorHeader, nameof(VersionInfo.Author), 140));
+        view.Columns.Add(Column(descriptionHeader, nameof(VersionInfo.Subject), 340));
         _list.View = view;
-        ApplyTheme(_list, view);
+
+        // The Visual Studio list styles keep the selected row readable in every theme.
+        _list.SetResourceReference(StyleProperty, VsResourceKeys.ThemedDialogListViewStyleKey);
+        _list.SetResourceReference(ItemsControl.ItemContainerStyleProperty, VsResourceKeys.ThemedDialogListViewItemGridStyleKey);
+        DiffTheme.ShowColumnHeaders(_list, view);
         _list.ItemsSource = versions;
         _list.Margin = new Thickness(20, 0, 20, 12);
         _list.MouseDoubleClick += (_, e) =>
@@ -90,27 +101,6 @@ internal sealed class VersionPickerDialog : DialogWindow
         Width = width,
         DisplayMemberBinding = new Binding(property) { StringFormat = format, ConverterCulture = CultureInfo.CurrentCulture },
     };
-
-    // A plain ListView and its column headers keep light system colours; follow the Visual Studio theme instead.
-    private static void ApplyTheme(ListView list, GridView view)
-    {
-        list.SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
-        list.SetResourceReference(ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
-        list.SetResourceReference(BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
-
-        var header = new Style(typeof(GridViewColumnHeader));
-        header.Setters.Add(new Setter(GridViewColumnHeader.BackgroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarGradientBeginBrushKey)));
-        header.Setters.Add(new Setter(GridViewColumnHeader.ForegroundProperty, new DynamicResourceExtension(EnvironmentColors.CommandBarTextActiveBrushKey)));
-        header.Setters.Add(new Setter(GridViewColumnHeader.BorderBrushProperty, new DynamicResourceExtension(EnvironmentColors.ToolWindowBorderBrushKey)));
-        header.Setters.Add(new Setter(GridViewColumnHeader.HorizontalContentAlignmentProperty, HorizontalAlignment.Left));
-        header.Setters.Add(new Setter(GridViewColumnHeader.PaddingProperty, new Thickness(6, 3, 6, 3)));
-        view.ColumnHeaderContainerStyle = header;
-
-        var item = new Style(typeof(ListViewItem));
-        item.Setters.Add(new Setter(ListViewItem.ForegroundProperty, new DynamicResourceExtension(EnvironmentColors.ToolWindowTextBrushKey)));
-        item.Setters.Add(new Setter(ListViewItem.PaddingProperty, new Thickness(0, 2, 0, 2)));
-        list.ItemContainerStyle = item;
-    }
 
     private static Button DialogButton(string text, RoutedEventHandler onClick)
     {
