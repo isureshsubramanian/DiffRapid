@@ -36,10 +36,34 @@ public sealed class DiffRapidPackage : AsyncPackage
     }
 
     /// <summary>
-    /// Opens a new comparison document tab for two files. Word, Excel and PowerPoint files are compared as their
-    /// text, through temporary copies (editing those does not change the documents).
+    /// Opens a new comparison document tab for two files. Two CSV or TSV files open in the table view;
+    /// everything else opens as text (see <see cref="OpenTextComparisonAsync"/>).
     /// </summary>
-    public Task OpenComparisonAsync(string leftPath, string rightPath) =>
+    public Task OpenComparisonAsync(string leftPath, string rightPath)
+    {
+        if (IsTableFile(leftPath) && IsTableFile(rightPath))
+        {
+            return OpenDocumentAsync(
+                "Loading the table comparison",
+                () => Task.FromResult<FrameworkElement>(new TableDiffControl(this, leftPath, rightPath)),
+                Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
+                hostsEditors: false);
+        }
+
+        return OpenTextComparisonAsync(leftPath, rightPath);
+    }
+
+    private static bool IsTableFile(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".csv", StringComparison.OrdinalIgnoreCase) || extension.Equals(".tsv", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Opens a new text comparison document tab for two files. Word, Excel and PowerPoint files are compared as
+    /// their text, through temporary copies (editing those does not change the documents).
+    /// </summary>
+    public Task OpenTextComparisonAsync(string leftPath, string rightPath) =>
         OpenDocumentAsync(
             "Loading the comparison",
             async () =>
