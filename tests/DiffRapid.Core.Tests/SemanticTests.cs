@@ -9,7 +9,10 @@ namespace DiffRapid.Core.Tests;
 
 public sealed class SemanticTests
 {
-    private const string Shapes =
+    // Raw string literals take the line breaks of the checkout (CRLF with core.autocrlf); the tests edit LF text.
+    private static readonly string Shapes = ShapesSource.Replace("\r\n", "\n");
+
+    private const string ShapesSource =
         """
         namespace Demo
         {
