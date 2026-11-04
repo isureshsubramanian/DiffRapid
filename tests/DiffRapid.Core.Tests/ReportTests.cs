@@ -220,7 +220,7 @@ public sealed class ReportTests : IDisposable
         Assert.Equal("different", element.GetProperty("status").GetString());
         Assert.Equal(JsonValueKind.Null, element.GetProperty("error").ValueKind);
         Assert.Equal(
-            ["identical", "different", "leftOnly", "rightOnly", "typeConflict", "skipped", "error"],
+            ["identical", "different", "leftOnly", "rightOnly", "typeConflict", "skipped", "error", "renamed", "moved"],
             element.GetProperty("counts").EnumerateObject().Select(p => p.Name));
         Assert.Equal(1, element.GetProperty("counts").GetProperty("rightOnly").GetInt32());
         Assert.Equal(0, element.GetProperty("counts").GetProperty("identical").GetInt32());

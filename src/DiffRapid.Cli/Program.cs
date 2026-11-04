@@ -63,6 +63,7 @@ internal static partial class Program
           diffrapid git-config [--global]      print setup commands for Git Bash / POSIX shells
           diffrapid api <left.dll|.nupkg> [<right.dll|.nupkg>] [--breaking-only]
                          One file: print its public API. Two: list API changes, marking breaking ones.
+          diffrapid plugins                      list the built-in unpackers and prediffers
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -80,6 +81,8 @@ internal static partial class Program
           -u, --context <n>                     lines of context in the unified diff (default: 3)
           --left-label <text>, --right-label <text>
           --quiet                               only set the exit code
+          --unpacker <pipeline>                 turn files into text first: auto, ZipEntries, "PrettifyJson | SortLines"
+          --prediffer <pipeline>                transform text before comparing, e.g. "IgnoreComments c | ToLower"
 
         merge options:
           -o, --output <file>                   write the merged result to a file (default: stdout)
@@ -125,6 +128,7 @@ internal static partial class Program
                 "image" => RunImage(args),
                 "resolve" => RunResolve(parsed),
                 "api" => RunApi(parsed),
+                "plugins" => RunPlugins(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 

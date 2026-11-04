@@ -50,6 +50,8 @@ internal static partial class Program
             "profile",
             "bytes-per-line",
             "similarity",
+            "unpacker",
+            "prediffer",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);

@@ -22,8 +22,8 @@ internal static partial class Program
         var rightPath = args.Has("rev") ? leftPath : args.Positionals[1];
         var options = args.ToCompareOptions();
         var encoding = args.Has("cp") ? Encoding.GetEncoding(args.IntValue("cp", 0)) : null;
-        var left = args.Has("rev") ? LoadRevision(leftPath, args.Value("rev")!, encoding) : LoadDocumentOrText(leftPath, encoding);
-        var result = TextComparer.Compare(left, LoadDocumentOrText(rightPath, encoding), options);
+        var (left, right) = LoadDiffInputs(args, leftPath, rightPath, encoding);
+        var result = TextComparer.Compare(left, right, options);
         if (args.Has("rev"))
         {
             leftPath += "@" + args.Value("rev");

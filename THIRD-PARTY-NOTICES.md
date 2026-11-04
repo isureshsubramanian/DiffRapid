@@ -4,13 +4,9 @@
 
 | Component | License | Used for |
 |---|---|---|
-| System.Text.Json (and its .NET Standard support packages) | MIT | JSON output of comparisons (DiffRapid.Core) |
-
-## Runtime dependencies
-
-| Component | License | Used for |
-|---|---|---|
+| System.Text.Json (and its .NET Standard support packages) | MIT | JSON output of comparisons and the JSON plugins (DiffRapid.Core) |
 | System.Reflection.Metadata | MIT | Reading assembly metadata for the API compare (part of .NET; a package on .NET Standard 2.0) |
+| DocumentFormat.OpenXml | MIT | Reading Word, Excel and PowerPoint files as text (DiffRapid.Documents) |
 
 ## Build and test dependencies (not redistributed)
 

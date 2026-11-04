@@ -51,9 +51,11 @@ namespace DiffRapid.Core.Output;
 ///     { "path": "src/a.cs",                      // relative, '/' separated
 ///       "type": "file",                          // file | folder | link
 ///       "status": "different",                   // identical | different | leftOnly | rightOnly |
-///                                                // typeConflict | skipped | error
+///                                                // typeConflict | skipped | error | renamed | moved
 ///       "differenceCount": 2,                    // null when not compared as text
 ///       "error": null,
+///       "counterpartPath": "src/b.cs",           // renamed/moved only: the other side's path
+///       "similarity": 0.8,                       // renamed/moved only, when matched by similarity
 ///       "left":  { "size": 120, "modifiedUtc": "2026-01-02T03:04:05.0000000Z" },  // null when absent
 ///       "right": { "size": 98,  "modifiedUtc": "2026-01-02T03:04:06.0000000Z" } }
 ///   ]
@@ -167,6 +169,8 @@ public static class JsonReportWriter
         FolderCompareStatus.TypeConflict => "typeConflict",
         FolderCompareStatus.Skipped => "skipped",
         FolderCompareStatus.Error => "error",
+        FolderCompareStatus.Renamed => "renamed",
+        FolderCompareStatus.Moved => "moved",
         _ => throw new ArgumentOutOfRangeException(nameof(status)),
     };
 
@@ -235,6 +239,15 @@ public static class JsonReportWriter
         }
 
         WriteNullableString(json, "error", item.Error);
+        if (item.CounterpartPath is { } counterpart)
+        {
+            json.WriteString("counterpartPath", Slashes(counterpart));
+            if (item.Similarity is { } similarity)
+            {
+                json.WriteNumber("similarity", similarity);
+            }
+        }
+
         WriteMeta(json, "left", item.Left);
         WriteMeta(json, "right", item.Right);
         json.WriteEndObject();
