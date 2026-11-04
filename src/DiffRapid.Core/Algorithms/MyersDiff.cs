@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 
 namespace DiffRapid.Core.Algorithms;
@@ -5,12 +6,13 @@ namespace DiffRapid.Core.Algorithms;
 /// <summary>
 /// Linear-space Myers diff ("An O(ND) Difference Algorithm and Its Variations", E. Myers, 1986),
 /// using the middle-snake divide and conquer.
-/// A search is limited to one million frontier visits across its subranges; remaining ranges become
-/// replacements. Memory remains linear and the edit script remains valid, but may not be minimal.
+/// A search is limited to a number of frontier visits that grows with the input (see <see cref="SearchBudget"/>);
+/// ranges left when it runs out become replacements. Memory remains linear and the edit script remains valid,
+/// but may not be minimal. The minimal variant has no limit.
 /// </summary>
 public sealed class MyersDiff : IDiffAlgorithm
 {
-    private readonly long _maxSearchSteps = 1000000;
+    private readonly bool _minimal;
 
     /// <summary>Creates a linear-space search with a bounded replacement fallback.</summary>
     public MyersDiff()
@@ -19,13 +21,15 @@ public sealed class MyersDiff : IDiffAlgorithm
 
     internal MyersDiff(bool minimal)
     {
-        _maxSearchSteps = minimal ? long.MaxValue : 1000000;
+        _minimal = minimal;
     }
 
     public void Compare(int[] a, int[] b, bool[] changedA, bool[] changedB, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var context = new Context(a, b, changedA, changedB, a.Length + b.Length, _maxSearchSteps, cancellationToken);
+        var size = a.Length + b.Length;
+        var budget = _minimal ? long.MaxValue : SearchBudget(size);
+        var context = new Context(a, b, changedA, changedB, size, budget, cancellationToken);
         context.Diff(0, a.Length, 0, b.Length);
     }
 
@@ -34,9 +38,18 @@ public sealed class MyersDiff : IDiffAlgorithm
         int[] a, int aLo, int aHi, int[] b, int bLo, int bHi,
         bool[] changedA, bool[] changedB, CancellationToken cancellationToken)
     {
-        var context = new Context(a, b, changedA, changedB, (aHi - aLo) + (bHi - bLo), 1000000, cancellationToken);
+        var size = (aHi - aLo) + (bHi - bLo);
+        var context = new Context(a, b, changedA, changedB, size, SearchBudget(size), cancellationToken);
         context.Diff(aLo, aHi, bLo, bHi);
     }
+
+    /// <summary>
+    /// Frontier visits allowed for an input of <paramref name="size"/> lines: at least a million, and 256 per line,
+    /// so a 400k-line pair may cost about 100 million cheap steps. The cost of a search grows with the square of the
+    /// number of edits, so this keeps the exact result for some ten thousand changed lines in a large file, instead
+    /// of turning a file with a few thousand changes into one replacement.
+    /// </summary>
+    internal static long SearchBudget(int size) => Math.Max(1000000L, 256L * size);
 
     private sealed class Context
     {

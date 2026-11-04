@@ -47,6 +47,18 @@ public sealed class PerfGuardTests
     }
 
     [Fact]
+    public void Bounded_search_keeps_thousands_of_scattered_changes_apart()
+    {
+        // 3,000 changed lines among 60,000: well past a fixed million-step budget, inside one that grows with the input.
+        var left = Enumerable.Range(0, 60000).ToArray();
+        var right = left.Select(key => key % 20 == 0 ? key + 1000000 : key).ToArray();
+        var hunks = TextComparer.ComputeHunks(left, right, DiffAlgorithmKind.Default, CancellationToken.None);
+
+        AlgorithmTests.AssertValidEditScript(left, right, hunks);
+        Assert.Equal(3000, hunks.Count);
+    }
+
+    [Fact]
     public void Histogram_handles_sparse_keys_without_allocating_by_the_largest_key()
     {
         int[] left = [int.MaxValue, 1, int.MaxValue - 1];
