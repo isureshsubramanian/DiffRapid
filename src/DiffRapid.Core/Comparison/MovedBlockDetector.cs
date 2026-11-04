@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Threading;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Comparison;
@@ -13,8 +15,15 @@ internal static class MovedBlockDetector
 
     private const int MinLinesForTrivialMove = 3;
 
-    public static IReadOnlyList<MovedBlock> Detect(IReadOnlyList<DiffHunk> hunks, TextDocument left, int[] leftKeys, int[] rightKeys)
+    public static IReadOnlyList<MovedBlock> Detect(
+        IReadOnlyList<DiffHunk> hunks, TextDocument left, int[] leftKeys, int[] rightKeys, CancellationToken cancellationToken)
     {
+        // A move needs two distinct hunks; avoid indexing an entire replacement from the cost fallback.
+        if (hunks.Count < 2)
+        {
+            return Array.Empty<MovedBlock>();
+        }
+
         var removedHunk = new int[leftKeys.Length];
         var addedHunk = new int[rightKeys.Length];
         for (var i = 0; i < removedHunk.Length; i++)
@@ -30,6 +39,7 @@ internal static class MovedBlockDetector
         var addedByKey = new Dictionary<int, List<int>>();
         for (var h = 0; h < hunks.Count; h++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var hunk = hunks[h];
             if (hunk.Significance != DiffSignificance.Important)
             {
@@ -59,6 +69,7 @@ internal static class MovedBlockDetector
         var li = 0;
         while (li < leftKeys.Length)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (removedHunk[li] < 0 || !addedByKey.TryGetValue(leftKeys[li], out var candidates))
             {
                 li++;

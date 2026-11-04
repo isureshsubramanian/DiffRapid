@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using DiffRapid.Core.Algorithms;
@@ -16,8 +17,30 @@ public sealed record InlineDiff(IReadOnlyList<TextSpan> Left, IReadOnlyList<Text
 /// <summary>Highlights the words or characters that differ between two versions of a line.</summary>
 public static class InlineDiffer
 {
+    internal const int MaxInputLength = 10000;
+
     public static InlineDiff Compare(string left, string right, CompareOptions? options = null)
     {
+        return Compare(left, right, options, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Highlights a line pair with cancellation. Inputs over 10,000 characters use whole-line spans
+    /// to bound tokenization and search cost.
+    /// </summary>
+    public static InlineDiff Compare(string left, string right, CompareOptions? options, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.Equals(left, right, StringComparison.Ordinal))
+        {
+            return new InlineDiff(Array.Empty<TextSpan>(), Array.Empty<TextSpan>());
+        }
+
+        if (left.Length > MaxInputLength || right.Length > MaxInputLength)
+        {
+            return new InlineDiff(WholeLine(left), WholeLine(right));
+        }
+
         options ??= CompareOptions.Default;
         var leftTokens = Tokenize(left, options.InlineGranularity);
         var rightTokens = Tokenize(right, options.InlineGranularity);
@@ -33,9 +56,14 @@ public static class InlineDiffer
 
         var changedA = new bool[a.Length];
         var changedB = new bool[b.Length];
-        new MyersDiff().Compare(a, b, changedA, changedB, CancellationToken.None);
+        new MyersDiff().Compare(a, b, changedA, changedB, cancellationToken);
 
         return new InlineDiff(ToSpans(leftFiltered, changedA), ToSpans(rightFiltered, changedB));
+    }
+
+    private static IReadOnlyList<TextSpan> WholeLine(string text)
+    {
+        return text.Length == 0 ? Array.Empty<TextSpan>() : new[] { new TextSpan(0, text.Length) };
     }
 
     internal static List<TextSpan> Tokenize(string text, InlineGranularity granularity)

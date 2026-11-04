@@ -37,6 +37,7 @@ internal static class SideBySideHtml
 {
     /// <summary>Lines longer than this are shown without inline marks, to bound the word diff's cost.</summary>
     internal const int MaxInlineLineLength = 10000;
+    internal const int MaxInlineHunkLines = 200;
 
     internal const string Style =
         ".sbs{border-collapse:collapse;width:100%;table-layout:fixed;margin:0 0 1.5rem;font:12px/1.45 ui-monospace,'Cascadia Mono',Consolas,monospace}"
@@ -157,9 +158,10 @@ internal static class SideBySideHtml
             var oldClass = ignored ? "i" : "o";
             var newClass = ignored ? "i" : "n";
             var paired = Math.Min(hunk.LeftCount, hunk.RightCount);
+            var includeInline = !ignored && hunk.LeftCount <= MaxInlineHunkLines && hunk.RightCount <= MaxInlineHunkLines;
             for (var i = 0; i < paired; i++)
             {
-                var marks = ignored ? null : InlineMarks(_result.Left[hunk.LeftStart + i].Content, _result.Right[hunk.RightStart + i].Content);
+                var marks = includeInline ? InlineMarks(_result.Left[hunk.LeftStart + i].Content, _result.Right[hunk.RightStart + i].Content) : null;
                 WriteRow(oldClass, hunk.LeftStart + i, newClass, hunk.RightStart + i, ignored ? "ign" : "chg", marks);
             }
 
@@ -181,11 +183,12 @@ internal static class SideBySideHtml
                 return null;
             }
 
-            return InlineDiffer.Compare(left, right, _result.Options);
+            return InlineDiffer.Compare(left, right, _result.Options, _cancellationToken);
         }
 
         private void WriteRow(string leftClass, int? leftLine, string rightClass, int? rightLine, string rowClass, InlineDiff? marks)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             _writer.Write(rowClass.Length == 0 ? "<tr>" : "<tr class=\"" + rowClass + "\">");
             WriteCell(leftClass, leftLine, _result.Left, marks?.Left);
             WriteCell(rightClass, rightLine, _result.Right, marks?.Right);

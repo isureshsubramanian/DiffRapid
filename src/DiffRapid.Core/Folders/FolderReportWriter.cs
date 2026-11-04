@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Threading;
 
 namespace DiffRapid.Core.Folders;
 
@@ -52,13 +53,28 @@ public static class FolderReportWriter
     /// <summary>Writes one self-contained HTML page (inline styles, no scripts) that follows light and dark mode.</summary>
     public static void WriteHtml(FolderCompareResult result, FolderReportOptions options, TextWriter writer)
     {
+        WriteHtml(result, options, writer, CancellationToken.None);
+    }
+
+    /// <summary>Streams an HTML report, observing cancellation between rows.</summary>
+    public static void WriteHtml(FolderCompareResult result, FolderReportOptions options, TextWriter writer, CancellationToken cancellationToken)
+    {
+        WriteHtml(result, options, writer, string.Empty, null, cancellationToken);
+    }
+
+    internal static void WriteHtml(
+        FolderCompareResult result, FolderReportOptions options, TextWriter writer,
+        string extraStyle, Action? writeBodySuffix, CancellationToken cancellationToken)
+    {
         Validate(result, options, writer);
+        cancellationToken.ThrowIfCancellationRequested();
         var rows = Rows(result, options);
 
         writer.Write("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>");
         writer.Write(Encode(options.Title));
         writer.Write("</title><style>");
         writer.Write(Style);
+        writer.Write(extraStyle);
         writer.Write("</style></head><body><h1>");
         writer.Write(Encode(options.Title));
         writer.Write("</h1><dl>");
@@ -77,6 +93,7 @@ public static class FolderReportWriter
         writer.Write("</dl><ul class=\"summary\">");
         foreach (FolderCompareStatus status in Enum.GetValues(typeof(FolderCompareStatus)))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (status == FolderCompareStatus.Skipped || (status == FolderCompareStatus.Identical && !options.IncludeIdentical))
             {
                 continue;
@@ -90,6 +107,7 @@ public static class FolderReportWriter
             + "<th>Right size</th><th>Right modified (UTC)</th><th>Differences</th><th>Error</th></tr></thead><tbody>");
         foreach (var item in rows)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             writer.Write("<tr><td>" + Encode(item.RelativePath) + "</td>");
             writer.Write("<td><span class=\"pill " + item.Status + "\">" + Label(item.Status) + "</span></td>");
             writer.Write("<td class=\"n\">" + Size(item.Left) + "</td><td>" + Encode(Modified(item.Left)) + "</td>");
@@ -97,7 +115,9 @@ public static class FolderReportWriter
             writer.Write("<td class=\"n\">" + Differences(item) + "</td><td>" + Encode(item.Error ?? string.Empty) + "</td></tr>");
         }
 
-        writer.Write("</tbody></table></body></html>");
+        writer.Write("</tbody></table>");
+        writeBodySuffix?.Invoke();
+        writer.Write("</body></html>");
     }
 
     /// <summary>Writes RFC 4180 CSV with invariant values, raw status names and ISO-8601 UTC timestamps.</summary>
