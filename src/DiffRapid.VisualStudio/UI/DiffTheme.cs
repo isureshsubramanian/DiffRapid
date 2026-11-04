@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.VisualStudio.PlatformUI;
@@ -76,6 +77,95 @@ internal static class DiffTheme
         bar.SizeChanged += (_, _) => Arrange();
         left.SizeChanged += (_, _) => Arrange();
         right.SizeChanged += (_, _) => Arrange();
+    }
+
+    /// <summary>
+    /// Shows the column headers of a themed list: the Visual Studio list style has no header row, so once the list
+    /// is loaded its scroll area takes the standard grid-view layout (header row above the items), and the headers
+    /// get a flat, theme-aware look with a gripper for resizing.
+    /// </summary>
+    public static void ShowColumnHeaders(ListView list, GridView view)
+    {
+        view.ColumnHeaderContainerStyle = ColumnHeaderStyle.Value;
+        list.Loaded += (_, _) =>
+        {
+            if (FindChild<GridViewHeaderRowPresenter>(list) is not null || FindChild<ScrollViewer>(list) is not { } scroller)
+            {
+                return;
+            }
+
+            if (list.TryFindResource(GridView.GridViewScrollViewerStyleKey) is Style gridScroller)
+            {
+                scroller.Style = gridScroller;
+            }
+        };
+    }
+
+    private static readonly Lazy<Style> ColumnHeaderStyle = new(() =>
+    {
+        var text = new FrameworkElementFactory(typeof(ContentPresenter));
+        text.SetValue(FrameworkElement.MarginProperty, new Thickness(6, 3, 6, 4));
+        text.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+        text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        text.SetValue(TextElement.FontWeightProperty, FontWeights.SemiBold);
+
+        // The named gripper is what GridViewColumnHeader uses for resizing.
+        var gripper = new FrameworkElementFactory(typeof(Thumb), "PART_HeaderGripper");
+        gripper.SetValue(FrameworkElement.WidthProperty, 8.0);
+        gripper.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+        gripper.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, -4, 0));
+        gripper.SetValue(FrameworkElement.CursorProperty, Cursors.SizeWE);
+        gripper.SetValue(Control.TemplateProperty, new ControlTemplate(typeof(Thumb)) { VisualTree = TransparentBorder() });
+
+        var line = new FrameworkElementFactory(typeof(Border));
+        line.SetValue(FrameworkElement.WidthProperty, 1.0);
+        line.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+        line.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 4, 0, 4));
+        line.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+
+        var cell = new FrameworkElementFactory(typeof(Grid));
+        cell.AppendChild(text);
+        cell.AppendChild(line);
+        cell.AppendChild(gripper);
+
+        var chrome = new FrameworkElementFactory(typeof(Border));
+        chrome.SetValue(Border.BorderThicknessProperty, new Thickness(0, 0, 0, 1));
+        chrome.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+        chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
+        chrome.AppendChild(cell);
+
+        var style = new Style(typeof(GridViewColumnHeader));
+        style.Setters.Add(new Setter(Control.TemplateProperty, new ControlTemplate(typeof(GridViewColumnHeader)) { VisualTree = chrome }));
+        style.Setters.Add(new Setter(Control.ForegroundProperty, new DynamicResourceExtension(EnvironmentColors.SystemGrayTextBrushKey)));
+        style.Seal();
+        return style;
+    });
+
+    private static FrameworkElementFactory TransparentBorder()
+    {
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        return border;
+    }
+
+    private static T? FindChild<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindChild<T>(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
     }
 
     public static FrameworkElement Separator()

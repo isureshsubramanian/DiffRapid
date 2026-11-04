@@ -261,6 +261,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
     private UIElement BuildList()
     {
         _list.View = _view;
+        DiffTheme.ShowColumnHeaders(_list, _view);
         _list.BorderThickness = new Thickness(0);
         _list.SelectionMode = SelectionMode.Single;
         _list.SetResourceReference(StyleProperty, VsResourceKeys.ThemedDialogListViewStyleKey);
@@ -281,7 +282,6 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         var itemStyle = new Style(typeof(ListViewItem), _list.TryFindResource(VsResourceKeys.ThemedDialogListViewItemGridStyleKey) as Style);
         itemStyle.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
         _list.ItemContainerStyle = itemStyle;
-        _view.ColumnHeaderContainerStyle = _list.TryFindResource(VsResourceKeys.ThemedDialogGridViewColumnHeaderStyleKey) as Style;
     }
 
     private void OnThemeChanged(ThemeChangedEventArgs e)

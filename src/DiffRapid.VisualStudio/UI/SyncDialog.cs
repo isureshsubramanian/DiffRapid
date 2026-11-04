@@ -82,7 +82,7 @@ internal sealed class SyncDialog : DialogWindow
         ScrollViewer.SetHorizontalScrollBarVisibility(_list, ScrollBarVisibility.Disabled);
         _list.SetResourceReference(StyleProperty, VsResourceKeys.ThemedDialogListViewStyleKey);
         _list.SetResourceReference(ItemsControl.ItemContainerStyleProperty, VsResourceKeys.ThemedDialogListViewItemGridStyleKey);
-        _list.Loaded += (_, _) => view.ColumnHeaderContainerStyle = _list.TryFindResource(VsResourceKeys.ThemedDialogGridViewColumnHeaderStyleKey) as Style;
+        DiffTheme.ShowColumnHeaders(_list, view);
 
         _sync = DialogButton("_Synchronize", (_, _) => DialogResult = true);
         _sync.IsDefault = true;

@@ -183,7 +183,7 @@ internal sealed class ThreeWayFolderControl : DockPanel, IComparisonView
         _list.SelectionChanged += (_, _) => UpdateButtons();
         _list.SetResourceReference(StyleProperty, VsResourceKeys.ThemedDialogListViewStyleKey);
         _list.SetResourceReference(ItemsControl.ItemContainerStyleProperty, VsResourceKeys.ThemedDialogListViewItemGridStyleKey);
-        _list.Loaded += (_, _) => view.ColumnHeaderContainerStyle = _list.TryFindResource(VsResourceKeys.ThemedDialogGridViewColumnHeaderStyleKey) as Style;
+        DiffTheme.ShowColumnHeaders(_list, view);
         _list.MouseDoubleClick += (_, e) =>
         {
             if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(_list, source) is ListViewItem)

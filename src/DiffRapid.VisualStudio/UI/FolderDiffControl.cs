@@ -366,7 +366,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _list.SetResourceReference(StyleProperty, VsResourceKeys.ThemedDialogListViewStyleKey);
         _list.SetResourceReference(ItemsControl.ItemContainerStyleProperty, VsResourceKeys.ThemedDialogListViewItemGridStyleKey);
         _list.SetResourceReference(ImageThemingUtilities.ImageBackgroundColorProperty, EnvironmentColors.ToolWindowBackgroundColorKey);
-        _list.Loaded += (_, _) => view.ColumnHeaderContainerStyle = _list.TryFindResource(VsResourceKeys.ThemedDialogGridViewColumnHeaderStyleKey) as Style;
+        DiffTheme.ShowColumnHeaders(_list, view);
         VirtualizingPanel.SetIsVirtualizing(_list, true);
         VirtualizingPanel.SetVirtualizationMode(_list, VirtualizationMode.Recycling);
         _list.MouseDoubleClick += (_, e) =>
