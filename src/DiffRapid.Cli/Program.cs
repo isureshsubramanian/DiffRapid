@@ -40,7 +40,12 @@ internal static partial class Program
           diffrapid sync <left> <right> --profile mirror-right|mirror-left|update|update-both
                          [--dry-run] [--yes] [--include <glob>] [--exclude <glob>] [--filter-file <path>]
                          Prints the plan; --yes carries it out.
-          diffrapid git-config [--global]      print setup commands for Git Bash / POSIX shells
+          diffrapid table <left> <right> [--delimiter <c|tab|auto>] [--quote <c>] [--no-header]
+                         [--key <col,...>] [--ignore-column <col>] [--by-position] [--ignore-case] [--trim]
+                         [--tolerance <n>] [--relative-tolerance <n>] [--ignore-order] (with --key)
+                         [--report md|html [-o <file>]] [--quiet]
+                         Compares CSV/TSV/delimited files by row and cell; columns are header names or numbers from 1.
+          diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -97,6 +102,7 @@ internal static partial class Program
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
                 "sync" => RunSync(parsed),
+                "table" => RunTable(args),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
