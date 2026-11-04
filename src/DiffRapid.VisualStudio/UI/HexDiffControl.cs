@@ -137,6 +137,7 @@ internal sealed class HexDiffControl : DockPanel, IComparisonView, IOleCommandTa
 
         var summary = new StackPanel { Orientation = Orientation.Horizontal };
         summary.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Compare again (F5)", StartCompare));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Filter, "Plugins"), "Compare the files as text made by an unpacker, such as the list of files inside two .zip archives", CompareWithPlugins));
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_previous);
         summary.Children.Add(_next);
@@ -287,6 +288,32 @@ internal sealed class HexDiffControl : DockPanel, IComparisonView, IOleCommandTa
 
     /// <summary>Compares the files again in the current mode, then lays out the rows.</summary>
     private void StartCompare() => Start(recompare: true);
+
+    /// <summary>Asks for an unpacker and prediffers, then opens the text they make of both files.</summary>
+    private void CompareWithPlugins()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var dialog = new PluginsDialog(Path.GetFileName(_leftPath), Path.GetFileName(_rightPath));
+        if (dialog.ShowModal() != true)
+        {
+            return;
+        }
+
+        _package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            try
+            {
+                var left = await Task.Run(() => File.ReadAllBytes(_leftPath));
+                var right = await Task.Run(() => File.ReadAllBytes(_rightPath));
+                await _package.OpenPluginComparisonAsync(_leftPath, left, _rightPath, right, dialog.Options);
+            }
+            catch (Exception ex) when (ex is StepFailedException or IOException or UnauthorizedAccessException)
+            {
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                _verdict.Text = "The plugins could not run: " + (ex.InnerException ?? ex).Message;
+            }
+        }).FileAndForget("DiffRapid/CompareWithPlugins");
+    }
 
     /// <summary>Lays out the rows again for a new line width, keeping the comparison.</summary>
     private void StartLayout() => Start(recompare: _result is null);

@@ -65,4 +65,21 @@ internal sealed class FileHeader : Border
     public void SetLineCount(int lines) => _lines.Text = lines == 1 ? "1 line" : $"{lines:N0} lines";
 
     public void SetDirty(bool dirty) => _modified.Visibility = dirty ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Shows a "Read-only" mark for a pane that holds text taken from <paramref name="source"/>.</summary>
+    public void SetReadOnly(string source)
+    {
+        var mark = new TextBlock
+        {
+            Text = "Read-only",
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+            ToolTip = $"Text taken from {source}. It is compared, not edited: changes here would not reach the original file.",
+        };
+        mark.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
+        DockPanel.SetDock(mark, Dock.Right);
+        var row = (DockPanel)Child;
+        row.Children.Insert(row.Children.IndexOf(_modified) + 1, mark);
+    }
 }

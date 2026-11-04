@@ -142,6 +142,26 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// <summary>What a report calls the right file; see <see cref="LeftLabel"/>.</summary>
     public string? RightLabel { get; set; }
 
+    /// <summary>
+    /// Makes the panes that show text taken from another file (a Word document's text, an assembly's public API)
+    /// read-only, so nobody edits a temporary copy thinking it changes the original.
+    /// </summary>
+    public void MarkExtracted(bool left, bool right)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (left)
+        {
+            _left.MakeReadOnly();
+            _leftHeader.SetReadOnly(LeftLabel ?? _left.Path);
+        }
+
+        if (right)
+        {
+            _right.MakeReadOnly();
+            _rightHeader.SetReadOnly(RightLabel ?? _right.Path);
+        }
+    }
+
     public static async Task<TextDiffControl> CreateAsync(AsyncPackage package, string leftPath, string rightPath, CompareOptions options)
     {
         await package.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -216,6 +236,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.TreeView, "Compare structure"), "Compare the two files with keys, items and attributes in a fixed order, so reordering and layout do not count", CompareStructure));
         }
 
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Filter, "Plugins"), "Compare the files after an unpacker or prediffers, such as PrettifyJson or SortLines, have transformed them", CompareWithPlugins));
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         summary.Children.Add(_metrics);
@@ -584,6 +605,35 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// moved properties, items and attributes line up, and only real changes remain. Clicking again brings that
     /// tab back while the structure is unchanged, and replaces it after an edit.
     /// </summary>
+    /// <summary>Asks for an unpacker and prediffers, then opens what they make of both sides, unsaved edits included.</summary>
+    private void CompareWithPlugins()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var dialog = new PluginsDialog(System.IO.Path.GetFileName(_left.Path), System.IO.Path.GetFileName(_right.Path));
+        if (dialog.ShowModal() != true)
+        {
+            return;
+        }
+
+        var utf8 = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        var left = utf8.GetBytes(_left.Buffer.CurrentSnapshot.GetText());
+        var right = utf8.GetBytes(_right.Buffer.CurrentSnapshot.GetText());
+        var package = (DiffRapidPackage)_package;
+        _position.Text = "Running the plugins…";
+        package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            try
+            {
+                await package.OpenPluginComparisonAsync(_left.Path, left, _right.Path, right, dialog.Options);
+                _position.Text = string.Empty;
+            }
+            catch (StepFailedException ex)
+            {
+                _position.Text = "The plugins could not run: " + (ex.InnerException ?? ex).Message;
+            }
+        }).FileAndForget("DiffRapid/CompareWithPlugins");
+    }
+
     private void CompareStructure()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -680,6 +730,11 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var hunk = model.HunkAt(_currentDifference);
         var (source, sourceStart, sourceCount) = toRight ? (_modelLeftSnapshot!, hunk.LeftStart, hunk.LeftCount) : (_modelRightSnapshot!, hunk.RightStart, hunk.RightCount);
         var (target, targetStart, targetCount) = toRight ? (_right, hunk.RightStart, hunk.RightCount) : (_left, hunk.LeftStart, hunk.LeftCount);
+        if (target.IsReadOnly)
+        {
+            _position.Text = $"{System.IO.Path.GetFileName(target.Path)} is text taken from the original file and cannot be changed.";
+            return;
+        }
 
         var targetSnapshot = target.Buffer.CurrentSnapshot;
         var replace = LinesSpan(targetSnapshot, targetStart, targetCount);
@@ -990,6 +1045,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
 
         private readonly IVsPersistDocData _docData;
 
+        private readonly IVsTextLines _textLines;
+
         private readonly ITextDocument? _document;
 
         private Pane(string path, IVsInvisibleEditor invisibleEditor, IVsTextLines textLines, ITextBuffer buffer, IVsTextView textView, IWpfTextViewHost host)
@@ -997,6 +1054,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             Path = path;
             _invisibleEditor = invisibleEditor;
             _docData = (IVsPersistDocData)textLines;
+            _textLines = textLines;
             _textView = textView;
             Buffer = buffer;
             Host = host;
@@ -1012,6 +1070,9 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         public string Path { get; }
 
         public bool IsDirty => _document?.IsDirty ?? false;
+
+        /// <summary>True when the pane shows text made from another file (a document's text, an assembly's API) and refuses edits.</summary>
+        public bool IsReadOnly { get; private set; }
 
         public ITextBuffer Buffer { get; }
 
@@ -1106,6 +1167,15 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             }
 
             ErrorHandler.ThrowOnFailure(_docData.SaveDocData(VSSAVEFLAGS.VSSAVE_Save, out _, out _));
+        }
+
+        /// <summary>Makes the buffer read-only, for typing and for the comparison's own edits.</summary>
+        public void MakeReadOnly()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            ErrorHandler.ThrowOnFailure(_textLines.GetStateFlags(out var flags));
+            ErrorHandler.ThrowOnFailure(_textLines.SetStateFlags(flags | (uint)BUFFERSTATEFLAGS.BSF_USER_READONLY));
+            IsReadOnly = true;
         }
 
         public void Close()

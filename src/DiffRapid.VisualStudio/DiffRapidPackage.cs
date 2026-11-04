@@ -1,9 +1,11 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using DiffRapid.Core.Plugins;
 using DiffRapid.VisualStudio.Commands;
 using DiffRapid.VisualStudio.Options;
 using DiffRapid.VisualStudio.UI;
@@ -82,7 +84,7 @@ public sealed class DiffRapidPackage : AsyncPackage
 
     /// <summary>
     /// Opens a new text comparison document tab for two files and returns its window. Word, Excel and PowerPoint
-    /// files are compared as their text, through temporary copies (editing those does not change the documents).
+    /// files are compared as their text, through temporary copies shown read-only.
     /// </summary>
     public Task<IVsWindowFrame> OpenTextComparisonAsync(string leftPath, string rightPath) =>
         OpenDocumentAsync(
@@ -94,10 +96,57 @@ public sealed class DiffRapidPackage : AsyncPackage
                 var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
                 control.LeftLabel = SourceLabel(leftPath, left);
                 control.RightLabel = SourceLabel(rightPath, right);
+                control.MarkExtracted(left: control.LeftLabel is not null, right: control.RightLabel is not null);
                 return control;
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true);
+
+    /// <summary>
+    /// Runs an unpacker and prediffer pipeline on two files' content and opens the resulting texts side by side,
+    /// read-only. The content is passed in so a text comparison can include its unsaved edits.
+    /// </summary>
+    public Task<IVsWindowFrame> OpenPluginComparisonAsync(string leftPath, byte[] leftContent, string rightPath, byte[] rightContent, PluginOptions plugins)
+    {
+        var steps = string.Join(" | ", new[] { plugins.Unpacker, plugins.Prediffer }.Where(step => !string.IsNullOrWhiteSpace(step)));
+        return OpenDocumentAsync(
+            "Running the plugins",
+            async () =>
+            {
+                var left = await Task.Run(() => PreparedCopy(leftPath, leftContent, plugins, steps));
+                var right = await Task.Run(() => PreparedCopy(rightPath, rightContent, plugins, steps));
+                var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
+                control.LeftLabel = SourceLabel(leftPath, left);
+                control.RightLabel = SourceLabel(rightPath, right);
+                control.MarkExtracted(left: true, right: true);
+                return control;
+            },
+            Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath) + " (" + steps + ")",
+            hostsEditors: true);
+    }
+
+    /// <summary>Writes what the pipelines make of a file to a temporary copy named "A.json (PrettifyJson)".</summary>
+    private static string PreparedCopy(string path, byte[] content, PluginOptions plugins, string steps)
+    {
+        PreparedFile prepared;
+        try
+        {
+            prepared = PluginPipeline.Prepare(content, path, plugins);
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidDataException(ex.Message, ex);
+        }
+
+        if (prepared.IsBinary)
+        {
+            throw new InvalidDataException($"{Path.GetFileName(path)} is not text and no unpacker could read it. Choose an unpacker, such as 'auto'.");
+        }
+
+        // Unpacked text is no longer in the file's own language; transformed text still is, so it keeps its colors.
+        var extension = prepared.UnpackerName is null ? Path.GetExtension(path) : ".txt";
+        return EditorSelection.WriteTemporary(prepared.CompareText, Path.GetFileName(path) + " (" + steps + ")", extension);
+    }
 
     /// <summary>
     /// For a temporary copy named after its source ("A.nupkg (public API).cs"), the source path with what the copy
