@@ -31,6 +31,7 @@ internal sealed class DiffOverviewBar : FrameworkElement
     public DiffOverviewBar()
     {
         Width = 18;
+        ClipToBounds = true;
         Cursor = Cursors.Hand;
         ToolTip = "Differences overview: click or drag to jump";
         SetResourceReference(TrackBrushProperty, EnvironmentColors.ScrollBarBackgroundBrushKey);
@@ -74,8 +75,10 @@ internal sealed class DiffOverviewBar : FrameworkElement
         var scale = ActualHeight / Math.Max(model.Rows.Count, 1);
 
         // Viewport lens first, so the difference marks stay readable on top of it.
-        var lensTop = _viewportTopRow * scale;
-        var lensHeight = Math.Max(_viewportRows * scale, 6);
+        // A short file fits many times in the window; the lens stays inside the bar, or it would cover (and take
+        // the clicks of) whatever is below, such as the AI panel.
+        var lensTop = Math.Max(0, Math.Min(_viewportTopRow * scale, ActualHeight - 6));
+        var lensHeight = Math.Min(Math.Max(_viewportRows * scale, 6), ActualHeight - lensTop);
         dc.PushOpacity(0.45);
         dc.DrawRoundedRectangle(LensBrush, null, new Rect(1, lensTop, Math.Max(ActualWidth - 2, 1), lensHeight), 3, 3);
         dc.Pop();

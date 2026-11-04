@@ -1345,6 +1345,9 @@ internal sealed class HexDiffControl : DockPanel, IComparisonView, IOleCommandTa
         {
             _owner = owner;
             Width = 14;
+
+            // The lens of a short file is taller than the bar; clipping keeps it from covering what is below.
+            ClipToBounds = true;
             Cursor = Cursors.Hand;
             ToolTip = "Differences overview: click or drag to jump";
             SetResourceReference(TrackBrushProperty, EnvironmentColors.ScrollBarBackgroundBrushKey);
