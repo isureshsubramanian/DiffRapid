@@ -54,6 +54,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         ("Date and size", FolderCompareMethod.DateAndSize),
         ("Size", FolderCompareMethod.Size),
         ("Existence", FolderCompareMethod.Existence),
+        ("Hash (xxHash64)", FolderCompareMethod.Hash),
     };
 
     private readonly DiffRapidPackage _package;
@@ -69,6 +70,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private List<FolderCompareItem> _scanned = new();
     private readonly ListView _list = new();
     private readonly ToggleButton _treeToggle;
+    private readonly ToggleButton _renamesToggle;
     private readonly Button _expandAll;
     private readonly Button _collapseAll;
     private readonly Button _copyToLeft;
@@ -112,6 +114,11 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _treeToggle = DiffTheme.OptionToggle("Tree", "Show folders as a tree (otherwise a flat list of files)", _ => ShowResults());
         _treeToggle.IsChecked = true;
         _treeToggle.Content = IconLabel(KnownMonikers.TreeView, "Tree");
+        _renamesToggle = DiffTheme.OptionToggle(
+            "Renames",
+            "Pair files found on one side only whose contents match, and show them as renamed or moved",
+            _ => StartScan(),
+            options.DetectRenames);
         _expandAll = DiffTheme.CommandButton(Icon(KnownMonikers.ExpandAll), "Expand all folders", () => SetAllExpanded(true));
         _collapseAll = DiffTheme.CommandButton(Icon(KnownMonikers.CollapseAll), "Collapse all folders", () => SetAllExpanded(false));
         _copyToLeft = DiffTheme.CommandButton(IconLabel(KnownMonikers.Backwards, "Copy to left"), "Copy the selected files and folders from the right to the left (Ctrl+Shift+F8)", () => CopySelection(toRight: false));
@@ -184,6 +191,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         var settings = new StackPanel { Orientation = Orientation.Horizontal };
         settings.Children.Add(_treeToggle);
+        settings.Children.Add(_renamesToggle);
         settings.Children.Add(_expandAll);
         settings.Children.Add(_collapseAll);
         settings.Children.Add(DiffTheme.Separator());
@@ -224,6 +232,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         AddCard(cards, FolderCompareStatus.Different, "Changed files", DiffTheme.ChangedBrush, "Files on both sides whose contents differ", shown: true);
         AddCard(cards, FolderCompareStatus.LeftOnly, "Only on the left", DiffTheme.RemovedBrush, "Files and folders only in the left folder; a folder counts once", shown: true);
         AddCard(cards, FolderCompareStatus.RightOnly, "Only on the right", DiffTheme.AddedBrush, "Files and folders only in the right folder; a folder counts once", shown: true);
+        AddCard(cards, FolderCompareStatus.Renamed, "Renamed or moved", DiffTheme.MovedBrush, "Files only on one side whose content turns up under another name or folder on the other side", shown: true);
         AddCard(cards, FolderCompareStatus.Error, "Needs attention", DiffTheme.MovedBrush, "Items that could not be read, or are a file on one side and a folder on the other", shown: true);
         AddCard(cards, FolderCompareStatus.Identical, "Identical files", DiffTheme.IgnoredBrush, "Files that are the same on both sides (hidden in the list by default)", shown: false);
 
@@ -264,6 +273,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             (FolderCompareStatus.Different, DiffTheme.ChangedBrush, "changed"),
             (FolderCompareStatus.LeftOnly, DiffTheme.RemovedBrush, "only left"),
             (FolderCompareStatus.RightOnly, DiffTheme.AddedBrush, "only right"),
+            (FolderCompareStatus.Renamed, DiffTheme.MovedBrush, "renamed or moved"),
             (FolderCompareStatus.Error, DiffTheme.MovedBrush, "need attention"),
         };
 
@@ -551,7 +561,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             _details.Text = string.Empty;
         }
 
-        var options = _baseOptions with { Method = _method };
+        var options = _baseOptions with { Method = _method, DetectRenames = _renamesToggle.IsChecked == true };
         var reporter = new QueueReporter(_pending, cancellation.Token);
         var stopwatch = Stopwatch.StartNew();
         _package.JoinableTaskFactory.RunAsync(async () =>
@@ -642,7 +652,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         ShowResults();
         RestoreSelectionAndScroll();
 
-        var changes = Count(FolderCompareStatus.Different) + Count(FolderCompareStatus.LeftOnly) + Count(FolderCompareStatus.RightOnly) + Count(FolderCompareStatus.Error);
+        var changes = Count(FolderCompareStatus.Different) + Count(FolderCompareStatus.LeftOnly) + Count(FolderCompareStatus.RightOnly) + Count(FolderCompareStatus.Renamed) + Count(FolderCompareStatus.Error);
         if (result.Root.Error is not null)
         {
             _verdict.Text = "Compare failed";
@@ -741,7 +751,9 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     }
 
     private static FolderCompareStatus ChipStatus(FolderCompareStatus status) =>
-        status == FolderCompareStatus.TypeConflict ? FolderCompareStatus.Error : status;
+        status == FolderCompareStatus.TypeConflict ? FolderCompareStatus.Error
+        : status == FolderCompareStatus.Moved ? FolderCompareStatus.Renamed
+        : status;
 
     // Flat list: files, plus folders that exist on one side or cannot be compared.
     private static bool IsListedFlat(FolderCompareItem item) =>
@@ -904,11 +916,27 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         var left = FullPath(row.Item, left: true);
         var right = FullPath(row.Item, left: false);
+
+        // A renamed or moved file is compared with its counterpart, the other side's file under its own name.
+        var paired = row.Item.Status is FolderCompareStatus.Renamed or FolderCompareStatus.Moved && row.Item.CounterpartPath is not null;
+        if (paired)
+        {
+            var counterpart = row.Item with { RelativePath = row.Item.CounterpartPath! };
+            if (row.Item.Left.Exists)
+            {
+                right = FullPath(counterpart, left: false);
+            }
+            else
+            {
+                left = FullPath(counterpart, left: true);
+            }
+        }
+
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
             try
             {
-                if (row.Item.Left.Exists && row.Item.Right.Exists)
+                if (paired || (row.Item.Left.Exists && row.Item.Right.Exists))
                 {
                     await _package.OpenComparisonAsync(left, right);
                 }
@@ -1736,6 +1764,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
                 FolderCompareStatus.RightOnly => ("Right only", DiffTheme.AddedBrush),
                 FolderCompareStatus.TypeConflict => ("File vs folder", DiffTheme.MovedBrush),
                 FolderCompareStatus.Error => ("Unreadable", DiffTheme.MovedBrush),
+                FolderCompareStatus.Renamed => ("Renamed", DiffTheme.MovedBrush),
+                FolderCompareStatus.Moved => ("Moved", DiffTheme.MovedBrush),
                 _ => ("Identical", DiffTheme.IgnoredBrush),
             };
             Details = DescribeDetails(item, node);
@@ -1827,6 +1857,12 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
                 return item.Error ?? "Could not be read";
             }
 
+            if (item.Status is FolderCompareStatus.Renamed or FolderCompareStatus.Moved && item.CounterpartPath is { } counterpart)
+            {
+                var alike = item.Similarity is double similarity && similarity < 1 ? $"  ({similarity * 100:0}% alike)" : string.Empty;
+                return (item.Left.Exists ? "to " : "from ") + counterpart + alike;
+            }
+
             if (item.Kind == FolderItemKind.Folder && node is not null)
             {
                 if (item.Status is FolderCompareStatus.LeftOnly or FolderCompareStatus.RightOnly)
@@ -1838,6 +1874,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
                 AddPart(parts, node, FolderCompareStatus.Different, "different");
                 AddPart(parts, node, FolderCompareStatus.LeftOnly, "left only");
                 AddPart(parts, node, FolderCompareStatus.RightOnly, "right only");
+                AddPart(parts, node, FolderCompareStatus.Renamed, "renamed or moved");
                 AddPart(parts, node, FolderCompareStatus.Error, "problems");
                 return string.Join("  ·  ", parts);
             }
