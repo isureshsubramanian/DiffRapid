@@ -578,7 +578,11 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
 
         _view.Columns.Clear();
         _view.Columns.Add(new GridViewColumn { Header = "Status", Width = 132, CellTemplate = StatusTemplate() });
-        _view.Columns.Add(new GridViewColumn { Header = "Line", Width = 92, CellTemplate = LinesTemplate() });
+
+        // Wide enough for "12,345 ↔ 12,345" at the files' largest line numbers.
+        var lastLine = Math.Max(outcome.Result.Left.Rows.Count, outcome.Result.Right.Rows.Count) + 1;
+        var lineWidth = Math.Max(92, ((2 * lastLine.ToString("N0", CultureInfo.CurrentCulture).Length) + 3) * 7 + 16);
+        _view.Columns.Add(new GridViewColumn { Header = "Line", Width = lineWidth, CellTemplate = LinesTemplate() });
         var columns = outcome.Result.Columns;
         for (var c = 0; c < columns.Count; c++)
         {
