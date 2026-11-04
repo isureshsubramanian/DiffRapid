@@ -4,6 +4,8 @@
     <PackageVersion Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" />
     <PackageVersion Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
     <PackageVersion Include="Microsoft.VisualStudio.Threading.Analyzers" Version="17.14.15" />
+    <!-- Core (JSON output; the extension already receives this version through the VS SDK) -->
+    <PackageVersion Include="System.Text.Json" Version="9.0.0" />
     <!-- Tests -->
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <PackageVersion Include="DiffPlex" Version="1.9.0" />

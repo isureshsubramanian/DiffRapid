@@ -1,6 +1,10 @@
 # Third-party notices
 
-DiffRapid does not currently redistribute any third-party code.
+## Runtime dependencies
+
+| Component | License | Used for |
+|---|---|---|
+| System.Text.Json (and its .NET Standard support packages) | MIT | JSON output of comparisons (DiffRapid.Core) |
 
 ## Build and test dependencies (not redistributed)
 
