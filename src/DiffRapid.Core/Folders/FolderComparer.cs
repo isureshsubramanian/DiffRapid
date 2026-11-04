@@ -28,7 +28,7 @@ public static class FolderComparer
     /// <summary>
     /// Scans synchronously. Cancellation throws <see cref="OperationCanceledException"/>; IO failures become
     /// <see cref="FolderCompareStatus.Error"/> items. With parallelism enabled, callbacks may come from worker threads
-    /// (one at a time).
+    /// (one at a time). With rename detection, paired files are reported a second time with their new status.
     /// </summary>
     public static FolderCompareResult Compare(
         string left,
@@ -36,6 +36,46 @@ public static class FolderComparer
         FolderCompareOptions? options = null,
         IProgress<FolderCompareItem>? itemReported = null,
         CancellationToken cancellationToken = default)
+    {
+        Action<FolderCompareItem>? report = itemReported is null ? null : itemReported.Report;
+        return Run(left, right, options, report, report, cancellationToken);
+    }
+
+    /// <summary>
+    /// Scans like <see cref="Compare"/> and reports each item as soon as it finishes, with a running count of
+    /// finished items. Files are reported before the folder that contains them, and the root comes last. Items
+    /// paired as renames after the scan are reported again as revisions.
+    /// </summary>
+    public static FolderCompareResult CompareStreaming(
+        string left,
+        string right,
+        FolderCompareOptions? options,
+        IProgress<FolderCompareProgress> progress,
+        CancellationToken cancellationToken = default)
+    {
+        if (progress is null)
+        {
+            throw new ArgumentNullException(nameof(progress));
+        }
+
+        // Scan reports one item at a time under its lock, so the counter needs no further synchronisation.
+        var completed = 0;
+        return Run(
+            left,
+            right,
+            options,
+            item => progress.Report(new FolderCompareProgress(item, ++completed)),
+            item => progress.Report(new FolderCompareProgress(item, completed) { IsRevision = true }),
+            cancellationToken);
+    }
+
+    private static FolderCompareResult Run(
+        string left,
+        string right,
+        FolderCompareOptions? options,
+        Action<FolderCompareItem>? report,
+        Action<FolderCompareItem>? revise,
+        CancellationToken cancellationToken)
     {
         if (left is null)
         {
@@ -52,14 +92,27 @@ public static class FolderComparer
             || options.MaxTextFileSize < 0
             || options.MaxTextFileSize > int.MaxValue
             || options.MaxDegreeOfParallelism < 1
-            || !Enum.IsDefined(typeof(FolderCompareMethod), options.Method))
+            || !Enum.IsDefined(typeof(FolderCompareMethod), options.Method)
+            || options.RenameSimilarityThreshold is <= 0 or > 1
+            || options.RenameSimilarityThreshold is double.NaN)
         {
             throw new ArgumentOutOfRangeException(nameof(options));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var scan = new Scan(options, itemReported, cancellationToken);
-        var root = scan.Visit(Path.GetFullPath(left), Path.GetFullPath(right), string.Empty, depth: 0, hasLeft: true, hasRight: true);
+        var leftRoot = Path.GetFullPath(left);
+        var rightRoot = Path.GetFullPath(right);
+        var scan = new Scan(options, report, cancellationToken);
+        var root = scan.Visit(leftRoot, rightRoot, string.Empty, depth: 0, hasLeft: true, hasRight: true);
+        if (options.DetectRenames && root.Status != FolderCompareStatus.Error)
+        {
+            var revised = new List<FolderCompareItem>();
+            root = FolderRenameDetector.Resolve(root, leftRoot, rightRoot, options, revised, cancellationToken);
+            foreach (var item in revised)
+            {
+                revise?.Invoke(item);
+            }
+        }
 
         var items = new List<FolderCompareItem>();
         Flatten(root, items);
@@ -75,7 +128,7 @@ public static class FolderComparer
             counts[item.Status]++;
         }
 
-        return new FolderCompareResult(root, items.AsReadOnly(), new ReadOnlyDictionary<FolderCompareStatus, int>(counts)) { LeftRoot = Path.GetFullPath(left), RightRoot = Path.GetFullPath(right) };
+        return new FolderCompareResult(root, items.AsReadOnly(), new ReadOnlyDictionary<FolderCompareStatus, int>(counts)) { LeftRoot = leftRoot, RightRoot = rightRoot };
     }
 
     private static void Flatten(FolderCompareItem item, List<FolderCompareItem> items)
@@ -90,7 +143,7 @@ public static class FolderComparer
     private sealed class Scan
     {
         private readonly FolderCompareOptions _options;
-        private readonly IProgress<FolderCompareItem>? _progress;
+        private readonly Action<FolderCompareItem>? _report;
         private readonly CancellationToken _token;
         private readonly object _reportLock = new();
         private readonly StringComparer _names;
@@ -99,10 +152,10 @@ public static class FolderComparer
         private readonly Mask[] _includeFolders;
         private readonly Mask[] _excludeFolders;
 
-        public Scan(FolderCompareOptions options, IProgress<FolderCompareItem>? progress, CancellationToken token)
+        public Scan(FolderCompareOptions options, Action<FolderCompareItem>? report, CancellationToken token)
         {
             _options = options;
-            _progress = progress;
+            _report = report;
             _token = token;
             _names = options.CaseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
             _includeFiles = Mask.CompileAll(options.IncludeFiles, options.CaseSensitive);
@@ -123,7 +176,7 @@ public static class FolderComparer
                 var item = new FolderCompareItem(relative, kind, status, leftMeta, rightMeta, differences, error, children ?? Array.Empty<FolderCompareItem>());
                 lock (_reportLock)
                 {
-                    _progress?.Report(item);
+                    _report?.Invoke(item);
                 }
 
                 return item;
@@ -324,6 +377,10 @@ public static class FolderComparer
                     return (true, null);
                 case FolderCompareMethod.Size:
                     return (sizeEqual, null);
+                case FolderCompareMethod.Hash when !sizeEqual:
+                    return (false, null);
+                case FolderCompareMethod.Hash:
+                    return (XxHash64.ComputeFile(left, _token) == XxHash64.ComputeFile(right, _token), null);
                 case FolderCompareMethod.Date:
                     return (dateEqual, null);
                 case FolderCompareMethod.DateAndSize:

@@ -23,7 +23,7 @@ internal static partial class Program
           diffrapid patch <left> <right> [-o <file>] [-u <n>] [compare options]
           diffrapid apply <patchfile> [--dir <root>] [--reverse] [--fuzz <0..2>]
                           [--dry-run] [--ignore-whitespace]
-          diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence]
+          diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence|hash]
                          [--no-recurse] [--include <glob>] [--exclude <glob>] [--json]
                          [--only different|left|right|all]
                          [--filter-file <path>]  apply .flt file and folder rules
@@ -31,6 +31,10 @@ internal static partial class Program
                          Report format defaults to the extension (.html/.htm/.csv).
                          [--include-diffs]  embed each changed file's side-by-side diff in an HTML report
                          --json prints a versioned schema ("version": 1) with camelCase names.
+                         [--renames] [--similarity <0..1>]  pair renamed and moved files
+          diffrapid dir3 <base> <left> <right> [--method ...] [--no-recurse] [--include <glob>]
+                         [--exclude <glob>] [--filter-file <path>] [--json]
+                         Exit code 1 when an entry conflicts or cannot be read.
           diffrapid diff  <left> <right> [options]
                          .docx, .xlsx and .pptx files are compared as their text.
           diffrapid diff  <left> <right> --report html|md|json [-o <file>]   report instead of the unified diff
@@ -107,6 +111,7 @@ internal static partial class Program
                 "patch" => RunPatch(parsed),
                 "apply" => RunApply(parsed),
                 "dir" => RunDirectory(parsed),
+                "dir3" => RunDirectory3(parsed),
                 "diff" => RunDiff(parsed),
                 "log" => RunLog(parsed),
                 "info" => RunInfo(parsed),
