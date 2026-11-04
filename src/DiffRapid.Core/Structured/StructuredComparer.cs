@@ -31,7 +31,10 @@ public sealed record StructuredCompareOptions
     /// <summary>The format of both files; <see cref="StructuredFormat.Auto"/> picks it from the file name or content.</summary>
     public StructuredFormat Format { get; init; } = StructuredFormat.Auto;
 
-    /// <summary>A property that identifies the objects inside JSON arrays and YAML sequences; null matches items by position.</summary>
+    /// <summary>
+    /// A property that identifies the objects inside JSON arrays and YAML sequences. Null finds one per list: id, name
+    /// or key when every item has a unique value for it; otherwise the items are matched by position.
+    /// </summary>
     public string? ArrayKey { get; init; }
 
     /// <summary>When false, siblings that are in a different order are reported as <see cref="StructuredChangeKind.Moved"/>.</summary>

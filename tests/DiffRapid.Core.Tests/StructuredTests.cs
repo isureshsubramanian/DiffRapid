@@ -87,15 +87,28 @@ public sealed class StructuredTests
         var keyed = new StructuredCompareOptions { Format = StructuredFormat.Json, ArrayKey = "id" };
 
         var byKey = StructuredComparer.Compare(left, right, keyed).Differences;
-        var byIndex = StructuredComparer.Compare(left, right, keyed with { ArrayKey = null }).Differences;
+        var found = StructuredComparer.Compare(left, right, keyed with { ArrayKey = null }).Differences;
+        var byIndex = StructuredComparer.Compare(left, right, keyed with { ArrayKey = "missing" }).Differences;
         var ordered = StructuredComparer.Compare(left, right, keyed with { IgnoreOrder = false }).Differences;
 
         var changed = Assert.Single(byKey);
         Assert.Equal("/items[id=2]/name", changed.Path);
         Assert.Equal("two", changed.Left!.Value);
         Assert.Equal("TWO", changed.Right!.Value);
+        Assert.Equal("/items[id=2]/name", Assert.Single(found).Path);
         Assert.True(byIndex.Count > 1);
         Assert.Equal("/items[id=3]", Assert.Single(ordered, difference => difference.Kind == StructuredChangeKind.Moved).Path);
+    }
+
+    [Theory]
+    [InlineData("""{"l": [{"name": "a", "v": 1}]}""", """{"l": [{"name": "b", "v": 0}, {"name": "a", "v": 2}]}""", "/l[name=a]/v")]
+    [InlineData("l:\n  - key: x\n    v: 1\n  - key: y\n    v: 1\n", "l:\n  - key: y\n    v: 1\n  - key: x\n    v: 2\n", "/l[key=x]/v")]
+    public void ListsOfNamedObjectsMatchByTheirIdentity(string left, string right, string changedPath)
+    {
+        var differences = StructuredComparer.Compare(left, right, new StructuredCompareOptions()).Differences;
+
+        Assert.Contains(differences, difference => difference.Kind == StructuredChangeKind.Changed && difference.Path == changedPath);
+        Assert.DoesNotContain(differences, difference => difference.Kind == StructuredChangeKind.Removed);
     }
 
     [Fact]
@@ -349,8 +362,8 @@ public sealed class StructuredTests
         Assert.Equal("it's", Child(root, "single").Value);
         var jobs = Child(root, "jobs");
         Assert.Equal(2, jobs.Children.Count);
-        Assert.Equal("echo 2", Child(Child(Child(jobs, "[0]"), "steps"), "[1]").Children[0].Value);
-        Assert.Equal(StructuredNodeKind.Array, Child(Child(jobs, "[1]"), "tags").Kind);
+        Assert.Equal("echo 2", Child(Child(Child(jobs, "[id=one]"), "steps"), "[1]").Children[0].Value);
+        Assert.Equal(StructuredNodeKind.Array, Child(Child(jobs, "[id=two]"), "tags").Kind);
         Assert.Equal("line 1\nline 2\n", Child(root, "script").Value);
         Assert.Equal(new StructuredLineSpan(17, 19), Child(root, "script").Span);
         Assert.Equal("one two\nthree", Child(root, "folded").Value);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 
 namespace DiffRapid.Core.Structured;
@@ -63,6 +64,7 @@ internal sealed class NodeBuilder(StructuredNodeKind kind, string name, int star
     {
         var keys = new (string Key, bool ByIndex)[parent.Children.Count];
         var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+        var itemIdentity = parent.Kind == StructuredNodeKind.Array ? arrayKey ?? IdentityOf(parent) : null;
         for (var i = 0; i < keys.Length; i++)
         {
             var child = parent.Children[i];
@@ -70,7 +72,7 @@ internal sealed class NodeBuilder(StructuredNodeKind kind, string name, int star
             string baseKey;
             if (parent.Kind == StructuredNodeKind.Array)
             {
-                var itemKey = ArrayItemKey(child, arrayKey);
+                var itemKey = ArrayItemKey(child, itemIdentity);
                 byIndex = itemKey is null;
                 baseKey = itemKey ?? "[" + i + "]";
             }
@@ -85,6 +87,33 @@ internal sealed class NodeBuilder(StructuredNodeKind kind, string name, int star
         }
 
         return keys;
+    }
+
+    // The member names that identify an object in a list, as Include and name do for XML elements.
+    private static readonly string[] ItemIdentities = ["id", "Id", "ID", "name", "Name", "key", "Key"];
+
+    /// <summary>
+    /// Without a given array key, the member that names every item of a list of objects: present in each with a
+    /// scalar value, and unique. Null when there is none, so the items are matched by position.
+    /// </summary>
+    private static string? IdentityOf(NodeBuilder list)
+    {
+        if (list.Children.Count == 0 || list.Children.Any(child => child.Kind != StructuredNodeKind.Object))
+        {
+            return null;
+        }
+
+        foreach (var identity in ItemIdentities)
+        {
+            var values = new HashSet<string>(StringComparer.Ordinal);
+            if (list.Children.All(child => child.Children.FirstOrDefault(member => member.Name == identity) is { Value: { } value } member
+                    && member.Children.Count == 0 && values.Add(value)))
+            {
+                return identity;
+            }
+        }
+
+        return null;
     }
 
     private static string? ArrayItemKey(NodeBuilder item, string? arrayKey)
