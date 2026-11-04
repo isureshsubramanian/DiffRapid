@@ -19,12 +19,20 @@ public sealed class HistogramDiff : IDiffAlgorithm
         var maxKey = -1;
         foreach (var key in a)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (key < 0)
             {
                 throw new ArgumentException("Keys must be non-negative.", nameof(a));
             }
 
             maxKey = Math.Max(maxKey, key);
+        }
+
+        // Sparse external keys must not turn a short sequence into an allocation proportional to its largest key.
+        if (maxKey > 4L * a.Length)
+        {
+            new MyersDiff().Compare(a, b, changedA, changedB, cancellationToken);
+            return;
         }
 
         var context = new Context(a, b, changedA, changedB, maxKey, cancellationToken);
@@ -102,6 +110,7 @@ public sealed class HistogramDiff : IDiffAlgorithm
             bestAStart = bestAEnd = bestBStart = bestBEnd = 0;
             var bestCount = MaxChainLength + 1;
             var bestLength = 0;
+            var bestBalance = int.MaxValue;
 
             var j = bLo;
             while (j < bHi)
@@ -131,10 +140,13 @@ public sealed class HistogramDiff : IDiffAlgorithm
                         }
 
                         var length = ea - sa;
-                        if (count < bestCount || (count == bestCount && length > bestLength))
+                        var balance = Math.Max((sa - aLo) + (sb - bLo), (aHi - ea) + (bHi - eb));
+                        if (count < bestCount
+                            || (count == bestCount && (length > bestLength || (length == bestLength && balance < bestBalance))))
                         {
                             bestCount = count;
                             bestLength = length;
+                            bestBalance = balance;
                             bestAStart = sa;
                             bestAEnd = ea;
                             bestBStart = sb;

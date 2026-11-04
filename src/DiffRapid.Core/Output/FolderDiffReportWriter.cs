@@ -32,9 +32,6 @@ public static class FolderDiffReportWriter
         + "ol.toc{margin:0 0 1rem;padding-left:1.5rem}ol.toc a{overflow-wrap:anywhere}p.note{color:#656d76;margin:0 0 1rem}"
         + "a{color:#0969da}@media(prefers-color-scheme:dark){a{color:#4493f8}p.note{color:#8d96a0}}";
 
-    private const string StyleEnd = "</style>";
-    private const string BodyEnd = "</body>";
-
     /// <summary>
     /// Writes one self-contained page. Files are read from the comparison's roots one at a time; binary, missing,
     /// unreadable and oversized files get a note instead of a diff.
@@ -56,18 +53,10 @@ public static class FolderDiffReportWriter
             throw new ArgumentOutOfRangeException(nameof(diffOptions));
         }
 
-        using var buffer = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
-        FolderReportWriter.WriteHtml(result, reportOptions, buffer);
-        var page = buffer.ToString();
-        var styleEnd = page.IndexOf(StyleEnd, StringComparison.Ordinal);
-        var bodyEnd = page.LastIndexOf(BodyEnd, StringComparison.Ordinal);
-
-        writer.Write(page.Substring(0, styleEnd));
-        writer.Write(SideBySideHtml.Style);
-        writer.Write(SectionStyle);
-        writer.Write(page.Substring(styleEnd, bodyEnd - styleEnd));
-        WriteDiffs(result, diffOptions, writer, cancellationToken);
-        writer.Write(page.Substring(bodyEnd));
+        cancellationToken.ThrowIfCancellationRequested();
+        FolderReportWriter.WriteHtml(
+            result, reportOptions, writer, SideBySideHtml.Style + SectionStyle,
+            () => WriteDiffs(result, diffOptions, writer, cancellationToken), cancellationToken);
     }
 
     private static void WriteDiffs(

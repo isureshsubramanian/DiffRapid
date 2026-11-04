@@ -27,11 +27,12 @@ public static class TextComparer
         }
 
         options ??= CompareOptions.Default;
+        cancellationToken.ThrowIfCancellationRequested();
 
         var normalizer = new LineNormalizer(options);
         var lineFilters = options.LineFilters.Where(f => f.Enabled).Select(f => FilterRegex.Create(f.Pattern)).ToArray();
-        var leftKeys = normalizer.ToKeys(left);
-        var rightKeys = normalizer.ToKeys(right);
+        var leftKeys = normalizer.ToKeys(left, cancellationToken);
+        var rightKeys = normalizer.ToKeys(right, cancellationToken);
 
         var hunks = ComputeHunks(leftKeys, rightKeys, options.Algorithm, cancellationToken);
 
@@ -50,7 +51,7 @@ public static class TextComparer
         }
 
         IReadOnlyList<MovedBlock> moved = options.DetectMovedBlocks
-            ? MovedBlockDetector.Detect(hunks, left, leftKeys, rightKeys)
+            ? MovedBlockDetector.Detect(hunks, left, leftKeys, rightKeys, cancellationToken)
             : Array.Empty<MovedBlock>();
 
         return new TextDiffResult(left, right, options, hunks, moved);

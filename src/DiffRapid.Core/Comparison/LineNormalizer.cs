@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Comparison;
@@ -12,7 +13,7 @@ namespace DiffRapid.Core.Comparison;
 public sealed class LineNormalizer
 {
     private readonly CompareOptions _options;
-    private readonly Dictionary<string, int> _keys = new(System.StringComparer.Ordinal);
+    private readonly Dictionary<(string Content, LineEnding Ending), int> _keys = new();
     private readonly StringBuilder _buffer = new();
     private readonly List<(Regex Pattern, string Replacement, bool Literal)> _substitutions = new();
 
@@ -38,12 +39,26 @@ public sealed class LineNormalizer
 
     public int[] ToKeys(TextDocument document)
     {
+        return ToKeys(document, CancellationToken.None);
+    }
+
+    /// <summary>Interns comparison keys, observing cancellation while processing the document.</summary>
+    public int[] ToKeys(TextDocument document, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var keys = new int[document.LineCount];
         for (var i = 0; i < keys.Length; i++)
         {
+            if ((i & 1023) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
             var line = document[i];
             var isLast = i == keys.Length - 1;
-            keys[i] = Intern(Normalize(line, isLast));
+            var ending = _options.IgnoreLineEndings || (isLast && _options.IgnoreMissingTrailingLineEnding)
+                ? LineEnding.None : line.Ending;
+            keys[i] = Intern((NormalizeContent(line.Content), ending));
         }
 
         return keys;
@@ -70,6 +85,11 @@ public sealed class LineNormalizer
             content = substitution.Literal
                 ? substitution.Pattern.Replace(content, _ => substitution.Replacement)
                 : substitution.Pattern.Replace(content, substitution.Replacement);
+        }
+
+        if (_options.Whitespace == WhitespaceMode.Compare && !_options.IgnoreNumbers && !_options.IgnoreCase)
+        {
+            return content;
         }
 
         var sb = _buffer.Clear();
@@ -113,30 +133,7 @@ public sealed class LineNormalizer
         return sb.ToString();
     }
 
-    private string Normalize(TextLine line, bool isLast)
-    {
-        var content = NormalizeContent(line.Content);
-        if (_options.IgnoreLineEndings)
-        {
-            return content;
-        }
-
-        if (isLast && _options.IgnoreMissingTrailingLineEnding)
-        {
-            return content;
-        }
-
-        // A control character that cannot appear inside a line separates content from its ending.
-        return line.Ending switch
-        {
-            LineEnding.CrLf => content + "\u0001crlf",
-            LineEnding.Lf => content + "\u0001lf",
-            LineEnding.Cr => content + "\u0001cr",
-            _ => content + "\u0001none",
-        };
-    }
-
-    private int Intern(string key)
+    private int Intern((string Content, LineEnding Ending) key)
     {
         if (!_keys.TryGetValue(key, out var id))
         {

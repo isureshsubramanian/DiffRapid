@@ -102,7 +102,7 @@ public static class FolderComparer
         cancellationToken.ThrowIfCancellationRequested();
         var leftRoot = Path.GetFullPath(left);
         var rightRoot = Path.GetFullPath(right);
-        var scan = new Scan(options, report, cancellationToken);
+        using var scan = new Scan(options, report, cancellationToken);
         var root = scan.Visit(leftRoot, rightRoot, string.Empty, depth: 0, hasLeft: true, hasRight: true);
         if (options.DetectRenames && root.Status != FolderCompareStatus.Error)
         {
@@ -140,7 +140,7 @@ public static class FolderComparer
         }
     }
 
-    private sealed class Scan
+    private sealed class Scan : IDisposable
     {
         private readonly FolderCompareOptions _options;
         private readonly Action<FolderCompareItem>? _report;
@@ -151,6 +151,7 @@ public static class FolderComparer
         private readonly Mask[] _excludeFiles;
         private readonly Mask[] _includeFolders;
         private readonly Mask[] _excludeFolders;
+        private readonly ThreadLocal<(byte[] Left, byte[] Right)> _buffers = new(() => (new byte[BufferSize], new byte[BufferSize]));
 
         public Scan(FolderCompareOptions options, Action<FolderCompareItem>? report, CancellationToken token)
         {
@@ -164,7 +165,14 @@ public static class FolderComparer
             _excludeFolders = Mask.CompileAll(options.ExcludeFolders, options.CaseSensitive);
         }
 
-        public FolderCompareItem Visit(string left, string right, string relative, int depth, bool hasLeft, bool hasRight)
+        public void Dispose()
+        {
+            _buffers.Dispose();
+        }
+
+        public FolderCompareItem Visit(
+            string left, string right, string relative, int depth, bool hasLeft, bool hasRight,
+            FileSystemInfo? leftEntry = null, FileSystemInfo? rightEntry = null)
         {
             _token.ThrowIfCancellationRequested();
             var leftMeta = Missing;
@@ -184,8 +192,8 @@ public static class FolderComparer
 
             try
             {
-                leftMeta = Metadata(left, hasLeft);
-                rightMeta = Metadata(right, hasRight);
+                leftMeta = Metadata(left, hasLeft, leftEntry);
+                rightMeta = Metadata(right, hasRight, rightEntry);
                 var present = leftMeta.Exists ? leftMeta : rightMeta;
                 kind = KindOf(present);
                 var isFolder = (present.Attributes & FileAttributes.Directory) != 0;
@@ -222,14 +230,20 @@ public static class FolderComparer
 
                 if (status != FolderCompareStatus.Identical)
                 {
+                    // Enumeration metadata is a snapshot; a one-sided entry may have vanished since it was listed.
+                    File.GetAttributes(leftMeta.Exists ? left : right);
                     return Finish(status);
                 }
 
                 var (equal, differences) = CompareFiles(left, right, leftMeta, rightMeta);
 
-                // An open handle survives deletion; make sure both entries still exist after reading them.
-                File.GetAttributes(left);
-                File.GetAttributes(right);
+                if (_options.Method is not (FolderCompareMethod.Existence or FolderCompareMethod.Size or FolderCompareMethod.Date or FolderCompareMethod.DateAndSize))
+                {
+                    // An open handle survives deletion; check existence after reading contents.
+                    File.GetAttributes(left);
+                    File.GetAttributes(right);
+                }
+
                 return Finish(equal ? FolderCompareStatus.Identical : FolderCompareStatus.Different, differences);
             }
             catch (IOException ex)
@@ -271,15 +285,17 @@ public static class FolderComparer
             void VisitChild(int i)
             {
                 var name = names[i];
-                var hasLeft = leftEntries.TryGetValue(name, out var leftPath);
-                var hasRight = rightEntries.TryGetValue(name, out var rightPath);
+                var hasLeft = leftEntries.TryGetValue(name, out var leftEntry);
+                var hasRight = rightEntries.TryGetValue(name, out var rightEntry);
                 children[i] = Visit(
-                    leftPath ?? Path.Combine(left, name),
-                    rightPath ?? Path.Combine(right, name),
+                    leftEntry?.FullName ?? Path.Combine(left, name),
+                    rightEntry?.FullName ?? Path.Combine(right, name),
                     relative.Length == 0 ? name : relative + "/" + name,
                     depth + 1,
                     hasLeft,
-                    hasRight);
+                    hasRight,
+                    leftEntry,
+                    rightEntry);
             }
 
             // Only the top level runs in parallel, which keeps the total concurrency bounded.
@@ -307,16 +323,23 @@ public static class FolderComparer
             return finish(status, null, null, Array.AsReadOnly(children));
         }
 
-        private static FileMeta Metadata(string path, bool exists)
+        private static FileMeta Metadata(string path, bool exists, FileSystemInfo? entry)
         {
             if (!exists)
             {
                 return Missing;
             }
 
-            var attributes = File.GetAttributes(path);
-            var size = (attributes & FileAttributes.Directory) != 0 ? 0 : new FileInfo(path).Length;
-            return new FileMeta(size, File.GetLastWriteTimeUtc(path), attributes, true);
+            var information = entry ?? new FileInfo(path);
+            var attributes = information.Attributes;
+            if ((int)attributes == -1)
+            {
+                // FileSystemInfo uses -1 for an absent entry; retain the IO error rather than treating it as a link.
+                attributes = File.GetAttributes(path);
+            }
+
+            var size = (attributes & FileAttributes.Directory) == 0 && information is FileInfo file ? file.Length : 0;
+            return new FileMeta(size, information.LastWriteTimeUtc, attributes, true);
         }
 
         private static FolderItemKind KindOf(FileMeta meta) =>
@@ -324,18 +347,18 @@ public static class FolderComparer
             : (meta.Attributes & FileAttributes.Directory) != 0 ? FolderItemKind.Folder
             : FolderItemKind.File;
 
-        private Dictionary<string, string> Entries(string path, bool exists)
+        private Dictionary<string, FileSystemInfo> Entries(string path, bool exists)
         {
-            var entries = new Dictionary<string, string>(_names);
+            var entries = new Dictionary<string, FileSystemInfo>(_names);
             if (!exists)
             {
                 return entries;
             }
 
-            foreach (var entry in Directory.EnumerateFileSystemEntries(path))
+            foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos())
             {
                 _token.ThrowIfCancellationRequested();
-                var name = Path.GetFileName(entry);
+                var name = entry.Name;
                 if (entries.ContainsKey(name))
                 {
                     throw new IOException("Two entries have the same name under the selected case sensitivity: " + name);
@@ -416,12 +439,11 @@ public static class FolderComparer
         }
 
         private static FileStream Open(string path) =>
-            new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, BufferSize);
+            new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1);
 
         private bool BytesEqual(Stream left, Stream right)
         {
-            var a = new byte[BufferSize];
-            var b = new byte[BufferSize];
+            var (a, b) = _buffers.Value;
             var equal = true;
             while (true)
             {
@@ -443,7 +465,8 @@ public static class FolderComparer
                     }
                 }
 
-                if ((!equal && _options.StopAtFirstDifference) || (countA == 0 && countB == 0))
+                // Fill stops short only at EOF; both streams have already been drained in this case.
+                if ((!equal && _options.StopAtFirstDifference) || (countA < a.Length && countB < b.Length))
                 {
                     return equal;
                 }
