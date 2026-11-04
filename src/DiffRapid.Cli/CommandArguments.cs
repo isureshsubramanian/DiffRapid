@@ -52,6 +52,8 @@ internal static partial class Program
             "similarity",
             "unpacker",
             "prediffer",
+            "format",
+            "array-key",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
