@@ -216,7 +216,7 @@ public sealed class DiffRapidPackage : AsyncPackage
         OpenDocumentAsync(
             "Loading the folder comparison",
             async () => new ThreeWayFolderControl(this, basePath, leftPath, rightPath, (await DiffRapidSettings.ReadAsync(this)).Folder),
-            FolderName(leftPath) + " ↔ " + FolderName(rightPath) + " (base " + FolderName(basePath) + ")",
+            FolderName(leftPath) + " ↔ " + FolderName(rightPath) + " · 3-way",
             hostsEditors: false);
 
     /// <summary>Opens a three-way merge of two changed versions of a file and their common base.</summary>

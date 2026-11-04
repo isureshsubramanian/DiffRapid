@@ -467,7 +467,7 @@ internal sealed class ThreeWayFolderControl : DockPanel, IComparisonView
             ThreeWayFolderStatus.ChangedLeft or ThreeWayFolderStatus.ChangedBothIdentically => "Base against left",
             ThreeWayFolderStatus.ChangedRight => "Base against right",
             ThreeWayFolderStatus.AddedBothIdentically => "Left against right",
-            _ => string.Empty,
+            _ => Item.Left.Exists ? "The left file" : Item.Right.Exists ? "The right file" : Item.Base.Exists ? "The base file (removed on both sides)" : string.Empty,
         };
 
         private static string Describe(FileMeta meta) =>
