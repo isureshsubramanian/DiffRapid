@@ -20,6 +20,8 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using DiffRapid.Core.Folders;
 using DiffRapid.Core.Output;
+using DiffRapid.Core.Sync;
+using Microsoft.VisualBasic.FileIO;
 using Microsoft.Win32;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Imaging;
@@ -75,6 +77,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     private readonly Button _deleteRight;
     private readonly Button _exportReport;
     private readonly Button _createPatch;
+    private readonly Button _sync;
     private readonly TextBox _search = new() { Width = 220, VerticalAlignment = VerticalAlignment.Center, ToolTip = "Show only paths containing this text" };
     private readonly TextBlock _verdict = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 14, 0) };
     private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
@@ -119,6 +122,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _exportReport.IsEnabled = false;
         _createPatch = DiffTheme.CommandButton(IconLabel(KnownMonikers.CompareFiles, "Create patch"), "Save the differences between the text files as one patch file (unified diff)", CreatePatch);
         _createPatch.IsEnabled = false;
+        _sync = DiffTheme.CommandButton(IconLabel(KnownMonikers.Sync, "Sync"), "Synchronize the folders: mirror one side onto the other or copy newer files, with a preview first", Synchronize);
+        _sync.IsEnabled = false;
 
         var toolbar = BuildToolbar();
         SetDock(toolbar, Dock.Top);
@@ -171,6 +176,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         summary.Children.Add(_deleteRight);
         summary.Children.Add(_exportReport);
         summary.Children.Add(_createPatch);
+        summary.Children.Add(_sync);
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         SetDock(summary, Dock.Left);
@@ -1134,6 +1140,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _deleteRight.IsEnabled = enabled;
         _exportReport.IsEnabled = !_scanning && !_busy && _result is not null;
         _createPatch.IsEnabled = _exportReport.IsEnabled;
+        _sync.IsEnabled = _exportReport.IsEnabled;
     }
 
     // Saves the last completed comparison as a report; the save dialog's file type picks the format and rows.
@@ -1218,6 +1225,45 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         if (message is not null)
         {
             _position.Text = message;
+        }
+    }
+
+    // Previews a sync profile over the current results, then runs it; deletions go to the Recycle Bin.
+    private void Synchronize()
+    {
+        if (_scanning || _busy || _result is null)
+        {
+            return;
+        }
+
+        var dialog = new SyncDialog(_result);
+        if (dialog.ShowModal() != true || dialog.Plan is not { } plan)
+        {
+            return;
+        }
+
+        var options = new SyncExecuteOptions { Delete = RecycleDelete };
+        RunFileOperation(
+            "Synchronizing…",
+            cancellation => SyncExecutor.Execute(plan, null, options, cancellation)
+                .Where(r => r.Status == SyncOperationStatus.Failed)
+                .Select(r => $"{r.Operation.RelativePath}: {r.Error}")
+                .ToList(),
+            "Sync",
+            errors => errors == 0
+                ? $"Synchronized: {Plural(plan.Operations.Count(o => o.ChangesFiles), "operation")}."
+                : $"Synchronized with {errors:N0} {(errors == 1 ? "failure" : "failures")}");
+    }
+
+    private static void RecycleDelete(string path, bool isFolder)
+    {
+        if (isFolder)
+        {
+            FileSystem.DeleteDirectory(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
+        }
+        else
+        {
+            FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
         }
     }
 
