@@ -210,12 +210,13 @@ public sealed class AiTests
     [Fact]
     public async Task StreamingTimeoutLimitsSilenceNotTheWholeAnswer()
     {
-        // Six events 60 ms apart take longer than the 150 ms timeout, but no gap between them does.
-        var chunks = Enumerable.Range(0, 6)
+        // Twelve events 50 ms apart take longer than the 400 ms timeout, but no gap between them comes close,
+        // even when the full suite loads the machine.
+        var chunks = Enumerable.Range(0, 12)
             .Select(i => $"data: {{\"choices\":[{{\"delta\":{{\"reasoning\":\"step {i}\"}}}}]}}\n\n")
             .Append("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
-        using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(60));
-        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(150) }, new FakeHandler((_, _) =>
+        using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(50));
+        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(400) }, new FakeHandler((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
         Assert.Equal("ok", await client.StreamAsync(Prompt, _ => { }));
     }
