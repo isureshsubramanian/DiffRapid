@@ -133,6 +133,15 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         _right.View.Caret.PositionChanged += (_, e) => SelectDifferenceAt(_right, e.NewPosition.BufferPosition);
     }
 
+    /// <summary>
+    /// What a report calls the left file when the pane shows a temporary copy, e.g. "C:\pkg\A.1.0.nupkg (public API)";
+    /// null means the pane's own path.
+    /// </summary>
+    public string? LeftLabel { get; set; }
+
+    /// <summary>What a report calls the right file; see <see cref="LeftLabel"/>.</summary>
+    public string? RightLabel { get; set; }
+
     public static async Task<TextDiffControl> CreateAsync(AsyncPackage package, string leftPath, string rightPath, CompareOptions options)
     {
         await package.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -506,8 +515,10 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
         var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
         var result = TextComparer.Compare(left, right, _options);
-        var leftName = System.IO.Path.GetFileName(_left.Path);
-        var rightName = System.IO.Path.GetFileName(_right.Path);
+        var leftLabel = LeftLabel ?? _left.Path;
+        var rightLabel = RightLabel ?? _right.Path;
+        var leftName = System.IO.Path.GetFileName(leftLabel);
+        var rightName = System.IO.Path.GetFileName(rightLabel);
 
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
@@ -526,8 +537,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var html = dialog.FilterIndex == 1;
         var options = new FileReportOptions
         {
-            LeftLabel = _left.Path,
-            RightLabel = _right.Path,
+            LeftLabel = leftLabel,
+            RightLabel = rightLabel,
             Title = leftName + " ↔ " + rightName,
             GeneratedAt = DateTimeOffset.Now,
         };

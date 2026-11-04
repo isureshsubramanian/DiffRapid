@@ -91,10 +91,29 @@ public sealed class DiffRapidPackage : AsyncPackage
             {
                 var left = await Task.Run(() => AsComparableText(leftPath));
                 var right = await Task.Run(() => AsComparableText(rightPath));
-                return await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
+                var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
+                control.LeftLabel = SourceLabel(leftPath, left);
+                control.RightLabel = SourceLabel(rightPath, right);
+                return control;
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true);
+
+    /// <summary>
+    /// For a temporary copy named after its source ("A.nupkg (public API).cs"), the source path with what the copy
+    /// holds: "C:\pkg\A.nupkg (public API)". Null when the file is compared as it is.
+    /// </summary>
+    private static string? SourceLabel(string source, string comparable)
+    {
+        if (string.Equals(source, comparable, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var copyName = Path.GetFileNameWithoutExtension(comparable);
+        var sourceName = Path.GetFileName(source);
+        return copyName.StartsWith(sourceName, StringComparison.Ordinal) ? source + copyName.Substring(sourceName.Length) : source;
+    }
 
     /// <summary>
     /// Whether a file should open in the hex comparison: a NUL byte in its first 8000 bytes. Word, Excel and
