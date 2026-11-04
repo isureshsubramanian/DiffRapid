@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using DiffRapid.Core.Comparison;
@@ -34,11 +35,25 @@ internal sealed class DiffModel
     /// <summary>The hunk behind navigable difference <paramref name="difference"/> (an index into <see cref="HunkRows"/>).</summary>
     public DiffHunk HunkAt(int difference) => Result.Hunks[Rows[HunkRows[difference]].HunkIndex];
 
-    public static DiffModel Build(string leftText, string rightText, CompareOptions options, CancellationToken cancellationToken)
+    /// <param name="unimportantHunks">
+    /// Optional classifier returning the indexes of hunks that do not matter (comments, formatting); they are shown
+    /// like ignored differences: greyed, not counted and skipped by navigation.
+    /// </param>
+    public static DiffModel Build(
+        string leftText,
+        string rightText,
+        CompareOptions options,
+        CancellationToken cancellationToken,
+        Func<TextDiffResult, CancellationToken, IEnumerable<int>>? unimportantHunks = null)
     {
         var leftDoc = TextDocument.Parse(leftText);
         var rightDoc = TextDocument.Parse(rightText);
         var result = TextComparer.Compare(leftDoc, rightDoc, options, cancellationToken);
+        if (unimportantHunks is not null)
+        {
+            result = MarkIgnored(result, new HashSet<int>(unimportantHunks(result, cancellationToken)));
+        }
+
         var rows = DiffAlignment.Build(result);
 
         var left = new DiffPaneState(leftDoc.LineCount, isLeft: true);
@@ -122,6 +137,22 @@ internal sealed class DiffModel
         }
 
         return new DiffModel(result, rows, left, right, hunkRows);
+    }
+
+    private static TextDiffResult MarkIgnored(TextDiffResult result, ISet<int> hunks)
+    {
+        if (hunks.Count == 0)
+        {
+            return result;
+        }
+
+        var marked = new List<DiffHunk>(result.Hunks.Count);
+        for (var i = 0; i < result.Hunks.Count; i++)
+        {
+            marked.Add(hunks.Contains(i) ? result.Hunks[i] with { Significance = DiffSignificance.Ignored } : result.Hunks[i]);
+        }
+
+        return new TextDiffResult(result.Left, result.Right, result.Options, marked, result.MovedBlocks);
     }
 
     // Share of non-whitespace characters left unchanged, taken from the more changed of the two lines.

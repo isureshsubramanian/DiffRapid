@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -63,6 +64,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     private readonly DispatcherTimer _recompareTimer;
     private readonly WhitespaceMode _whitespaceWhenIgnored;
     private CompareOptions _options;
+    private bool _greyUnimportant;
     private CancellationTokenSource? _compareCancellation;
     private DiffModel? _model;
     private ITextSnapshot? _modelLeftSnapshot;
@@ -205,6 +207,15 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         settings.Children.Add(DiffTheme.OptionToggle("Case", "Ignore differences in letter case", v => UpdateOptions(_options with { IgnoreCase = v }), _options.IgnoreCase));
         settings.Children.Add(DiffTheme.OptionToggle("Blank lines", "Ignore inserted or deleted blank lines", v => UpdateOptions(_options with { IgnoreBlankLines = v }), _options.IgnoreBlankLines));
         settings.Children.Add(DiffTheme.OptionToggle("Line endings", "Ignore CRLF / LF differences", v => UpdateOptions(_options with { IgnoreLineEndings = v }), _options.IgnoreLineEndings));
+        settings.Children.Add(DiffTheme.OptionToggle(
+            "Comments & formatting",
+            "Grey out differences that only touch comments; in C# also formatting, #region lines and the order of using directives",
+            v =>
+            {
+                _greyUnimportant = v;
+                StartCompare();
+            },
+            _greyUnimportant));
         settings.Children.Add(DiffTheme.Separator());
 
         settings.Children.Add(DiffTheme.Caption("ALGORITHM"));
@@ -297,6 +308,37 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         _recompareTimer.Start();
     }
 
+    /// <summary>
+    /// Picks how to find differences that do not matter: Roslyn for C# (comments, formatting, regions, using order),
+    /// the comment syntax of the file type otherwise; null when the file type has no known comment syntax.
+    /// </summary>
+    private static Func<TextDiffResult, CancellationToken, IEnumerable<int>>? UnimportantClassifier(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        if (extension is ".cs" or ".csx")
+        {
+            return (result, cancellation) => DiffRapid.Semantic.CSharpDiffClassifier.Classify(result, cancellation).Select(h => h.HunkIndex);
+        }
+
+        CommentSyntax? syntax = extension switch
+        {
+            ".c" or ".h" or ".cpp" or ".hpp" or ".cc" or ".java" or ".js" or ".ts" or ".tsx" or ".jsx" or ".go" or ".rs" or ".swift" or ".kt" or ".scss" or ".less" or ".css" => CommentSyntax.CStyle,
+            ".ps1" or ".psm1" or ".py" or ".sh" or ".rb" or ".yml" or ".yaml" or ".toml" or ".ini" or ".editorconfig" => CommentSyntax.Hash,
+            ".sql" => CommentSyntax.Sql,
+            ".xml" or ".xaml" or ".config" or ".csproj" or ".vbproj" or ".props" or ".targets" or ".resx" or ".html" or ".htm" or ".svg" => CommentSyntax.Xml,
+            _ => null,
+        };
+        if (syntax is null)
+        {
+            return null;
+        }
+
+        var rules = new ImportanceRules { Comments = syntax };
+        return (result, cancellation) => ImportanceClassifier.Classify(result, rules, cancellation).Hunks
+            .Where(h => h.Importance == Importance.Unimportant)
+            .Select(h => h.HunkIndex);
+    }
+
     private void StartCompare()
     {
         _recompareTimer.Stop();
@@ -323,7 +365,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             try
             {
                 var stopwatch = Stopwatch.StartNew();
-                var model = await Task.Run(() => DiffModel.Build(leftText, rightText, options, cancellation.Token), cancellation.Token);
+                var unimportant = _greyUnimportant ? UnimportantClassifier(_left.Path) : null;
+                var model = await Task.Run(() => DiffModel.Build(leftText, rightText, options, cancellation.Token, unimportant), cancellation.Token);
                 var elapsed = stopwatch.Elapsed;
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation.Token);
                 if (!_disposed && !cancellation.IsCancellationRequested)
