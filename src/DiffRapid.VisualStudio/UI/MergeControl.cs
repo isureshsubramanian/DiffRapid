@@ -243,6 +243,7 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
 
         var all = new StackPanel { Orientation = Orientation.Horizontal };
         all.Children.Add(DiffTheme.Caption("ALL CONFLICTS"));
+        all.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Wizard, "Auto-resolve"), "Resolve the conflicts that need no judgement: identical changes, whitespace-only changes on one side, and changes to different lines", AutoResolve));
         all.Children.Add(DiffTheme.CommandButton(Label("Left"), "Resolve every conflict with the left version", () => ResolveAll(MergeResolution.Left)));
         all.Children.Add(DiffTheme.CommandButton(Label("Right"), "Resolve every conflict with the right version", () => ResolveAll(MergeResolution.Right)));
         all.Children.Add(DiffTheme.CommandButton(Label("Reset"), "Put the conflict markers back for every conflict, discarding their edits", () => ResolveAll(MergeResolution.Unresolved)));
@@ -534,6 +535,27 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         _layout.Session.ResolveAllConflicts(resolution);
         ReplaceChunks(Enumerable.Range(0, _layout.Result.Chunks.Count).Where(i => _layout.Result.Chunks[i].Kind == MergeChunkKind.Conflict));
         UpdateView();
+    }
+
+    // Settles only what is safe; the rest keep their markers and the position line says how many remain.
+    private void AutoResolve()
+    {
+        var resolved = ConflictResolver.ResolveSimple(_layout.Session);
+        if (resolved.Count > 0)
+        {
+            ReplaceChunks(resolved.Select(r => r.Chunk));
+            UpdateView();
+        }
+
+        var remaining = _layout.Session.UnresolvedCount;
+        if (remaining > 0 && resolved.Count > 0)
+        {
+            GoToConflict(+1, unresolvedOnly: true);
+        }
+
+        _position.Text = resolved.Count == 0
+            ? $"No conflict can be resolved automatically; {remaining:N0} need a choice"
+            : $"Resolved {resolved.Count:N0} {(resolved.Count == 1 ? "conflict" : "conflicts")} automatically; {remaining:N0} still need a choice";
     }
 
     private void GoToConflict(int direction, bool unresolvedOnly)
