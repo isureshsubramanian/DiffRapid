@@ -53,7 +53,17 @@ public sealed class DiffRapidPackage : AsyncPackage
 
     private static string AsComparableText(string path)
     {
-        if (DiffRapid.Documents.DocumentUnpackers.Find(path) is null || !File.Exists(path))
+        if (!File.Exists(path))
+        {
+            return path;
+        }
+
+        if (AssemblyApiText(path) is { } api)
+        {
+            return EditorSelection.WriteTemporary(api, Path.GetFileName(path) + " (public API)", ".cs");
+        }
+
+        if (DiffRapid.Documents.DocumentUnpackers.Find(path) is null)
         {
             return path;
         }
@@ -64,6 +74,45 @@ public sealed class DiffRapidPackage : AsyncPackage
         }
 
         return EditorSelection.WriteTemporary(text, Path.GetFileName(path) + " (text)", ".txt");
+    }
+
+    /// <summary>
+    /// The public API of a .NET assembly or NuGet package as sorted C#-like declarations, so two builds compare by
+    /// what changed for callers. Null for other files and for native binaries, which then compare as bytes.
+    /// </summary>
+    private static string? AssemblyApiText(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        try
+        {
+            if (extension is ".dll" or ".exe" or ".winmd")
+            {
+                return DiffRapid.Core.Assemblies.ApiReader.Read(path).ToText();
+            }
+
+            if (extension != ".nupkg")
+            {
+                return null;
+            }
+
+            var package = DiffRapid.Core.Assemblies.NuGetPackageReader.Read(path);
+            var text = new System.Text.StringBuilder();
+            foreach (var property in package.ToProperties())
+            {
+                text.Append("// ").Append(property.Key).Append(": ").AppendLine(property.Value);
+            }
+
+            foreach (var library in package.Libraries)
+            {
+                text.AppendLine().Append("// == ").AppendLine(library.Path).Append(library.Api.ToText());
+            }
+
+            return text.ToString();
+        }
+        catch (Exception ex) when (ex is BadImageFormatException or InvalidOperationException or InvalidDataException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Opens a new folder comparison document tab; the scan runs in the background.</summary>
