@@ -13,6 +13,16 @@
       "title": "Folder Comparison",
       "description": "Settings new folder comparisons start with. Files compared by full contents use the file comparison settings.",
       "order": 1
+    },
+    "diffRapid.localHistory": {
+      "title": "Local History",
+      "description": "Versions of files kept on this computer each time they are saved.",
+      "order": 2
+    },
+    "diffRapid.ai": {
+      "title": "AI",
+      "description": "Optional. Explain differences and propose conflict resolutions with an AI service you choose. Nothing is sent until an endpoint is set, and only when you ask; proposals are never applied without you.",
+      "order": 3
     }
   },
   "properties": {
@@ -205,6 +215,75 @@
       "allowAdditionsAndRemovals": true,
       "default": [],
       "order": 7
+    },
+    "diffRapid.localHistory.enabled": {
+      "type": "boolean",
+      "title": "Keep a local history of saved files",
+      "description": "Each time a file is saved, its content is kept in %LOCALAPPDATA%\\DiffRapid\\History, so Compare with Local History can show it later. Files over 5 MB and binary files are skipped.",
+      "default": true,
+      "order": 0
+    },
+    "diffRapid.localHistory.keepDays": {
+      "type": "integer",
+      "title": "Keep versions for (days)",
+      "description": "Older versions are removed when Visual Studio starts.",
+      "default": 30,
+      "minimum": 1,
+      "maximum": 3650,
+      "order": 1
+    },
+    "diffRapid.localHistory.versionsPerFile": {
+      "type": "integer",
+      "title": "Versions kept per file",
+      "description": "The newest versions are kept; older ones are removed when Visual Studio starts.",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 10000,
+      "order": 2
+    },
+    "diffRapid.ai.endpoint": {
+      "type": "string",
+      "title": "Endpoint",
+      "description": "Base URL of an OpenAI-compatible chat completions service, for example https://api.openai.com/v1 or http://localhost:11434/v1 for Ollama. Empty turns the AI features off: nothing is sent anywhere.",
+      "default": "",
+      "order": 0
+    },
+    "diffRapid.ai.kind": {
+      "type": "string",
+      "title": "Service",
+      "description": "Azure OpenAI uses a deployment name and an api-version instead of a model name.",
+      "default": "openAi",
+      "enum": [ "openAi", "azureOpenAi" ],
+      "enumItemLabels": [ "OpenAI-compatible", "Azure OpenAI" ],
+      "order": 1
+    },
+    "diffRapid.ai.model": {
+      "type": "string",
+      "title": "Model or deployment",
+      "description": "The model name (OpenAI-compatible) or the deployment name (Azure OpenAI).",
+      "default": "",
+      "order": 2
+    },
+    "diffRapid.ai.apiVersion": {
+      "type": "string",
+      "title": "Azure api-version",
+      "description": "Only for Azure OpenAI.",
+      "default": "2024-10-21",
+      "order": 3
+    },
+    "diffRapid.ai.apiKeyVariable": {
+      "type": "string",
+      "title": "Environment variable holding the API key",
+      "description": "The key is read from this environment variable and is never stored in settings. Leave the variable unset for local servers that need no key.",
+      "default": "OPENAI_API_KEY",
+      "order": 4
+    },
+    "diffRapid.ai.redactSecrets": {
+      "type": "boolean",
+      "title": "Mask secrets before sending",
+      "description": "Passwords, keys, tokens and connection strings found in the text are masked before it is sent.",
+      "default": true,
+      "order": 5
     }
   }
 }

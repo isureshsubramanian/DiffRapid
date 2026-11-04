@@ -32,11 +32,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\DiffRapid.Ai\DiffRapid.Ai.csproj" />
     <ProjectReference Include="..\DiffRapid.Core\DiffRapid.Core.csproj" />
     <ProjectReference Include="..\DiffRapid.Documents\DiffRapid.Documents.csproj" />
     <ProjectReference Include="..\DiffRapid.Semantic\DiffRapid.Semantic.csproj" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Design" />
+    <Reference Include="System.Net.Http" />
     <!-- FileSystem.DeleteFile/DeleteDirectory: move to the Recycle Bin. -->
     <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>

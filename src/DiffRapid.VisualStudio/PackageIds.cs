@@ -23,6 +23,8 @@ internal static class PackageIds
     public const int ApplyPatch = 0x0109;
     public const int ApplySelectedPatch = 0x010A;
     public const int CompareWithSaved = 0x010B;
+    public const int CompareWithHistory = 0x010C;
+    public const int CompareDocumentWithHistory = 0x010D;
 
     // File comparison window commands, bound to Alt+arrows in its key binding scope (DiffWindowGuid).
     public const int PreviousDifference = 0x0200;

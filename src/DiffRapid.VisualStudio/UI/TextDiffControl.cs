@@ -62,6 +62,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _details = new() { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
     private readonly DispatcherTimer _recompareTimer;
+    private readonly AiPanel _ai;
     private readonly WhitespaceMode _whitespaceWhenIgnored;
     private CompareOptions _options;
     private bool _greyUnimportant;
@@ -118,6 +119,9 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var footer = BuildFooter();
         SetDock(footer, Dock.Bottom);
         Children.Add(footer);
+        _ai = new AiPanel((DiffRapidPackage)package);
+        SetDock(_ai, Dock.Bottom);
+        Children.Add(_ai);
         Children.Add(BuildPanes());
 
         _left.Buffer.Changed += OnBufferChanged;
@@ -192,6 +196,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         }
 
         _disposed = true;
+        _ai.Close();
         _recompareTimer.Stop();
         _compareCancellation?.Cancel();
         _left.Buffer.Changed -= OnBufferChanged;
@@ -237,6 +242,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         }
 
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Filter, "Plugins"), "Compare the files after an unpacker or prediffers, such as PrettifyJson or SortLines, have transformed them", CompareWithPlugins));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.IntellisenseLightBulb, "Explain"), "Ask the AI service set up in Tools > Options > DiffRapid > AI to explain these differences, risky changes first", Explain));
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         summary.Children.Add(_metrics);
@@ -525,6 +531,26 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         {
             _position.Text = message;
         }
+    }
+
+    /// <summary>Asks the configured AI service to explain the differences as shown, unsaved edits included.</summary>
+    private void Explain()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
+        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
+        var result = TextComparer.Compare(left, right, _options);
+        if (result.AreEqual)
+        {
+            _position.Text = "The files are identical: there is nothing to explain";
+            return;
+        }
+
+        var leftName = System.IO.Path.GetFileName(LeftLabel ?? _left.Path);
+        var rightName = System.IO.Path.GetFileName(RightLabel ?? _right.Path);
+        var diff = UnifiedDiffWriter.Write(result, "a/" + leftName, "b/" + rightName);
+        var language = System.IO.Path.GetExtension(_right.Path).TrimStart('.');
+        _ai.Ask($"What changed: {leftName} → {rightName}", builder => builder.ExplainDiff(diff, leftName, rightName, language.Length == 0 ? null : language));
     }
 
     /// <summary>

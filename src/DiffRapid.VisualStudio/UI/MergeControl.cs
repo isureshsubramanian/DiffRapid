@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using DiffRapid.Ai;
 using DiffRapid.Core.Comparison;
 using DiffRapid.Core.Merge;
 using DiffRapid.Core.Text;
@@ -48,6 +49,7 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
     private readonly Pane _right;
     private readonly Pane _result;
     private readonly FileHeader _resultHeader;
+    private readonly AiPanel _ai;
     private readonly int _conflictCount;
     private readonly TextBlock _verdict = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 14, 0) };
     private readonly TextBlock _position = new() { VerticalAlignment = VerticalAlignment.Center };
@@ -65,6 +67,7 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
     private bool _disposed;
 
     private MergeControl(
+        DiffRapidPackage package,
         MergeLayout layout,
         string leftPath,
         string basePath,
@@ -113,6 +116,9 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         var footer = BuildFooter();
         SetDock(footer, Dock.Bottom);
         Children.Add(footer);
+        _ai = new AiPanel(package);
+        SetDock(_ai, Dock.Bottom);
+        Children.Add(_ai);
         Children.Add(BuildPanes(leftHeader, baseHeader, rightHeader));
 
         foreach (var source in new[] { _left, _base, _right })
@@ -158,7 +164,7 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         {
             Pane Create(string text, bool readOnly) => Pane.Create(text, readOnly, contentType, componentModel, services);
             return new MergeControl(
-                layout, leftPath, basePath, rightPath, resultPath, left, saved,
+                (DiffRapidPackage)package, layout, leftPath, basePath, rightPath, resultPath, left, saved,
                 Create(left.Text, readOnly: true),
                 Create(@base.Text, readOnly: true),
                 Create(right.Text, readOnly: true),
@@ -200,6 +206,7 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         }
 
         _disposed = true;
+        _ai.Close();
         _result.Buffer.Changed -= OnResultEdited;
         foreach (var pane in new[] { _left, _base, _right, _result })
         {
@@ -234,6 +241,7 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         commands.Children.Add(DiffTheme.CommandButton(Label("Left + right"), "Resolve the current conflict with the left lines followed by the right lines", () => ResolveCurrent(MergeResolution.LeftThenRight)));
         commands.Children.Add(DiffTheme.CommandButton(Label("Right + left"), "Resolve the current conflict with the right lines followed by the left lines", () => ResolveCurrent(MergeResolution.RightThenLeft)));
         commands.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Undo, "Reset"), "Put the conflict markers back for the current conflict, discarding its edits", () => ResolveCurrent(MergeResolution.Unresolved)));
+        commands.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.IntellisenseLightBulb, "Propose"), "Ask the AI service set up in Tools > Options > DiffRapid > AI to propose a resolution of the current conflict; nothing changes until you choose Use proposal", ProposeResolution));
         commands.Children.Add(DiffTheme.Separator());
         commands.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Save, "Save"), "Save the merged result (Ctrl+S)", Save));
         commands.Children.Add(DiffTheme.Separator());
@@ -506,6 +514,80 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         }
 
         UpdatePosition();
+    }
+
+    /// <summary>
+    /// Asks the AI service for the resolved lines of the current conflict. The proposal is shown, and goes into the
+    /// result only when the user chooses Use proposal, as a custom resolution that can be edited or undone.
+    /// </summary>
+    private void ProposeResolution()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (_currentChunk < 0 || _layout.Result.Chunks[_currentChunk].Kind != MergeChunkKind.Conflict)
+        {
+            _position.Text = _conflictCount == 0 ? "There are no conflicts to resolve" : "Select a conflict first: click inside it or use Next (F8)";
+            return;
+        }
+
+        var chunk = _currentChunk;
+        var conflict = _layout.Result.Chunks[chunk];
+        var result = _layout.Result;
+        var left = LinesText(result.Left, conflict.LeftStart, conflict.LeftEnd);
+        var right = LinesText(result.Right, conflict.RightStart, conflict.RightEnd);
+        var @base = LinesText(result.Base, conflict.BaseStart, conflict.BaseEnd);
+
+        // A few unchanged lines around the conflict, from the left file, so the proposal fits its surroundings.
+        const int context = 5;
+        var before = LinesText(result.Left, Math.Max(0, conflict.LeftStart - context), conflict.LeftStart);
+        var after = LinesText(result.Left, conflict.LeftEnd, Math.Min(result.Left.Lines.Count, conflict.LeftEnd + context));
+        var marked = before
+            + "<<<<<<< " + _labels.Left + "\n" + left
+            + "||||||| " + _labels.Base + "\n" + @base
+            + "=======\n" + right
+            + ">>>>>>> " + _labels.Right + "\n" + after;
+
+        _ai.Ask(
+            $"Proposal for conflict {ConflictNumber(chunk)}",
+            builder => builder.ProposeResolution(@base, left, right, marked),
+            reply =>
+            {
+                AiResolution proposal;
+                try
+                {
+                    proposal = ResolutionParser.Parse(reply);
+                }
+                catch (FormatException)
+                {
+                    return;
+                }
+
+                _ai.OfferAction("Use proposal", () => UseProposal(chunk, proposal.Lines));
+            });
+    }
+
+    private void UseProposal(int chunk, IReadOnlyList<string> lines)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        _layout.Session.SetCustomText(chunk, lines.ToList());
+        ReplaceChunks(new[] { chunk });
+        UpdateView();
+        _currentChunk = chunk;
+        RevealCurrentInResult();
+        _position.Text = "Used the AI proposal for this conflict. Review it; Undo or Reset puts the conflict back.";
+    }
+
+    private int ConflictNumber(int chunk) =>
+        _layout.Result.Chunks.Take(chunk + 1).Count(c => c.Kind == MergeChunkKind.Conflict);
+
+    private static string LinesText(TextDocument document, int start, int end)
+    {
+        var text = new StringBuilder();
+        for (var i = start; i < end && i < document.Lines.Count; i++)
+        {
+            text.Append(document.Lines[i].Content).Append('\n');
+        }
+
+        return text.ToString();
     }
 
     private void ResolveCurrent(MergeResolution resolution)

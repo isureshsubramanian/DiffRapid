@@ -5,7 +5,9 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using DiffRapid.Core.Algorithms;
 using DiffRapid.Core.Comparison;
+using DiffRapid.Ai;
 using DiffRapid.Core.Folders;
+using DiffRapid.Core.History;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Utilities.UnifiedSettings;
 using Newtonsoft.Json.Linq;
@@ -20,12 +22,30 @@ internal sealed class DiffRapidSettings
 {
     private const string FilePrefix = "diffRapid.fileComparison.";
     private const string FolderPrefix = "diffRapid.folderComparison.";
+    private const string HistoryPrefix = "diffRapid.localHistory.";
+    private const string AiPrefix = "diffRapid.ai.";
 
-    private DiffRapidSettings(CompareOptions compare, FolderCompareOptions folder)
+    private DiffRapidSettings(CompareOptions compare, FolderCompareOptions folder, bool keepHistory, LocalHistoryOptions history, AiEndpoint? ai, bool redactSecrets)
     {
         Compare = compare;
         Folder = folder;
+        KeepHistory = keepHistory;
+        History = history;
+        Ai = ai;
+        RedactSecrets = redactSecrets;
     }
+
+    /// <summary>Whether saved files are kept in the local history.</summary>
+    public bool KeepHistory { get; }
+
+    /// <summary>How long and how many versions the local history keeps.</summary>
+    public LocalHistoryOptions History { get; }
+
+    /// <summary>The AI service the user set up, or null when no endpoint is set and the AI features are off.</summary>
+    public AiEndpoint? Ai { get; }
+
+    /// <summary>Whether passwords, keys and tokens are masked before text is sent to the AI service.</summary>
+    public bool RedactSecrets { get; }
 
     /// <summary>Text comparison settings for a new comparison.</summary>
     public CompareOptions Compare { get; }
@@ -66,7 +86,43 @@ internal sealed class DiffRapidSettings
             TextOptions = compare,
         };
 
-        return new DiffRapidSettings(compare, folder);
+        var history = new LocalHistoryOptions
+        {
+            MaxAge = TimeSpan.FromDays(Math.Max(1, Value(reader, HistoryPrefix + "keepDays", 30))),
+            MaxEntriesPerFile = Math.Max(1, Value(reader, HistoryPrefix + "versionsPerFile", 100)),
+        };
+
+        return new DiffRapidSettings(
+            compare,
+            folder,
+            Value(reader, HistoryPrefix + "enabled", true),
+            history,
+            ReadAi(reader),
+            Value(reader, AiPrefix + "redactSecrets", true));
+    }
+
+    /// <summary>The configured AI service; the key comes from the environment variable named in the settings, never from the settings.</summary>
+    private static AiEndpoint? ReadAi(ISettingsReader? reader)
+    {
+        var endpoint = Value(reader, AiPrefix + "endpoint", string.Empty).Trim();
+        if (endpoint.Length == 0)
+        {
+            return null;
+        }
+
+        var model = Value(reader, AiPrefix + "model", string.Empty).Trim();
+        var kind = Enum(reader, AiPrefix + "kind", AiEndpointKind.OpenAi);
+        var keyVariable = Value(reader, AiPrefix + "apiKeyVariable", "OPENAI_API_KEY").Trim();
+        var key = keyVariable.Length == 0 ? null : Environment.GetEnvironmentVariable(keyVariable);
+        return new AiEndpoint
+        {
+            BaseUrl = endpoint,
+            Model = model,
+            Kind = kind,
+            Deployment = kind == AiEndpointKind.AzureOpenAi ? model : null,
+            ApiVersion = kind == AiEndpointKind.AzureOpenAi ? Value(reader, AiPrefix + "apiVersion", "2024-10-21").Trim() : null,
+            ApiKey = string.IsNullOrEmpty(key) ? null : key,
+        };
     }
 
     private static T Value<T>(ISettingsReader? reader, string moniker, T fallback)

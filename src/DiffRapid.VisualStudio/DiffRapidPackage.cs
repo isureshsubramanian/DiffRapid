@@ -18,7 +18,7 @@ namespace DiffRapid.VisualStudio;
 
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [Guid(PackageIds.PackageGuidString)]
-[ProvideMenuResource("Menus.ctmenu", 2)]
+[ProvideMenuResource("Menus.ctmenu", 3)]
 [ProvideSettingsManifest(PackageRelativeManifestFile = @"UnifiedSettings\registration.json")]
 [ProvideKeyBindingTable(PackageIds.DiffWindowGuidString, PackageIds.KeyBindingScopeNameResource, AllowNavKeyBinding = true)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
@@ -35,6 +35,7 @@ public sealed class DiffRapidPackage : AsyncPackage
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         await CompareCommands.InitializeAsync(this);
+        await LocalHistoryRecorder.StartAsync(this);
     }
 
     /// <summary>

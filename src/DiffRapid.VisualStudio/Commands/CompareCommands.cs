@@ -101,6 +101,26 @@ internal static class CompareCommands
         };
         commandService.AddCommand(compareDocumentWithVersion);
 
+        var compareWithHistory = new OleMenuCommand(
+            (_, _) => Run(package, () => CompareWithHistoryAsync(package, SolutionSelection.GetSelectedFilePaths()[0])),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareWithHistory));
+        compareWithHistory.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            compareWithHistory.Visible = SolutionSelection.GetSelectedFilePaths().Count == 1;
+        };
+        commandService.AddCommand(compareWithHistory);
+
+        var compareDocumentWithHistory = new OleMenuCommand(
+            (_, _) => Run(package, () => CompareDocumentWithHistoryAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareDocumentWithHistory));
+        compareDocumentWithHistory.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            compareDocumentWithHistory.Visible = EditorSelection.HasActiveEditor();
+        };
+        commandService.AddCommand(compareDocumentWithHistory);
+
         var compareWithSaved = new OleMenuCommand(
             (_, _) => Run(package, () => CompareWithSavedAsync(package)),
             new CommandID(PackageIds.CommandSet, PackageIds.CompareWithSaved));
@@ -336,6 +356,65 @@ internal static class CompareCommands
 
         var name = System.IO.Path.GetFileNameWithoutExtension(path) + "@" + version.ShortId;
         var earlier = EditorSelection.WriteTemporary(content, name, System.IO.Path.GetExtension(path));
+        await package.OpenComparisonAsync(earlier, path);
+    }
+
+    private static async Task CompareDocumentWithHistoryAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var path = EditorSelection.FromActiveEditor()?.DocumentPath;
+        if (path is null || !System.IO.File.Exists(path))
+        {
+            ShowMessage(package, "Save the document to a file first: the local history keeps saved versions.");
+            return;
+        }
+
+        await CompareWithHistoryAsync(package, path);
+    }
+
+    /// <summary>
+    /// Lets the user pick a version of the file kept by the local history, and compares it (left) with the file as it
+    /// is now, unsaved edits included (right).
+    /// </summary>
+    private static async Task CompareWithHistoryAsync(DiffRapidPackage package, string path)
+    {
+        var cancellation = package.DisposalToken;
+        var name = System.IO.Path.GetFileName(path);
+        if (LocalHistoryRecorder.Store is not { } store)
+        {
+            ShowMessage(package, "The local history is not ready yet; try again in a moment.");
+            return;
+        }
+
+        var entries = await Task.Run(() => store.List(path, cancellation), cancellation);
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation);
+        if (entries.Count == 0)
+        {
+            ShowMessage(package, $"The local history has no versions of {name} yet. A version is kept each time the file is saved in Visual Studio (Tools > Options > DiffRapid > Local History).");
+            return;
+        }
+
+        // The picker lists version control changes; a local version fills the same columns.
+        var versions = new System.Collections.Generic.List<VersionInfo>();
+        for (var index = 0; index < entries.Count; index++)
+        {
+            var entry = entries[index];
+            var size = entry.Size < 1024 ? $"{entry.Size} bytes" : $"{entry.Size / 1024.0:N1} KB";
+            var subject = string.IsNullOrEmpty(entry.Note) ? size : $"{size} · {entry.Note}";
+            versions.Add(new VersionInfo(index.ToString(System.Globalization.CultureInfo.InvariantCulture), "#" + (index + 1), entry.Label, entry.TimestampUtc.ToLocalTime(), subject, path));
+        }
+
+        var dialog = new VersionPickerDialog(name, "the local history", versions);
+        if (dialog.ShowModal() != true || dialog.SelectedVersion is not { } version)
+        {
+            return;
+        }
+
+        var chosen = entries[int.Parse(version.Id, System.Globalization.CultureInfo.InvariantCulture)];
+        var content = await Task.Run(() => store.Read(chosen, cancellation), cancellation);
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation);
+        var copyName = System.IO.Path.GetFileNameWithoutExtension(path) + "@" + chosen.TimestampUtc.ToLocalTime().ToString("yyyy-MM-dd HH.mm.ss", System.Globalization.CultureInfo.InvariantCulture);
+        var earlier = EditorSelection.WriteTemporary(content, copyName, System.IO.Path.GetExtension(path));
         await package.OpenComparisonAsync(earlier, path);
     }
 

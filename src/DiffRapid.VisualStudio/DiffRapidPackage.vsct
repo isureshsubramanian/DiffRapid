@@ -120,6 +120,26 @@
           <LocCanonicalName>.DiffRapid.CompareWithSaved</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareDocumentWithHistory" priority="0x0105" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="EditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Compare with Local History (DiffRapid)...</ButtonText>
+          <CanonicalName>.DiffRapid.CompareDocumentWithHistory</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareDocumentWithHistory</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareWithHistory" priority="0x0103" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="SolutionExplorerGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Compare with Local History (DiffRapid)...</ButtonText>
+          <CanonicalName>.DiffRapid.CompareWithHistory</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareWithHistory</LocCanonicalName>
+        </Strings>
+      </Button>
 
       <Button guid="guidDiffRapidCommandSet" id="cmdidApplyPatch" priority="0x0103" type="Button">
         <Parent guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" />
@@ -225,6 +245,8 @@
       <IDSymbol name="cmdidApplyPatch" value="0x0109" />
       <IDSymbol name="cmdidApplySelectedPatch" value="0x010A" />
       <IDSymbol name="cmdidCompareWithSaved" value="0x010B" />
+      <IDSymbol name="cmdidCompareWithHistory" value="0x010C" />
+      <IDSymbol name="cmdidCompareDocumentWithHistory" value="0x010D" />
       <IDSymbol name="cmdidPreviousDifference" value="0x0200" />
       <IDSymbol name="cmdidNextDifference" value="0x0201" />
       <IDSymbol name="cmdidCopyToLeft" value="0x0202" />
