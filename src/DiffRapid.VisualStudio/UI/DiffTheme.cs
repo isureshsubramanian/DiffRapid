@@ -168,6 +168,64 @@ internal static class DiffTheme
         return null;
     }
 
+    /// <summary>
+    /// Gives a slider the flat command-bar look: a thin track, the filled part and the thumb in the theme's accent.
+    /// The template draws with the slider's own brushes, which follow the theme through resource references.
+    /// </summary>
+    public static void FlatSlider(Slider slider)
+    {
+        slider.Style = FlatSliderStyle.Value;
+        slider.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.SystemHighlightBrushKey);
+        slider.SetResourceReference(Control.BorderBrushProperty, EnvironmentColors.CommandBarMenuSeparatorBrushKey);
+    }
+
+    private static readonly Lazy<Style> FlatSliderStyle = new(() => (Style)System.Windows.Markup.XamlReader.Parse(
+        """
+        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Slider">
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Slider">
+                <ControlTemplate.Resources>
+                  <Style x:Key="Part" TargetType="RepeatButton">
+                    <Setter Property="Focusable" Value="False" />
+                    <Setter Property="IsTabStop" Value="False" />
+                    <Setter Property="Template">
+                      <Setter.Value>
+                        <ControlTemplate TargetType="RepeatButton">
+                          <Border Background="Transparent">
+                            <Border Height="2" VerticalAlignment="Center" CornerRadius="1" Background="{TemplateBinding Background}" />
+                          </Border>
+                        </ControlTemplate>
+                      </Setter.Value>
+                    </Setter>
+                  </Style>
+                </ControlTemplate.Resources>
+                <Grid MinHeight="18" Background="Transparent">
+                  <Track x:Name="PART_Track">
+                    <Track.DecreaseRepeatButton>
+                      <RepeatButton Style="{StaticResource Part}" Command="{x:Static Slider.DecreaseLarge}" Background="{TemplateBinding Foreground}" />
+                    </Track.DecreaseRepeatButton>
+                    <Track.IncreaseRepeatButton>
+                      <RepeatButton Style="{StaticResource Part}" Command="{x:Static Slider.IncreaseLarge}" Background="{TemplateBinding BorderBrush}" />
+                    </Track.IncreaseRepeatButton>
+                    <Track.Thumb>
+                      <Thumb Width="8" Height="14">
+                        <Thumb.Template>
+                          <ControlTemplate TargetType="Thumb">
+                            <Border CornerRadius="2" Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}" />
+                          </ControlTemplate>
+                        </Thumb.Template>
+                      </Thumb>
+                    </Track.Thumb>
+                  </Track>
+                </Grid>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        """));
+
     public static FrameworkElement Separator()
     {
         var line = new Border { Width = 1, Margin = new Thickness(8, 5, 8, 5) };

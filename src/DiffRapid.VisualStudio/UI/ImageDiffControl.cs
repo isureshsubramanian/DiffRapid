@@ -216,20 +216,25 @@ internal sealed class ImageDiffControl : DockPanel, IComparisonView, IOleCommand
         return group;
     }
 
-    private static Slider CreateSlider(double minimum, double maximum, double value, string tooltip) => new()
+    private static Slider CreateSlider(double minimum, double maximum, double value, string tooltip)
     {
-        Minimum = minimum,
-        Maximum = maximum,
-        Value = value,
-        Width = 100,
-        SmallChange = 1,
-        LargeChange = 10,
-        IsSnapToTickEnabled = true,
-        TickFrequency = 1,
-        VerticalAlignment = VerticalAlignment.Center,
-        ToolTip = tooltip,
-        Focusable = false,
-    };
+        var slider = new Slider
+        {
+            Minimum = minimum,
+            Maximum = maximum,
+            Value = value,
+            Width = 100,
+            SmallChange = 1,
+            LargeChange = 10,
+            IsSnapToTickEnabled = true,
+            TickFrequency = 1,
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = tooltip,
+            Focusable = false,
+        };
+        DiffTheme.FlatSlider(slider);
+        return slider;
+    }
 
     private FrameworkElement BuildHeader()
     {
