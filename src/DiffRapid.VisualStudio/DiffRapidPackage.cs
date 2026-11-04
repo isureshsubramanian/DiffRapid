@@ -185,16 +185,17 @@ public sealed class DiffRapidPackage : AsyncPackage
 
             var package = DiffRapid.Core.Assemblies.NuGetPackageReader.Read(path);
 
-            // "\n" throughout, as in the API text: mixed line endings make the editor normalize one side.
+            // Plain lines, as in the API text, so ignoring comments never hides a version or dependency change;
+            // and "\n" throughout, because mixed line endings make the editor normalize one side.
             var text = new System.Text.StringBuilder();
             foreach (var property in package.ToProperties())
             {
-                text.Append("// ").Append(property.Key).Append(": ").Append(property.Value).Append('\n');
+                text.Append(property.Key).Append(": ").Append(property.Value).Append('\n');
             }
 
             foreach (var library in package.Libraries)
             {
-                text.Append("\n// == ").Append(library.Path).Append('\n').Append(library.Api.ToText());
+                text.Append("\n== ").Append(library.Path).Append('\n').Append(library.Api.ToText());
             }
 
             return text.ToString();
