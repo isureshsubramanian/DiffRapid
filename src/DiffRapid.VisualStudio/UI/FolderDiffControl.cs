@@ -789,6 +789,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         {
             FolderCompareStatus.Different => _root.TotalFiles == 0 ? string.Empty : $"{100.0 * files / _root.TotalFiles:0.#}% of {_root.TotalFiles:N0} files",
             FolderCompareStatus.Error => files == 0 ? "Nothing to review" : "Unreadable, or file vs folder",
+            FolderCompareStatus.Renamed when files > 0 => $"{files / 2:N0} {(files == 2 ? "pair" : "pairs")} of files  ·  {FormatSize(bytes / 2)}",
             _ => files == 0 ? "None" : $"{files:N0} {(files == 1 ? "file" : "files")}  ·  {FormatSize(bytes)}",
         };
     }
@@ -1683,16 +1684,18 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
                 var isMixedFolder = childItem.Kind == FolderItemKind.Folder && childItem.Left.Exists && childItem.Right.Exists
                     && childItem.Status is FolderCompareStatus.Identical or FolderCompareStatus.Different;
-                if (isMixedFolder)
+                // A one-sided folder is one entry, unless files in it were renamed or moved: then it is only a
+                // container for them and counts what it holds. A rename or move counts once, on its left side.
+                var holdsMoves = childItem.Kind == FolderItemKind.Folder && child.Files.ContainsKey(FolderCompareStatus.Renamed);
+                if (isMixedFolder || holdsMoves)
                 {
                     foreach (var pair in child.Summary)
                     {
                         Summary[pair.Key] = (Summary.TryGetValue(pair.Key, out var n) ? n : 0) + pair.Value;
                     }
                 }
-                else
+                else if (ChipStatus(childItem.Status) is var status && (status != FolderCompareStatus.Renamed || childItem.Left.Exists))
                 {
-                    var status = ChipStatus(childItem.Status);
                     Summary[status] = (Summary.TryGetValue(status, out var n) ? n : 0) + 1;
                 }
 
