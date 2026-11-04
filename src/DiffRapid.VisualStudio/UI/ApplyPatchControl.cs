@@ -100,7 +100,7 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
 
     private FrameworkElement BuildToolbar()
     {
-        var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
+        var bar = new Grid { Margin = new Thickness(6, 4, 6, 4) };
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         actions.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Preview again (F5)", () => StartPlan(null)));
@@ -109,7 +109,6 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         actions.Children.Add(_compare);
         actions.Children.Add(DiffTheme.Separator());
         actions.Children.Add(_verdict);
-        SetDock(actions, Dock.Left);
         bar.Children.Add(actions);
 
         var settings = new StackPanel { Orientation = Orientation.Horizontal };
@@ -129,8 +128,8 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         fuzz.SelectedIndex = Math.Max(0, Array.IndexOf(FuzzLevels, _options.Fuzz));
         fuzz.SelectionChanged += (_, _) => ChangeOptions(_options with { Fuzz = FuzzLevels[fuzz.SelectedIndex] });
         settings.Children.Add(fuzz);
-        SetDock(settings, Dock.Right);
         bar.Children.Add(settings);
+        DiffTheme.WrapWhenNarrow(bar, actions, settings);
 
         var chrome = new Border { Child = bar, BorderThickness = new Thickness(0, 0, 0, 1) };
         chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);

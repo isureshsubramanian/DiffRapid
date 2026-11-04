@@ -185,7 +185,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
 
     private FrameworkElement BuildToolbar()
     {
-        var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
+        var bar = new Grid { Margin = new Thickness(6, 4, 6, 4) };
 
         var summary = new StackPanel { Orientation = Orientation.Horizontal };
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToPrevious, "Previous"), "Previous difference (Shift+F8 or Alt+Up)", () => NavigateDifference(-1)));
@@ -204,7 +204,6 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         summary.Children.Add(_metrics);
-        SetDock(summary, Dock.Left);
         bar.Children.Add(summary);
 
         var settings = new StackPanel { Orientation = Orientation.Horizontal };
@@ -237,8 +236,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         settings.Children.Add(algorithm);
         settings.Children.Add(DiffTheme.Separator());
         settings.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Compare again", StartCompare));
-        SetDock(settings, Dock.Right);
         bar.Children.Add(settings);
+        DiffTheme.WrapWhenNarrow(bar, summary, settings);
 
         var chrome = new Border { Child = bar, BorderThickness = new Thickness(0, 0, 0, 1) };
         chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);

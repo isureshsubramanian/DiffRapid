@@ -49,6 +49,35 @@ internal static class DiffTheme
         return toggle;
     }
 
+    /// <summary>
+    /// Lays out a toolbar of two groups: <paramref name="left"/> and <paramref name="right"/> share one row while they
+    /// fit, with <paramref name="right"/> at the far end; when the window is too narrow, <paramref name="right"/>
+    /// moves to a second row instead of being cut off.
+    /// </summary>
+    public static void WrapWhenNarrow(Grid bar, FrameworkElement left, FrameworkElement right)
+    {
+        bar.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        bar.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        left.HorizontalAlignment = HorizontalAlignment.Left;
+
+        void Arrange()
+        {
+            var fits = left.DesiredSize.Width + right.DesiredSize.Width <= bar.ActualWidth;
+            var row = fits ? 0 : 1;
+            if (Grid.GetRow(right) != row)
+            {
+                Grid.SetRow(right, row);
+                right.HorizontalAlignment = fits ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+                right.Margin = fits ? default : new Thickness(0, 4, 0, 0);
+            }
+        }
+
+        right.HorizontalAlignment = HorizontalAlignment.Right;
+        bar.SizeChanged += (_, _) => Arrange();
+        left.SizeChanged += (_, _) => Arrange();
+        right.SizeChanged += (_, _) => Arrange();
+    }
+
     public static FrameworkElement Separator()
     {
         var line = new Border { Width = 1, Margin = new Thickness(8, 5, 8, 5) };

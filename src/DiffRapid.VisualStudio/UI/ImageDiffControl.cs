@@ -154,7 +154,7 @@ internal sealed class ImageDiffControl : DockPanel, IComparisonView, IOleCommand
 
     private FrameworkElement BuildToolbar()
     {
-        var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
+        var bar = new Grid { Margin = new Thickness(6, 4, 6, 4) };
 
         var commands = new StackPanel { Orientation = Orientation.Horizontal };
         commands.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.GoToPrevious), "Previous difference region (Shift+F7)", () => GoToRegion(-1)));
@@ -169,7 +169,6 @@ internal sealed class ImageDiffControl : DockPanel, IComparisonView, IOleCommand
         commands.Children.Add(ModeToggle(ImageViewMode.Subtract, "Subtract", "The difference of each colour channel, amplified so small changes show"));
         commands.Children.Add(DiffTheme.Separator());
         commands.Children.Add(_verdict);
-        SetDock(commands, Dock.Left);
         bar.Children.Add(commands);
 
         var settings = new StackPanel { Orientation = Orientation.Horizontal };
@@ -186,8 +185,8 @@ internal sealed class ImageDiffControl : DockPanel, IComparisonView, IOleCommand
         settings.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.ZoomOriginalSize), "Actual size: one image pixel per screen pixel (100%)", () => SetZoomAtCentre(1)));
         settings.Children.Add(DiffTheme.Separator());
         settings.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Load the files and compare again (F5)", () => StartCompare(reload: true)));
-        SetDock(settings, Dock.Right);
         bar.Children.Add(settings);
+        DiffTheme.WrapWhenNarrow(bar, commands, settings);
 
         var chrome = new Border { Child = bar, BorderThickness = new Thickness(0, 0, 0, 1) };
         chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);

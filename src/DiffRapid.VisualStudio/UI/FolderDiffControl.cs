@@ -172,7 +172,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
     private FrameworkElement BuildToolbar()
     {
-        var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
+        var bar = new Grid { Margin = new Thickness(6, 4, 6, 4) };
 
         var summary = new StackPanel { Orientation = Orientation.Horizontal };
         summary.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Compare again (F5)", StartScan));
@@ -186,7 +186,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         summary.Children.Add(_sync);
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
-        SetDock(summary, Dock.Left);
         bar.Children.Add(summary);
 
         var settings = new StackPanel { Orientation = Orientation.Horizontal };
@@ -214,8 +213,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             StartScan();
         };
         settings.Children.Add(method);
-        SetDock(settings, Dock.Right);
         bar.Children.Add(settings);
+        DiffTheme.WrapWhenNarrow(bar, summary, settings);
 
         var chrome = new Border { Child = bar, BorderThickness = new Thickness(0, 0, 0, 1) };
         chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);

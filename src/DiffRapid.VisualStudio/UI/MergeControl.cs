@@ -221,7 +221,7 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
 
     private FrameworkElement BuildToolbar()
     {
-        var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
+        var bar = new Grid { Margin = new Thickness(6, 4, 6, 4) };
 
         var commands = new StackPanel { Orientation = Orientation.Horizontal };
         commands.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.GoToPrevious, "Previous"), "Previous conflict (Shift+F8)", () => GoToConflict(-1, unresolvedOnly: false)));
@@ -238,7 +238,6 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         commands.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Save, "Save"), "Save the merged result (Ctrl+S)", Save));
         commands.Children.Add(DiffTheme.Separator());
         commands.Children.Add(_verdict);
-        SetDock(commands, Dock.Left);
         bar.Children.Add(commands);
 
         var all = new StackPanel { Orientation = Orientation.Horizontal };
@@ -247,8 +246,8 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
         all.Children.Add(DiffTheme.CommandButton(Label("Left"), "Resolve every conflict with the left version", () => ResolveAll(MergeResolution.Left)));
         all.Children.Add(DiffTheme.CommandButton(Label("Right"), "Resolve every conflict with the right version", () => ResolveAll(MergeResolution.Right)));
         all.Children.Add(DiffTheme.CommandButton(Label("Reset"), "Put the conflict markers back for every conflict, discarding their edits", () => ResolveAll(MergeResolution.Unresolved)));
-        SetDock(all, Dock.Right);
         bar.Children.Add(all);
+        DiffTheme.WrapWhenNarrow(bar, commands, all);
 
         var chrome = new Border { Child = bar, BorderThickness = new Thickness(0, 0, 0, 1) };
         chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);

@@ -89,7 +89,7 @@ internal sealed class ThreeWayFolderControl : DockPanel, IComparisonView
 
     private FrameworkElement BuildToolbar()
     {
-        var bar = new DockPanel { LastChildFill = false, Margin = new Thickness(6, 4, 6, 4) };
+        var bar = new Grid { Margin = new Thickness(6, 4, 6, 4) };
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         actions.Children.Add(DiffTheme.CommandButton(Icon(KnownMonikers.Refresh), "Compare again (F5)", StartScan));
@@ -97,13 +97,12 @@ internal sealed class ThreeWayFolderControl : DockPanel, IComparisonView
         actions.Children.Add(_open);
         actions.Children.Add(DiffTheme.Separator());
         actions.Children.Add(_verdict);
-        SetDock(actions, Dock.Left);
         bar.Children.Add(actions);
 
         var settings = new StackPanel { Orientation = Orientation.Horizontal };
         settings.Children.Add(_changesOnly);
-        SetDock(settings, Dock.Right);
         bar.Children.Add(settings);
+        DiffTheme.WrapWhenNarrow(bar, actions, settings);
 
         var chrome = new Border { Child = bar, BorderThickness = new Thickness(0, 0, 0, 1) };
         chrome.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.CommandBarGradientBeginBrushKey);
