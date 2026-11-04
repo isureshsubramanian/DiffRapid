@@ -35,13 +35,36 @@ public sealed class DiffRapidPackage : AsyncPackage
         await CompareCommands.InitializeAsync(this);
     }
 
-    /// <summary>Opens a new comparison document tab for two files.</summary>
+    /// <summary>
+    /// Opens a new comparison document tab for two files. Word, Excel and PowerPoint files are compared as their
+    /// text, through temporary copies (editing those does not change the documents).
+    /// </summary>
     public Task OpenComparisonAsync(string leftPath, string rightPath) =>
         OpenDocumentAsync(
             "Loading the comparison",
-            async () => await TextDiffControl.CreateAsync(this, leftPath, rightPath, (await DiffRapidSettings.ReadAsync(this)).Compare),
+            async () =>
+            {
+                var left = await Task.Run(() => AsComparableText(leftPath));
+                var right = await Task.Run(() => AsComparableText(rightPath));
+                return await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
+            },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true);
+
+    private static string AsComparableText(string path)
+    {
+        if (DiffRapid.Documents.DocumentUnpackers.Find(path) is null || !File.Exists(path))
+        {
+            return path;
+        }
+
+        if (!DiffRapid.Documents.DocumentText.TryExtract(path, out var text))
+        {
+            throw new InvalidDataException($"{Path.GetFileName(path)} could not be read as a document; it may be damaged or protected.");
+        }
+
+        return EditorSelection.WriteTemporary(text, Path.GetFileName(path) + " (text)", ".txt");
+    }
 
     /// <summary>Opens a new folder comparison document tab; the scan runs in the background.</summary>
     public Task OpenFolderComparisonAsync(string leftPath, string rightPath) =>
