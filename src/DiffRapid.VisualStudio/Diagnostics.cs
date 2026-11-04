@@ -61,6 +61,15 @@ internal static class Diagnostics
         AppendToLogFile($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] WARNING {message}");
     }
 
+    /// <summary>Logs a step on the UI thread that took long enough for the user to notice (over 200 ms).</summary>
+    public static void LogIfSlow(string step, System.Diagnostics.Stopwatch elapsed)
+    {
+        if (elapsed.ElapsedMilliseconds > 200)
+        {
+            AppendToLogFile($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] SLOW {step}: {elapsed.ElapsedMilliseconds:N0} ms");
+        }
+    }
+
     /// <summary>%LOCALAPPDATA%\DiffRapid\diffrapid.log, so errors survive after Visual Studio closes.</summary>
     public static string LogFilePath { get; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiffRapid", "diffrapid.log");

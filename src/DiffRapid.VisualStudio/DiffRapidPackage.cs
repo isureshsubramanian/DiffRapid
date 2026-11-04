@@ -107,18 +107,28 @@ public sealed class DiffRapidPackage : AsyncPackage
     /// Runs an unpacker and prediffer pipeline on two files' content and opens the resulting texts side by side,
     /// read-only. The content is passed in so a text comparison can include its unsaved edits.
     /// </summary>
-    public Task<IVsWindowFrame> OpenPluginComparisonAsync(string leftPath, byte[] leftContent, string rightPath, byte[] rightContent, PluginOptions plugins)
+    public async Task<IVsWindowFrame> OpenPluginComparisonAsync(string leftPath, byte[] leftContent, string rightPath, byte[] rightContent, PluginOptions plugins)
     {
-        var steps = string.Join(" | ", new[] { plugins.Unpacker, plugins.Prediffer }.Where(step => !string.IsNullOrWhiteSpace(step)));
-        return OpenDocumentAsync(
-            "Running the plugins",
+        // The pipelines run first, in the background, because the tab is named after the steps that actually ran.
+        (string Path, string Steps) left, right;
+        try
+        {
+            left = await Task.Run(() => PreparedCopy(leftPath, leftContent, plugins));
+            right = await Task.Run(() => PreparedCopy(rightPath, rightContent, plugins));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or PluginException or IOException or ArgumentException)
+        {
+            throw new StepFailedException("Running the plugins", ex);
+        }
+
+        var steps = left.Steps == right.Steps ? left.Steps : left.Steps + " / " + right.Steps;
+        return await OpenDocumentAsync(
+            "Loading the comparison",
             async () =>
             {
-                var left = await Task.Run(() => PreparedCopy(leftPath, leftContent, plugins, steps));
-                var right = await Task.Run(() => PreparedCopy(rightPath, rightContent, plugins, steps));
-                var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
-                control.LeftLabel = SourceLabel(leftPath, left);
-                control.RightLabel = SourceLabel(rightPath, right);
+                var control = await TextDiffControl.CreateAsync(this, left.Path, right.Path, (await DiffRapidSettings.ReadAsync(this)).Compare);
+                control.LeftLabel = SourceLabel(leftPath, left.Path);
+                control.RightLabel = SourceLabel(rightPath, right.Path);
                 control.MarkExtracted(left: true, right: true);
                 return control;
             },
@@ -126,8 +136,11 @@ public sealed class DiffRapidPackage : AsyncPackage
             hostsEditors: true);
     }
 
-    /// <summary>Writes what the pipelines make of a file to a temporary copy named "A.json (PrettifyJson)".</summary>
-    private static string PreparedCopy(string path, byte[] content, PluginOptions plugins, string steps)
+    /// <summary>
+    /// Writes what the pipelines make of a file to a temporary copy named after the steps that ran, such as
+    /// "A.json (PrettifyJson sort + SortLines)", and returns its path and that name of the steps.
+    /// </summary>
+    private static (string Path, string Steps) PreparedCopy(string path, byte[] content, PluginOptions plugins)
     {
         PreparedFile prepared;
         try
@@ -144,9 +157,23 @@ public sealed class DiffRapidPackage : AsyncPackage
             throw new InvalidDataException($"{Path.GetFileName(path)} is not text and no unpacker could read it. Choose an unpacker, such as 'auto'.");
         }
 
+        // "auto" names the unpacker it picked, or nothing when the file was read as text. File names cannot hold "|".
+        var unpacker = string.Equals(plugins.Unpacker?.Trim(), PluginOptions.AutomaticUnpacker, StringComparison.OrdinalIgnoreCase)
+            ? prepared.UnpackerName
+            : plugins.Unpacker;
+        var steps = string.Join(" + ", new[] { unpacker, plugins.Prediffer }
+            .Where(step => !string.IsNullOrWhiteSpace(step))
+            .SelectMany(step => step!.Split('|'))
+            .Select(step => step.Trim()));
+        if (steps.Length == 0)
+        {
+            steps = "as text";
+        }
+
         // Unpacked text is no longer in the file's own language; transformed text still is, so it keeps its colors.
         var extension = prepared.UnpackerName is null ? Path.GetExtension(path) : ".txt";
-        return EditorSelection.WriteTemporary(prepared.CompareText, Path.GetFileName(path) + " (" + steps + ")", extension);
+        var copy = EditorSelection.WriteTemporary(prepared.CompareText, Path.GetFileName(path) + " (" + steps + ")", extension);
+        return (copy, steps);
     }
 
     /// <summary>

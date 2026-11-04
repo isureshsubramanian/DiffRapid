@@ -650,7 +650,9 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         {
             try
             {
+                var opening = Stopwatch.StartNew();
                 await package.OpenPluginComparisonAsync(_left.Path, left, _right.Path, right, dialog.Options);
+                Diagnostics.LogIfSlow("Opening the plugin comparison", opening);
                 _position.Text = string.Empty;
             }
             catch (StepFailedException ex)

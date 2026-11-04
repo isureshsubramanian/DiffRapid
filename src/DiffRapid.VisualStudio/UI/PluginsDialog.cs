@@ -34,6 +34,8 @@ internal sealed class PluginsDialog : DialogWindow
 
     public PluginsDialog(string leftName, string rightName)
     {
+        var opening = System.Diagnostics.Stopwatch.StartNew();
+        ContentRendered += (_, _) => Diagnostics.LogIfSlow("Showing the Compare with plugins dialog", opening);
         Title = "DiffRapid";
         Width = 640;
         SizeToContent = SizeToContent.Height;
@@ -114,9 +116,11 @@ internal sealed class PluginsDialog : DialogWindow
         _prediffer.DropDownClosed += (_, _) => AppendPickedPrediffer();
         Loaded += (_, _) =>
         {
+            Diagnostics.LogIfSlow("Loading the Compare with plugins dialog", opening);
             ShowHelp();
             _prediffer.Focus();
         };
+        Diagnostics.LogIfSlow("Building the Compare with plugins dialog", opening);
     }
 
     /// <summary>The chosen pipelines; empty strings mean none.</summary>
@@ -142,6 +146,12 @@ internal sealed class PluginsDialog : DialogWindow
         _appending = true;
         var typed = _lastTypedPrediffer.Trim();
         var text = typed.Length == 0 || typed == picked ? picked : typed + " | " + picked;
+
+        // A plugin with options (PrettifyJson sort, SortLines desc) leaves the caret after a space, ready for them.
+        if (_registry.FindPrediffer(picked) is { ArgumentsHelp.Length: > 0 })
+        {
+            text += " ";
+        }
         _prediffer.SelectedIndex = -1;
         _prediffer.Text = text;
         _lastTypedPrediffer = text;
@@ -194,7 +204,7 @@ internal sealed class PluginsDialog : DialogWindow
                 continue;
             }
 
-            var arguments = plugin.ArgumentsHelp.Length == 0 ? string.Empty : $" Arguments: {plugin.ArgumentsHelp}";
+            var arguments = plugin.ArgumentsHelp.Length == 0 ? string.Empty : $" Options to type after the name: {plugin.ArgumentsHelp}";
             lines.Add($"{plugin.Name}: {plugin.Description}{arguments}");
         }
 
