@@ -17,6 +17,13 @@ internal sealed class PluginsDialog : DialogWindow
 {
     private const string NoUnpacker = "(none)";
 
+    private static readonly string[] Presets =
+    {
+        "PrettifyJson sort",
+        "SortLines ignorecase",
+        "IgnoreComments c script sql xml",
+    };
+
     private static string _lastUnpacker = PluginOptions.AutomaticUnpacker;
     private static string _lastPrediffer = string.Empty;
 
@@ -53,6 +60,12 @@ internal sealed class PluginsDialog : DialogWindow
         foreach (var plugin in _registry.Unpackers)
         {
             _unpacker.Items.Add(plugin.Name);
+        }
+
+        // The common choices with their options first, so key order in JSON stops counting without typing "sort".
+        foreach (var preset in Presets)
+        {
+            _prediffer.Items.Add(preset);
         }
 
         foreach (var plugin in _registry.Prediffers)
