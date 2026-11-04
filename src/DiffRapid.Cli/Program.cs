@@ -48,6 +48,10 @@ internal static partial class Program
           diffrapid hex <left> <right> [--resync] [--bytes-per-line 8|16|32] [--context <n>] [--summary]
                          Binary compare shown as hex; --resync finds insertions and deletions (up to 64 MB).
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
+          diffrapid image <left> <right> [--tolerance <0..255>] [--diff-out <file.png>]
+                         [--ignore-alpha] [--max-offset <n>]
+                         Compares PNG or BMP images; --diff-out writes the differences highlighted.
+          diffrapid git-config [--global]      print setup commands for Git Bash / POSIX shells
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -106,6 +110,7 @@ internal static partial class Program
                 "sync" => RunSync(parsed),
                 "table" => RunTable(args),
                 "hex" => RunHex(parsed, Console.Out),
+                "image" => RunImage(args),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
