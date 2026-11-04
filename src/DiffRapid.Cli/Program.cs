@@ -69,6 +69,7 @@ internal static partial class Program
           diffrapid api <left.dll|.nupkg> [<right.dll|.nupkg>] [--breaking-only]
                          One file: print its public API. Two: list API changes, marking breaking ones.
           diffrapid plugins                      list the built-in unpackers and prediffers
+          diffrapid mcp                          print MCP client registration JSON
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -136,6 +137,7 @@ internal static partial class Program
                 "plugins" => RunPlugins(parsed),
                 "struct" => RunStructured(parsed),
                 "semantic" => RunSemantic(parsed),
+                "mcp" => RunMcp(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
