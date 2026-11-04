@@ -179,15 +179,28 @@ internal sealed class AiPanel : Border
             return;
         }
 
-        var cancellation = new CancellationTokenSource(endpoint.Timeout);
+        // The client times out when the service goes quiet; Stop cancels this.
+        var cancellation = new CancellationTokenSource();
         _cancellation = cancellation;
         Show(title, "Waiting for the answer…", string.Empty);
         _stop.Visibility = Visibility.Visible;
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        var thinkingSeconds = -1L;
+        void OnThinking()
+        {
+            // A thinking model reasons before it answers; show that it is working, updated once a second.
+            var seconds = (long)waited.Elapsed.TotalSeconds;
+            if (Interlocked.Exchange(ref thinkingSeconds, seconds) != seconds)
+            {
+                ShowStatus($"Thinking… {seconds} s", cancellation);
+            }
+        }
+
         try
         {
             using var client = new ChatClient(endpoint);
             var reply = await Task.Run(
-                () => client.StreamAsync(prompt, delta => Append(delta, cancellation), settings.RedactSecrets, cancellation.Token),
+                () => client.StreamAsync(prompt, delta => Append(delta, cancellation), OnThinking, settings.RedactSecrets, cancellation.Token),
                 cancellation.Token);
             await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (_cancellation != cancellation)
@@ -225,6 +238,18 @@ internal sealed class AiPanel : Border
         }
     }
 
+    private void ShowStatus(string status, CancellationTokenSource cancellation)
+    {
+        _package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (_cancellation == cancellation && !cancellation.IsCancellationRequested && _text.Text.Length == 0)
+            {
+                _status.Text = status;
+            }
+        }).FileAndForget("DiffRapid/AiStatus");
+    }
+
     private void Append(string delta, CancellationTokenSource cancellation)
     {
         _package.JoinableTaskFactory.RunAsync(async () =>
@@ -232,6 +257,11 @@ internal sealed class AiPanel : Border
             await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (_cancellation == cancellation)
             {
+                if (_text.Text.Length == 0)
+                {
+                    _status.Text = "Answering…";
+                }
+
                 _text.AppendText(delta);
             }
         }).FileAndForget("DiffRapid/AiAppend");

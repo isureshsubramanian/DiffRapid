@@ -53,11 +53,21 @@ public sealed class ChatClient : IDisposable
     /// <summary>Returns a complete reply; no files or caller data are modified.</summary>
     public Task<string> CompleteAsync(AiPrompt prompt, bool redactSecrets = true, CancellationToken cancellationToken = default)
     {
-        return SendAsync(prompt, null, redactSecrets, cancellationToken);
+        return SendAsync(prompt, null, null, redactSecrets, cancellationToken);
     }
 
     /// <summary>Delivers SSE text deltas as they arrive and returns the accumulated reply.</summary>
     public Task<string> StreamAsync(AiPrompt prompt, Action<string> onContent, bool redactSecrets = true,
+        CancellationToken cancellationToken = default) =>
+        StreamAsync(prompt, onContent, null, redactSecrets, cancellationToken);
+
+    /// <summary>
+    /// Delivers SSE text deltas as they arrive and returns the accumulated reply. <paramref name="onThinking"/>
+    /// runs for each piece of reasoning a thinking model streams before its answer (Ollama's "reasoning",
+    /// DeepSeek's "reasoning_content"); the reasoning itself is not part of the reply. While streaming, the
+    /// endpoint's timeout limits the silence between events, not the whole answer.
+    /// </summary>
+    public Task<string> StreamAsync(AiPrompt prompt, Action<string> onContent, Action? onThinking, bool redactSecrets = true,
         CancellationToken cancellationToken = default)
     {
         if (onContent is null)
@@ -65,13 +75,13 @@ public sealed class ChatClient : IDisposable
             throw new ArgumentNullException(nameof(onContent));
         }
 
-        return SendAsync(prompt, onContent, redactSecrets, cancellationToken);
+        return SendAsync(prompt, onContent, onThinking, redactSecrets, cancellationToken);
     }
 
     /// <summary>Releases the HTTP client and its handler.</summary>
     public void Dispose() => _client.Dispose();
 
-    private async Task<string> SendAsync(AiPrompt prompt, Action<string>? onContent, bool redactSecrets,
+    private async Task<string> SendAsync(AiPrompt prompt, Action<string>? onContent, Action? onThinking, bool redactSecrets,
         CancellationToken cancellationToken)
     {
         ValidatePrompt(prompt);
@@ -88,7 +98,7 @@ public sealed class ChatClient : IDisposable
             using var registration = timeout.Token.Register(stream.Dispose);
             var result = onContent is null
                 ? await ReadReplyAsync(stream, timeout.Token).ConfigureAwait(false)
-                : await ReadEventsAsync(stream, onContent, timeout.Token).ConfigureAwait(false);
+                : await ReadEventsAsync(stream, onContent, onThinking, () => timeout.CancelAfter(_endpoint.Timeout), timeout.Token).ConfigureAwait(false);
             timeout.Token.ThrowIfCancellationRequested();
             return result;
         }
@@ -236,7 +246,9 @@ public sealed class ChatClient : IDisposable
         throw new AiException("The AI endpoint returned no text completion.");
     }
 
-    private static async Task<string> ReadEventsAsync(Stream stream, Action<string> onContent, CancellationToken cancellationToken)
+    // onActivity runs for every line received, so a model that keeps streaming (even only reasoning) never times out.
+    private static async Task<string> ReadEventsAsync(Stream stream, Action<string> onContent, Action? onThinking, Action onActivity,
+        CancellationToken cancellationToken)
     {
         using var reader = new StreamReader(stream, Encoding.UTF8, true, 4096, leaveOpen: true);
         var eventData = new StringBuilder();
@@ -246,6 +258,11 @@ public sealed class ChatClient : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
+            if (line is not null)
+            {
+                onActivity();
+            }
+
             if (line is null || line.Length == 0)
             {
                 if (eventData.Length > 0)
@@ -257,7 +274,7 @@ public sealed class ChatClient : IDisposable
                         return output.ToString();
                     }
 
-                    finished |= ReadEvent(data, output, onContent);
+                    finished |= ReadEvent(data, output, onContent, onThinking);
                 }
 
                 if (line is null)
@@ -280,7 +297,7 @@ public sealed class ChatClient : IDisposable
         return output.ToString();
     }
 
-    private static bool ReadEvent(string data, StringBuilder output, Action<string> onContent)
+    private static bool ReadEvent(string data, StringBuilder output, Action<string> onContent, Action? onThinking)
     {
         using var document = JsonDocument.Parse(data);
         var root = document.RootElement;
@@ -294,15 +311,34 @@ public sealed class ChatClient : IDisposable
             return false;
         }
 
-        if (choice.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object &&
-            delta.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+        var hasDelta = choice.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object;
+        if (hasDelta && delta.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
         {
             var text = content.GetString()!;
             output.Append(text);
             onContent(text);
         }
 
+        if (hasDelta && onThinking is not null && IsThinking(delta))
+        {
+            onThinking();
+        }
+
         return choice.TryGetProperty("finish_reason", out var reason) && reason.ValueKind == JsonValueKind.String;
+    }
+
+    private static bool IsThinking(JsonElement delta)
+    {
+        foreach (var name in new[] { "reasoning", "reasoning_content" })
+        {
+            if (delta.TryGetProperty(name, out var reasoning) && reasoning.ValueKind == JsonValueKind.String &&
+                reasoning.GetString()!.Length > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryChoice(JsonElement root, out JsonElement choice)

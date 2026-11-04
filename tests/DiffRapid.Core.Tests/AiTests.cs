@@ -195,6 +195,68 @@ public sealed class AiTests
     }
 
     [Fact]
+    public async Task StreamingReportsReasoningWithoutAddingItToTheReply()
+    {
+        const string events =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\",\"reasoning\":\"Let me think\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" more\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n";
+        using var client = ClientReturning(Events(events));
+        var thinking = 0;
+        Assert.Equal("answer", await client.StreamAsync(Prompt, _ => { }, () => thinking++));
+        Assert.Equal(2, thinking);
+    }
+
+    [Fact]
+    public async Task StreamingTimeoutLimitsSilenceNotTheWholeAnswer()
+    {
+        // Six events 60 ms apart take longer than the 150 ms timeout, but no gap between them does.
+        var chunks = Enumerable.Range(0, 6)
+            .Select(i => $"data: {{\"choices\":[{{\"delta\":{{\"reasoning\":\"step {i}\"}}}}]}}\n\n")
+            .Append("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
+        using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(60));
+        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(150) }, new FakeHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
+        Assert.Equal("ok", await client.StreamAsync(Prompt, _ => { }));
+    }
+
+    // Returns one chunk per read, each after a delay, like a server streaming a slow model.
+    private sealed class DripStream(IEnumerable<string> chunks, TimeSpan delay) : Stream
+    {
+        private readonly Queue<byte[]> _chunks = new(chunks.Select(Encoding.UTF8.GetBytes));
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_chunks.Count == 0)
+            {
+                return 0;
+            }
+
+            await Task.Delay(delay, cancellationToken);
+            var chunk = _chunks.Dequeue();
+            Array.Copy(chunk, 0, buffer, offset, chunk.Length);
+            return chunk.Length;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task TimeoutCoversAStalledResponseBody()
     {
         using var stream = new GatedStream("");
