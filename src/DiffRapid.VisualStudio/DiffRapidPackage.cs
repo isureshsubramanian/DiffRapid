@@ -36,26 +36,39 @@ public sealed class DiffRapidPackage : AsyncPackage
     }
 
     /// <summary>
-    /// Opens a new comparison document tab for two files. Two CSV or TSV files open in the table view;
+    /// Opens a new comparison document tab for two files. Images open in the image view, two CSV or TSV files in
+    /// the table view, and other binary files (except .NET assemblies, compared by their API) in the hex view;
     /// everything else opens as text (see <see cref="OpenTextComparisonAsync"/>).
     /// </summary>
-    public Task OpenComparisonAsync(string leftPath, string rightPath)
+    public async Task OpenComparisonAsync(string leftPath, string rightPath)
     {
         if (IsImageFile(leftPath) && IsImageFile(rightPath))
         {
-            return OpenImageComparisonAsync(leftPath, rightPath);
+            await OpenImageComparisonAsync(leftPath, rightPath);
+            return;
         }
 
         if (IsTableFile(leftPath) && IsTableFile(rightPath))
         {
-            return OpenDocumentAsync(
+            await OpenDocumentAsync(
                 "Loading the table comparison",
                 () => Task.FromResult<FrameworkElement>(new TableDiffControl(this, leftPath, rightPath)),
                 Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
                 hostsEditors: false);
+            return;
         }
 
-        return OpenTextComparisonAsync(leftPath, rightPath);
+        if (await Task.Run(() => IsHexFile(leftPath) || IsHexFile(rightPath)))
+        {
+            await OpenDocumentAsync(
+                "Loading the hex comparison",
+                () => Task.FromResult<FrameworkElement>(new HexDiffControl(this, leftPath, rightPath)),
+                Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
+                hostsEditors: false);
+            return;
+        }
+
+        await OpenTextComparisonAsync(leftPath, rightPath);
     }
 
     private static bool IsTableFile(string path)
@@ -63,6 +76,9 @@ public sealed class DiffRapidPackage : AsyncPackage
         var extension = Path.GetExtension(path);
         return extension.Equals(".csv", StringComparison.OrdinalIgnoreCase) || extension.Equals(".tsv", StringComparison.OrdinalIgnoreCase);
     }
+
+    // A binary file that has no text form: not a document or a .NET assembly or package.
+    private static bool IsHexFile(string path) => IsBinaryFile(path) && AssemblyApiText(path) is null;
 
     /// <summary>
     /// Opens a new text comparison document tab for two files. Word, Excel and PowerPoint files are compared as
@@ -79,6 +95,37 @@ public sealed class DiffRapidPackage : AsyncPackage
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true);
+
+    /// <summary>
+    /// Whether a file should open in the hex comparison: a NUL byte in its first 8000 bytes. Word, Excel and
+    /// PowerPoint files are compared as text (see <see cref="AsComparableText"/>), and so are files starting
+    /// with a UTF-16 or UTF-32 byte order mark, whose text has NULs too. A file that cannot be read counts as
+    /// text, so the text comparison reports the error.
+    /// </summary>
+    private static bool IsBinaryFile(string path)
+    {
+        if (DiffRapid.Documents.DocumentUnpackers.Find(path) is not null || !File.Exists(path))
+        {
+            return false;
+        }
+
+        var buffer = new byte[8000];
+        int read;
+        try
+        {
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            read = stream.Read(buffer, 0, buffer.Length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        var utf16Or32Little = read >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE;
+        var utf16Big = read >= 2 && buffer[0] == 0xFE && buffer[1] == 0xFF;
+        var utf32Big = read >= 4 && buffer[0] == 0x00 && buffer[1] == 0x00 && buffer[2] == 0xFE && buffer[3] == 0xFF;
+        return !utf16Or32Little && !utf16Big && !utf32Big && Array.IndexOf(buffer, (byte)0, 0, read) >= 0;
+    }
 
     /// <summary>Opens the picture comparison for two image files; decoding and comparing run in the background.</summary>
     private Task OpenImageComparisonAsync(string leftPath, string rightPath) =>
