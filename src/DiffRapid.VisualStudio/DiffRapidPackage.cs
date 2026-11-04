@@ -37,10 +37,22 @@ public sealed class DiffRapidPackage : AsyncPackage
 
     /// <summary>
     /// Opens a new comparison document tab for two files. Word, Excel and PowerPoint files are compared as their
-    /// text, through temporary copies (editing those does not change the documents).
+    /// text, through temporary copies (editing those does not change the documents). Other binary files open
+    /// in the hex comparison.
     /// </summary>
-    public Task OpenComparisonAsync(string leftPath, string rightPath) =>
-        OpenDocumentAsync(
+    public async Task OpenComparisonAsync(string leftPath, string rightPath)
+    {
+        if (await Task.Run(() => IsBinaryFile(leftPath) || IsBinaryFile(rightPath)))
+        {
+            await OpenDocumentAsync(
+                "Loading the hex comparison",
+                () => Task.FromResult<FrameworkElement>(new HexDiffControl(this, leftPath, rightPath)),
+                Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
+                hostsEditors: false);
+            return;
+        }
+
+        await OpenDocumentAsync(
             "Loading the comparison",
             async () =>
             {
@@ -50,6 +62,38 @@ public sealed class DiffRapidPackage : AsyncPackage
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true);
+    }
+
+    /// <summary>
+    /// Whether a file should open in the hex comparison: a NUL byte in its first 8000 bytes. Word, Excel and
+    /// PowerPoint files are compared as text (see <see cref="AsComparableText"/>), and so are files starting
+    /// with a UTF-16 or UTF-32 byte order mark, whose text has NULs too. A file that cannot be read counts as
+    /// text, so the text comparison reports the error.
+    /// </summary>
+    private static bool IsBinaryFile(string path)
+    {
+        if (DiffRapid.Documents.DocumentUnpackers.Find(path) is not null || !File.Exists(path))
+        {
+            return false;
+        }
+
+        var buffer = new byte[8000];
+        int read;
+        try
+        {
+            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            read = stream.Read(buffer, 0, buffer.Length);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        var utf16Or32Little = read >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE;
+        var utf16Big = read >= 2 && buffer[0] == 0xFE && buffer[1] == 0xFF;
+        var utf32Big = read >= 4 && buffer[0] == 0x00 && buffer[1] == 0x00 && buffer[2] == 0xFE && buffer[3] == 0xFF;
+        return !utf16Or32Little && !utf16Big && !utf32Big && Array.IndexOf(buffer, (byte)0, 0, read) >= 0;
+    }
 
     private static string AsComparableText(string path)
     {
