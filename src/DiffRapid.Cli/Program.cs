@@ -37,6 +37,8 @@ internal static partial class Program
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
+          diffrapid api <left.dll|.nupkg> [<right.dll|.nupkg>] [--breaking-only]
+                         One file: print its public API. Two: list API changes, marking breaking ones.
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -92,6 +94,7 @@ internal static partial class Program
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
+                "api" => RunApi(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
