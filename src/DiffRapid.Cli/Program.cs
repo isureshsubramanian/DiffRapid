@@ -50,6 +50,8 @@ internal static partial class Program
                          Compares CSV/TSV/delimited files by row and cell; columns are header names or numbers from 1.
           diffrapid hex <left> <right> [--resync] [--bytes-per-line 8|16|32] [--context <n>] [--summary]
                          Binary compare shown as hex; --resync finds insertions and deletions (up to 64 MB).
+          diffrapid resolve <file> [-o <file>]
+                         Resolves identical, whitespace-only and different-line conflicts; exit 1 if any remain.
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
           diffrapid image <left> <right> [--tolerance <0..255>] [--diff-out <file.png>]
                          [--ignore-alpha] [--max-offset <n>]
@@ -114,6 +116,7 @@ internal static partial class Program
                 "table" => RunTable(args),
                 "hex" => RunHex(parsed, Console.Out),
                 "image" => RunImage(args),
+                "resolve" => RunResolve(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
