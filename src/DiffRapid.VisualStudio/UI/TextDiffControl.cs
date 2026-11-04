@@ -195,6 +195,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Forwards, "Copy to right"), "Replace the current difference on the right with the left side (Ctrl+F8 or Alt+Right)", () => CopyDifference(toRight: true)));
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.SaveAll, "Save"), "Save both files (Ctrl+S)", Save));
         summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.CompareFiles, "Create patch"), "Save the changes from the left file to the right file as a patch (unified diff)", CreatePatch));
+        summary.Children.Add(DiffTheme.CommandButton(IconLabel(KnownMonikers.Report, "Export report"), "Save the comparison as a side-by-side HTML page or as Markdown for a pull request", ExportReport));
         summary.Children.Add(DiffTheme.Separator());
         summary.Children.Add(_verdict);
         summary.Children.Add(_metrics);
@@ -483,6 +484,68 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         if (message is not null)
         {
             _position.Text = message;
+        }
+    }
+
+    /// <summary>
+    /// Saves the comparison as a report, including unsaved edits. Unlike a patch, the report follows the ignore
+    /// options, so it shows the differences as the view does.
+    /// </summary>
+    private void ExportReport()
+    {
+        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
+        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
+        var result = TextComparer.Compare(left, right, _options);
+        var leftName = System.IO.Path.GetFileName(_left.Path);
+        var rightName = System.IO.Path.GetFileName(_right.Path);
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Export comparison report",
+            FileName = string.Concat((leftName + " vs " + rightName + " report")
+                .Select(c => Array.IndexOf(System.IO.Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            Filter = "HTML report, side by side (*.html)|*.html|Markdown for a pull request (*.md)|*.md",
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var html = dialog.FilterIndex == 1;
+        var options = new FileReportOptions
+        {
+            LeftLabel = _left.Path,
+            RightLabel = _right.Path,
+            Title = leftName + " ↔ " + rightName,
+            GeneratedAt = DateTimeOffset.Now,
+        };
+
+        try
+        {
+            using (var writer = new StreamWriter(dialog.FileName, append: false, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                if (html)
+                {
+                    FileReportWriter.WriteHtml(result, options, writer);
+                }
+                else
+                {
+                    writer.NewLine = "\n";
+                    FileReportWriter.WriteMarkdown(result, options, writer);
+                }
+            }
+
+            _position.Text = $"Saved the report to {dialog.FileName}";
+            if (html)
+            {
+                Process.Start(dialog.FileName);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            _position.Text = $"Could not save the report: {ex.Message}";
         }
     }
 
