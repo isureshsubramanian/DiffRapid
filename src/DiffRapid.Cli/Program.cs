@@ -21,6 +21,10 @@ internal static partial class Program
         Usage:
           diffrapid info <file>
           diffrapid patch <left> <right> [-o <file>] [-u <n>] [compare options]
+          diffrapid explain <left> <right> --endpoint <URL> --model <name>
+          diffrapid explain --conflicts <file-with-markers> --endpoint <URL> --model <name>
+                         [--api-key-env <VAR>] [--azure-deployment <name> --api-version <version>] [--no-redact]
+                         Sends redacted text to the configured endpoint; prints explanations or proposals without writing files.
           diffrapid apply <patchfile> [--dir <root>] [--reverse] [--fuzz <0..2>]
                           [--dry-run] [--ignore-whitespace]
           diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence|hash]
@@ -126,6 +130,7 @@ internal static partial class Program
             return command switch
             {
                 "patch" => RunPatch(parsed),
+                "explain" => RunExplain(args),
                 "apply" => RunApply(parsed),
                 "dir" => RunDirectory(parsed),
                 "dir3" => RunDirectory3(parsed),
