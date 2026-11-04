@@ -101,6 +101,16 @@ internal static class CompareCommands
         };
         commandService.AddCommand(compareDocumentWithVersion);
 
+        var compareWithSaved = new OleMenuCommand(
+            (_, _) => Run(package, () => CompareWithSavedAsync(package)),
+            new CommandID(PackageIds.CommandSet, PackageIds.CompareWithSaved));
+        compareWithSaved.BeforeQueryStatus += (_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            compareWithSaved.Visible = EditorSelection.ActiveDocumentWithUnsavedChanges() is not null;
+        };
+        commandService.AddCommand(compareWithSaved);
+
         commandService.AddCommand(new OleMenuCommand(
             (_, _) => Run(package, () => ApplyPatchAsync(package, null)),
             new CommandID(PackageIds.CommandSet, PackageIds.ApplyPatch)));
@@ -115,6 +125,24 @@ internal static class CompareCommands
             applySelectedPatch.Visible = paths.Count == 1 && IsPatchFile(paths[0]);
         };
         commandService.AddCommand(applySelectedPatch);
+    }
+
+    /// <summary>
+    /// Compares the file as saved on disk (left, a temporary copy with its own bytes) with the open document and its
+    /// unsaved edits (right, still editable).
+    /// </summary>
+    private static async Task CompareWithSavedAsync(DiffRapidPackage package)
+    {
+        await package.JoinableTaskFactory.SwitchToMainThreadAsync();
+        var path = EditorSelection.ActiveDocumentWithUnsavedChanges();
+        if (path is null)
+        {
+            ShowMessage(package, "The document has no unsaved changes.");
+            return;
+        }
+
+        var saved = EditorSelection.WriteTemporary(System.IO.File.ReadAllBytes(path), System.IO.Path.GetFileNameWithoutExtension(path) + " (saved)", System.IO.Path.GetExtension(path));
+        await package.OpenComparisonAsync(saved, path);
     }
 
     private static bool IsPatchFile(string path) =>

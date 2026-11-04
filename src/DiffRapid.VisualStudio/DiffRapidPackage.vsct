@@ -110,6 +110,16 @@
           <LocCanonicalName>.DiffRapid.CompareDocumentWithVersion</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidDiffRapidCommandSet" id="cmdidCompareWithSaved" priority="0x0104" type="Button">
+        <Parent guid="guidDiffRapidCommandSet" id="EditorContextGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Compare with Saved File (DiffRapid)</ButtonText>
+          <CanonicalName>.DiffRapid.CompareWithSaved</CanonicalName>
+          <LocCanonicalName>.DiffRapid.CompareWithSaved</LocCanonicalName>
+        </Strings>
+      </Button>
 
       <Button guid="guidDiffRapidCommandSet" id="cmdidApplyPatch" priority="0x0103" type="Button">
         <Parent guid="guidDiffRapidCommandSet" id="ToolsMenuGroup" />
@@ -214,6 +224,7 @@
       <IDSymbol name="cmdidCompareDocumentWithVersion" value="0x0108" />
       <IDSymbol name="cmdidApplyPatch" value="0x0109" />
       <IDSymbol name="cmdidApplySelectedPatch" value="0x010A" />
+      <IDSymbol name="cmdidCompareWithSaved" value="0x010B" />
       <IDSymbol name="cmdidPreviousDifference" value="0x0200" />
       <IDSymbol name="cmdidNextDifference" value="0x0201" />
       <IDSymbol name="cmdidCopyToLeft" value="0x0202" />

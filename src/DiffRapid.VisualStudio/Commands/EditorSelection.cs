@@ -82,6 +82,18 @@ internal sealed class EditorSelection
         return ActiveView() is not null;
     }
 
+    /// <summary>Path of the active editor's document when it is a saved file with unsaved edits; otherwise null.</summary>
+    public static string? ActiveDocumentWithUnsavedChanges()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (ActiveView() is not { } view || !view.TextBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
+        {
+            return null;
+        }
+
+        return document.IsDirty && File.Exists(document.FilePath) ? document.FilePath : null;
+    }
+
     /// <summary>
     /// A file to compare: the document itself when the whole saved document was taken (so it can be edited
     /// in the comparison), otherwise a temporary copy of the text.
