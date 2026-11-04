@@ -3,6 +3,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Media;
 using DiffRapid.Core.Folders;
 using DiffRapid.Core.Sync;
 using Microsoft.VisualStudio.PlatformUI;
@@ -64,19 +65,21 @@ internal sealed class SyncDialog : DialogWindow
         }
 
         var modeRow = new StackPanel { Orientation = Orientation.Horizontal };
-        modeRow.Children.Add(new Label { Content = "_Profile:", Target = _mode, FontWeight = FontWeights.SemiBold, Padding = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center });
+        var modeLabel = new Label { Content = "_Profile:", Target = _mode, FontWeight = FontWeights.SemiBold, Padding = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center };
+        modeLabel.SetResourceReference(ForegroundProperty, ThemedDialogColors.WindowPanelTextBrushKey);
+        modeRow.Children.Add(modeLabel);
         modeRow.Children.Add(_mode);
         heading.Children.Add(modeRow);
         _description.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.SystemGrayTextBrushKey);
         heading.Children.Add(_description);
 
         var view = new GridView();
-        view.Columns.Add(new GridViewColumn { Header = "Operation", Width = 110, DisplayMemberBinding = new Binding(nameof(OperationRow.Action)) });
-        view.Columns.Add(new GridViewColumn { Header = "Direction", Width = 80, DisplayMemberBinding = new Binding(nameof(OperationRow.Direction)) });
-        view.Columns.Add(new GridViewColumn { Header = "Path", Width = 400, DisplayMemberBinding = new Binding(nameof(OperationRow.Path)) });
-        view.Columns.Add(new GridViewColumn { Header = "Reason", Width = 230, DisplayMemberBinding = new Binding(nameof(OperationRow.Reason)) });
+        view.Columns.Add(new GridViewColumn { Header = "Operation", Width = 190, CellTemplate = OperationTemplate() });
+        view.Columns.Add(new GridViewColumn { Header = "Path", Width = 360, DisplayMemberBinding = new Binding(nameof(OperationRow.Path)) });
+        view.Columns.Add(new GridViewColumn { Header = "Reason", Width = 200, DisplayMemberBinding = new Binding(nameof(OperationRow.Reason)) });
         _list.View = view;
         _list.Margin = new Thickness(20, 0, 20, 12);
+        ScrollViewer.SetHorizontalScrollBarVisibility(_list, ScrollBarVisibility.Disabled);
         _list.SetResourceReference(StyleProperty, VsResourceKeys.ThemedDialogListViewStyleKey);
         _list.SetResourceReference(ItemsControl.ItemContainerStyleProperty, VsResourceKeys.ThemedDialogListViewItemGridStyleKey);
         _list.Loaded += (_, _) => view.ColumnHeaderContainerStyle = _list.TryFindResource(VsResourceKeys.ThemedDialogGridViewColumnHeaderStyleKey) as Style;
@@ -131,8 +134,13 @@ internal sealed class SyncDialog : DialogWindow
         var conflicts = Plan.Count(SyncAction.Conflict);
         _summary.Text = changes == 0
             ? "Nothing to do: the folders already agree for this profile."
-            : $"{changes} operations: {Plan.Count(SyncAction.Copy)} copies, {Plan.Count(SyncAction.Overwrite)} overwrites, {deletes} deletions"
-              + (conflicts > 0 ? $"; {conflicts} conflicts are left alone" : string.Empty);
+            : Counted(changes, "operation", "operations") + ": " + string.Join(", ", new[]
+                {
+                    (Plan.Count(SyncAction.Copy), "copy", "copies"),
+                    (Plan.Count(SyncAction.Overwrite), "overwrite", "overwrites"),
+                    (deletes, "deletion", "deletions"),
+                }.Where(p => p.Item1 > 0).Select(p => Counted(p.Item1, p.Item2, p.Item3)))
+              + (conflicts > 0 ? "; " + Counted(conflicts, "conflict is", "conflicts are") + " left alone" : string.Empty);
         _sync.IsEnabled = changes > 0;
     }
 
@@ -144,24 +152,39 @@ internal sealed class SyncDialog : DialogWindow
         return button;
     }
 
+    private static string Counted(int count, string one, string many) => $"{count} {(count == 1 ? one : many)}";
+
+    // The operation in words, coloured like the folder view: deletions red, conflicts amber.
+    private static DataTemplate OperationTemplate()
+    {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new Binding(nameof(OperationRow.Action)));
+        text.SetBinding(TextBlock.ForegroundProperty, new Binding(nameof(OperationRow.ActionBrush)));
+        text.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+        return new DataTemplate { VisualTree = text };
+    }
+
     private sealed class OperationRow
     {
         public OperationRow(SyncOperation operation)
         {
+            // The side that is written: the target of the operation.
+            var side = operation.Direction == SyncDirection.RightToLeft ? "left" : "right";
             Action = operation.Action switch
             {
-                SyncAction.Copy => "Copy",
-                SyncAction.Overwrite => "Overwrite",
-                SyncAction.Delete => "Delete",
-                SyncAction.CreateFolder => "Create folder",
-                SyncAction.Conflict => "Conflict",
+                SyncAction.Copy => $"Copy to the {side}",
+                SyncAction.Overwrite => $"Overwrite on the {side}",
+                SyncAction.Delete => $"Delete on the {side}",
+                SyncAction.CreateFolder => $"Create folder on the {side}",
+                SyncAction.Conflict => "Conflict: left alone",
                 _ => "Skip",
             };
-            Direction = operation.Direction switch
+            ActionBrush = operation.Action switch
             {
-                SyncDirection.LeftToRight => "→",
-                SyncDirection.RightToLeft => "←",
-                _ => string.Empty,
+                SyncAction.Delete => DiffTheme.RemovedBrush,
+                SyncAction.Conflict => DiffTheme.ChangedBrush,
+                SyncAction.Skip => DiffTheme.IgnoredBrush,
+                _ => DiffTheme.AddedBrush,
             };
             Path = operation.RelativePath;
             Reason = operation.Reason ?? string.Empty;
@@ -169,7 +192,7 @@ internal sealed class SyncDialog : DialogWindow
 
         public string Action { get; }
 
-        public string Direction { get; }
+        public Brush ActionBrush { get; }
 
         public string Path { get; }
 
