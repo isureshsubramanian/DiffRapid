@@ -1,0 +1,26 @@
+<Solution>
+  <Folder Name="/perf/">
+    <Project Path="perf/DiffRapid.Perf/DiffRapid.Perf.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/DiffRapid.Ai/DiffRapid.Ai.csproj" />
+    <Project Path="src/DiffRapid.Cli/DiffRapid.Cli.csproj" />
+    <Project Path="src/DiffRapid.Core/DiffRapid.Core.csproj" />
+    <Project Path="src/DiffRapid.Documents/DiffRapid.Documents.csproj" />
+    <Project Path="src/DiffRapid.Mcp/DiffRapid.Mcp.csproj" />
+    <Project Path="src/DiffRapid.Semantic/DiffRapid.Semantic.csproj" />
+    <Project Path="src/DiffRapid.VisualStudio/DiffRapid.VisualStudio.csproj">
+      <Deploy />
+    </Project>
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DiffRapid.Core.Tests/DiffRapid.Core.Tests.csproj" />
+  </Folder>
+</Solution>

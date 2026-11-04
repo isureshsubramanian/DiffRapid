@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json.schemastore.org/vsix-publish",
+  "categories": [ "coding", "other" ],
+  "identity": {
+    "internalName": "DiffRapid"
+  },
+  "overview": "overview.md",
+  "priceCategory": "free",
+  "publisher": "SureshSubramanian",
+  "private": false,
+  "qna": true,
+  "repo": "https://github.com/isureshsubramanian/DiffRapid"
+}

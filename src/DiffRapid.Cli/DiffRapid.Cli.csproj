@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>diffrapid</AssemblyName>
+    <RootNamespace>DiffRapid.Cli</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DiffRapid.Core.Tests" />
+    <ProjectReference Include="..\DiffRapid.Ai\DiffRapid.Ai.csproj" />
+    <ProjectReference Include="..\DiffRapid.Core\DiffRapid.Core.csproj" />
+    <ProjectReference Include="..\DiffRapid.Documents\DiffRapid.Documents.csproj" />
+    <ProjectReference Include="..\DiffRapid.Semantic\DiffRapid.Semantic.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,142 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.TextManager.Interop;
+
+namespace DiffRapid.VisualStudio.Commands;
+
+/// <summary>
+/// What the active code editor offers for a comparison: its selection, or the whole document when nothing
+/// is selected. Text that is not a whole saved file is written to a temporary file, since comparisons open files.
+/// </summary>
+internal sealed class EditorSelection
+{
+    private EditorSelection(string text, string? documentPath, string displayName, bool isWholeDocument)
+    {
+        Text = text;
+        DocumentPath = documentPath;
+        DisplayName = displayName;
+        IsWholeDocument = isWholeDocument;
+    }
+
+    public string Text { get; }
+
+    /// <summary>Path of the document the text comes from, when it has one.</summary>
+    public string? DocumentPath { get; }
+
+    /// <summary>Short description for file names and messages, for example "Program.cs lines 10-24".</summary>
+    public string DisplayName { get; }
+
+    public bool IsWholeDocument { get; }
+
+    /// <summary>The selection of the active code editor, or its whole text when nothing is selected; null without an editor.</summary>
+    public static EditorSelection? FromActiveEditor()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var view = ActiveView();
+        if (view is null)
+        {
+            return null;
+        }
+
+        view.TextBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document);
+        var path = document?.FilePath;
+        var name = path is null ? "Untitled" : Path.GetFileName(path);
+        var snapshot = view.TextSnapshot;
+        if (view.Selection.IsEmpty)
+        {
+            return new EditorSelection(snapshot.GetText(), path, name, isWholeDocument: true);
+        }
+
+        var spans = view.Selection.SelectedSpans;
+        var firstLine = snapshot.GetLineFromPosition(spans[0].Start);
+        var end = spans[spans.Count - 1].End;
+
+        // A selection that ends at the start of a line (whole lines selected) does not include that line.
+        var lastLine = snapshot.GetLineFromPosition(end);
+        if (end.Position == lastLine.Start.Position && lastLine.LineNumber > firstLine.LineNumber)
+        {
+            lastLine = snapshot.GetLineFromLineNumber(lastLine.LineNumber - 1);
+        }
+
+        // A stream selection is widened to whole lines, so indentation and the last line break match what is
+        // compared against; a box selection keeps its columns.
+        var text = view.Selection.Mode == TextSelectionMode.Box
+            ? string.Join(Environment.NewLine, spans.Select(span => span.GetText()))
+            : snapshot.GetText(Span.FromBounds(firstLine.Start, lastLine.EndIncludingLineBreak));
+        var first = firstLine.LineNumber + 1;
+        var last = lastLine.LineNumber + 1;
+        var lines = first == last ? $"line {first}" : $"lines {first}-{last}";
+        return new EditorSelection(text, path, $"{name} {lines}", isWholeDocument: false);
+    }
+
+    public static bool HasActiveEditor()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        return ActiveView() is not null;
+    }
+
+    /// <summary>Path of the active editor's document when it is a saved file with unsaved edits; otherwise null.</summary>
+    public static string? ActiveDocumentWithUnsavedChanges()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (ActiveView() is not { } view || !view.TextBuffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
+        {
+            return null;
+        }
+
+        return document.IsDirty && File.Exists(document.FilePath) ? document.FilePath : null;
+    }
+
+    /// <summary>
+    /// A file to compare: the document itself when the whole saved document was taken (so it can be edited
+    /// in the comparison), otherwise a temporary copy of the text.
+    /// </summary>
+    public string ToComparisonFile()
+    {
+        if (IsWholeDocument && DocumentPath is not null && File.Exists(DocumentPath))
+        {
+            return DocumentPath;
+        }
+
+        return WriteTemporary(Text, DisplayName, Extension);
+    }
+
+    /// <summary>Extension of the source document, so the comparison gets the same syntax colours.</summary>
+    public string Extension => Path.GetExtension(DocumentPath ?? string.Empty);
+
+    /// <summary>Writes text to a new temporary folder under a readable name and returns the path.</summary>
+    public static string WriteTemporary(string text, string name, string extension) =>
+        WriteTemporary(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(text), name, extension);
+
+    /// <summary>Writes bytes as they are (keeping their encoding) to a new temporary folder and returns the path.</summary>
+    public static string WriteTemporary(byte[] content, string name, string extension)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "DiffRapid", Guid.NewGuid().ToString("N").Substring(0, 8));
+        Directory.CreateDirectory(folder);
+        var safeName = string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        var path = Path.Combine(folder, safeName + (safeName.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ? string.Empty : extension));
+        File.WriteAllBytes(path, content);
+        return path;
+    }
+
+    private static IWpfTextView? ActiveView()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (Package.GetGlobalService(typeof(SVsTextManager)) is not IVsTextManager textManager
+            || textManager.GetActiveView(1, null, out var vsView) != 0
+            || vsView is null)
+        {
+            return null;
+        }
+
+        var componentModel = (IComponentModel?)Package.GetGlobalService(typeof(SComponentModel));
+        return componentModel?.GetService<IVsEditorAdaptersFactoryService>().GetWpfTextView(vsView);
+    }
+}

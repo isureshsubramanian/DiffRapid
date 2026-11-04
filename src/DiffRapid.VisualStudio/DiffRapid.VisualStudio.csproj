@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net472 + 17.14 SDK keeps VS 2022 support a manifest-only change (ADR-0001). -->
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>DiffRapid.VisualStudio</RootNamespace>
+    <AssemblyName>DiffRapid.VisualStudio</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <NoWarn>$(NoWarn);VSTHRD010</NoWarn>
+
+    <!-- Imports the VSSDK targets from the Microsoft.VSSDK.BuildTools package (no workload required). -->
+    <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <UseCodebase>true</UseCodebase>
+    <!-- Deploy to the experimental instance only from Visual Studio / MSBuild.exe; 'dotnet build' cannot deploy. -->
+    <DeployExtension Condition="'$(Configuration)' == 'Debug' And '$(MSBuildRuntimeType)' == 'Full'">true</DeployExtension>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>true</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>true</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>true</CopyOutputSymbolsToOutputDirectory>
+
+    <StartAction>Program</StartAction>
+    <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
+    <StartArguments>/rootsuffix Exp</StartArguments>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.SDK" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DiffRapid.Ai\DiffRapid.Ai.csproj" />
+    <ProjectReference Include="..\DiffRapid.Core\DiffRapid.Core.csproj" />
+    <ProjectReference Include="..\DiffRapid.Documents\DiffRapid.Documents.csproj" />
+    <ProjectReference Include="..\DiffRapid.Semantic\DiffRapid.Semantic.csproj" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Design" />
+    <Reference Include="System.Net.Http" />
+    <!-- FileSystem.DeleteFile/DeleteDirectory: move to the Recycle Bin. -->
+    <Reference Include="Microsoft.VisualBasic" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="source.extension.vsixmanifest" SubType="Designer" />
+    <Content Include="UnifiedSettings/registration.json" CopyToOutputDirectory="PreserveNewest" IncludeInVSIX="true" />
+    <!-- Marketplace and Extension Manager: icon, preview image and the license shown before installing. -->
+    <Content Include="Resources/DiffRapid-icon.png" IncludeInVSIX="true" />
+    <Content Include="Resources/DiffRapid-preview.png" IncludeInVSIX="true" />
+    <!-- The VSIX packs files under their own names, so the repository's LICENSE is copied to LICENSE.txt first. -->
+    <Content Include="$(BaseIntermediateOutputPath)LICENSE.txt" IncludeInVSIX="true" Link="LICENSE.txt" Visible="false" />
+    <VSCTCompile Include="DiffRapidPackage.vsct" ResourceName="Menus.ctmenu" />
+    <EmbeddedResource Update="VSPackage.resx">
+      <MergeWithCTO>true</MergeWithCTO>
+      <ManifestResourceName>VSPackage</ManifestResourceName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <Target Name="CopyLicenseForVsix" BeforeTargets="BeforeBuild">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\..\LICENSE" DestinationFiles="$(BaseIntermediateOutputPath)LICENSE.txt" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

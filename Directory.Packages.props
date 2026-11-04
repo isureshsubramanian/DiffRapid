@@ -1,0 +1,21 @@
+<Project>
+  <ItemGroup>
+    <!-- Visual Studio extension (compiled against 17.14 so VS 2022 support stays a manifest change) -->
+    <PackageVersion Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" />
+    <PackageVersion Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
+    <PackageVersion Include="Microsoft.VisualStudio.Threading.Analyzers" Version="17.14.15" />
+    <!-- Office documents as text (MIT) -->
+    <PackageVersion Include="DocumentFormat.OpenXml" Version="3.1.1" />
+    <!-- Core (JSON output; the extension already receives this version through the VS SDK) -->
+    <PackageVersion Include="System.Text.Json" Version="9.0.0" />
+    <!-- Core: reads .NET assembly metadata for the API compare (MIT) -->
+    <PackageVersion Include="System.Reflection.Metadata" Version="9.0.0" />
+    <!-- C# semantic compare; 4.14.x matches the compiler that ships in Visual Studio 17.14 -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <!-- MCP stdio server (Apache-2.0) -->
+    <PackageVersion Include="ModelContextProtocol" Version="2.3.1" />
+    <!-- Tests -->
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
+    <PackageVersion Include="DiffPlex" Version="1.9.0" />
+  </ItemGroup>
+</Project>
