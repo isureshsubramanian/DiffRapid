@@ -39,8 +39,14 @@ public sealed class DiffRapidPackage : AsyncPackage
     /// Opens a new comparison document tab for two files. Word, Excel and PowerPoint files are compared as their
     /// text, through temporary copies (editing those does not change the documents).
     /// </summary>
-    public Task OpenComparisonAsync(string leftPath, string rightPath) =>
-        OpenDocumentAsync(
+    public Task OpenComparisonAsync(string leftPath, string rightPath)
+    {
+        if (IsImageFile(leftPath) && IsImageFile(rightPath))
+        {
+            return OpenImageComparisonAsync(leftPath, rightPath);
+        }
+
+        return OpenDocumentAsync(
             "Loading the comparison",
             async () =>
             {
@@ -50,6 +56,19 @@ public sealed class DiffRapidPackage : AsyncPackage
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true);
+    }
+
+    /// <summary>Opens the picture comparison for two image files; decoding and comparing run in the background.</summary>
+    private Task OpenImageComparisonAsync(string leftPath, string rightPath) =>
+        OpenDocumentAsync(
+            "Loading the image comparison",
+            () => Task.FromResult<FrameworkElement>(new ImageDiffControl(this, leftPath, rightPath)),
+            Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
+            hostsEditors: false);
+
+    /// <summary>True for the image formats the image comparison decodes (WebP only where Windows has the codec).</summary>
+    private static bool IsImageFile(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" or ".ico" or ".webp";
 
     private static string AsComparableText(string path)
     {
