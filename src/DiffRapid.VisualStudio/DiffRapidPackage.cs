@@ -36,8 +36,8 @@ public sealed class DiffRapidPackage : AsyncPackage
     }
 
     /// <summary>
-    /// Opens a new comparison document tab for two files. Images open in the image view, two CSV or TSV files in
-    /// the table view, and other binary files (except .NET assemblies, compared by their API) in the hex view;
+    /// Opens a new comparison document tab for two files. Images open in the image view, two CSV or TSV files or
+    /// two Excel workbooks in the table view, and other binary files (except .NET assemblies, compared by their API) in the hex view;
     /// everything else opens as text (see <see cref="OpenTextComparisonAsync"/>).
     /// </summary>
     public async Task OpenComparisonAsync(string leftPath, string rightPath)
@@ -48,7 +48,7 @@ public sealed class DiffRapidPackage : AsyncPackage
             return;
         }
 
-        if (IsTableFile(leftPath) && IsTableFile(rightPath))
+        if ((IsTableFile(leftPath) && IsTableFile(rightPath)) || (TableDiffControl.IsWorkbook(leftPath) && TableDiffControl.IsWorkbook(rightPath)))
         {
             await OpenDocumentAsync(
                 "Loading the table comparison",

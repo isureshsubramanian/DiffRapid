@@ -55,6 +55,11 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
     private readonly GridView _view = new();
     private readonly Dictionary<string, double> _columnWidths = new(StringComparer.Ordinal);
     private readonly ComboBox _delimiter = new() { MinWidth = 96, VerticalAlignment = VerticalAlignment.Center, ToolTip = "The character between cells; Auto detects it from the files" };
+    private readonly ComboBox _sheet = new() { MinWidth = 140, VerticalAlignment = VerticalAlignment.Center, ToolTip = "The worksheet to compare; sheets are matched by name" };
+
+    // Two Excel workbooks: compared one worksheet at a time instead of as delimited text.
+    private readonly bool _workbook;
+    private bool _fillingSheets;
     private readonly ToggleButton _headerRow;
     private readonly ToggleButton _ignoreCase;
     private readonly ToggleButton _trim;
@@ -88,6 +93,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         _package = package;
         _leftPath = Path.GetFullPath(leftPath);
         _rightPath = Path.GetFullPath(rightPath);
+        _workbook = IsWorkbook(_leftPath) && IsWorkbook(_rightPath);
 
         SetResourceReference(BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
         SetResourceReference(TextElement.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
@@ -154,16 +160,36 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         commands.Children.Add(_showIdentical);
 
         var options = new WrapPanel { Margin = new Thickness(6, 2, 6, 4) };
-        options.Children.Add(DiffTheme.Caption("DELIMITER"));
-        _delimiter.SetResourceReference(StyleProperty, VsResourceKeys.ComboBoxStyleKey);
-        foreach (var (label, _) in Delimiters)
+        if (_workbook)
         {
-            _delimiter.Items.Add(label);
+            // Filled after the workbooks are read; another sheet suggests its own key column.
+            options.Children.Add(DiffTheme.Caption("SHEET"));
+            _sheet.SetResourceReference(StyleProperty, VsResourceKeys.ComboBoxStyleKey);
+            _sheet.SelectionChanged += (_, _) =>
+            {
+                if (!_fillingSheets)
+                {
+                    _keyColumns.Text = string.Empty;
+                    _suggestKey = true;
+                    StartCompare();
+                }
+            };
+            options.Children.Add(_sheet);
+        }
+        else
+        {
+            options.Children.Add(DiffTheme.Caption("DELIMITER"));
+            _delimiter.SetResourceReference(StyleProperty, VsResourceKeys.ComboBoxStyleKey);
+            foreach (var (label, _) in Delimiters)
+            {
+                _delimiter.Items.Add(label);
+            }
+
+            _delimiter.SelectedIndex = 0;
+            _delimiter.SelectionChanged += (_, _) => StartCompare();
+            options.Children.Add(_delimiter);
         }
 
-        _delimiter.SelectedIndex = 0;
-        _delimiter.SelectionChanged += (_, _) => StartCompare();
-        options.Children.Add(_delimiter);
         options.Children.Add(_headerRow);
         options.Children.Add(DiffTheme.Separator());
         options.Children.Add(DiffTheme.Caption("KEY"));
@@ -386,12 +412,13 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
 
         // The tables are read again only when the delimiter or header setting changed.
         var cached = _tables;
+        var sheet = _sheet.SelectedItem as string;
         var stopwatch = Stopwatch.StartNew();
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
             try
             {
-                var outcome = await Task.Run(() => Compute(cached, readOptions, compareOptions, suggestKey, cancellation.Token), cancellation.Token);
+                var outcome = await Task.Run(() => Compute(cached, readOptions, sheet, compareOptions, suggestKey, cancellation.Token), cancellation.Token);
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation.Token);
                 if (!_disposed && !cancellation.IsCancellationRequested)
                 {
@@ -446,11 +473,69 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
     private static IReadOnlyList<string> SplitColumns(string text) =>
         text.Split(',').Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
 
-    // Runs on a background thread: reads the files when needed, compares them and prepares the rows.
-    private CompareOutcome Compute(LoadedTables? cached, DelimitedReadOptions readOptions, TableCompareOptions compareOptions, bool suggestKey, CancellationToken cancellationToken)
+    internal static bool IsWorkbook(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is ".xlsx" or ".xlsm";
+
+    // Runs on a background thread. The workbooks are read once; changing the sheet or header only rebuilds the tables.
+    private LoadedTables LoadSheet(LoadedTables? cached, bool hasHeader, string? sheet, CancellationToken cancellationToken)
     {
-        var tables = cached is not null && cached.Options == readOptions
+        var leftSheets = cached?.LeftSheets ?? DiffRapid.Documents.XlsxText.ReadSheets(_leftPath, cancellationToken: cancellationToken);
+        var rightSheets = cached?.RightSheets ?? DiffRapid.Documents.XlsxText.ReadSheets(_rightPath, cancellationToken: cancellationToken);
+        var name = sheet ?? SheetNames(leftSheets, rightSheets).FirstOrDefault();
+        return new LoadedTables(new DelimitedReadOptions { HasHeader = hasHeader }, FromSheet(leftSheets, name, hasHeader), FromSheet(rightSheets, name, hasHeader))
+        {
+            Sheet = name,
+            LeftSheets = leftSheets,
+            RightSheets = rightSheets,
+        };
+    }
+
+    // The left workbook's sheets in tab order, then the ones only in the right workbook.
+    private static List<string> SheetNames(IReadOnlyList<DiffRapid.Documents.XlsxSheet> left, IReadOnlyList<DiffRapid.Documents.XlsxSheet> right) =>
+        left.Select(s => s.Name).Concat(right.Select(s => s.Name)).Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>
+    /// A worksheet as a table: empty rows are left out but keep their Excel row numbers, and the first row
+    /// with content is the header when there is one. A sheet missing from the workbook gives an empty table.
+    /// </summary>
+    private static TableData FromSheet(IReadOnlyList<DiffRapid.Documents.XlsxSheet> sheets, string? name, bool hasHeader)
+    {
+        var sheet = sheets.FirstOrDefault(s => s.Name == name);
+        if (sheet is null)
+        {
+            return new TableData(hasHeader ? Array.Empty<string>() : null, Array.Empty<IReadOnlyList<string>>(), '\t');
+        }
+
+        IReadOnlyList<string>? header = null;
+        var rows = new List<IReadOnlyList<string>>();
+        var lineNumbers = new List<int>();
+        for (var i = 0; i < sheet.Rows.Count; i++)
+        {
+            var row = sheet.Rows[i];
+            if (row.All(string.IsNullOrEmpty))
+            {
+                continue;
+            }
+
+            if (hasHeader && header is null)
+            {
+                header = row;
+                continue;
+            }
+
+            rows.Add(row);
+            lineNumbers.Add(i + 1);
+        }
+
+        return new TableData(hasHeader ? header ?? Array.Empty<string>() : null, rows, '\t', lineNumbers);
+    }
+
+    // Runs on a background thread: reads the files when needed, compares them and prepares the rows.
+    private CompareOutcome Compute(LoadedTables? cached, DelimitedReadOptions readOptions, string? sheet, TableCompareOptions compareOptions, bool suggestKey, CancellationToken cancellationToken)
+    {
+        var tables = cached is not null && cached.Options == readOptions && cached.Sheet == (sheet ?? cached.Sheet)
             ? cached
+            : _workbook ? LoadSheet(cached, readOptions.HasHeader, sheet, cancellationToken)
             : new LoadedTables(readOptions, DelimitedReader.ReadFile(_leftPath, readOptions), DelimitedReader.ReadFile(_rightPath, readOptions));
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -519,8 +604,20 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         _outcome = outcome;
         _comparing = false;
         var result = outcome.Result;
-        _leftInfo.Text = DescribeTable(result.Left);
-        _rightInfo.Text = DescribeTable(result.Right);
+        var tables = outcome.Tables;
+        _leftInfo.Text = tables.LeftSheets is { } leftSheets ? DescribeSheet(result.Left, leftSheets, tables.Sheet) : DescribeTable(result.Left);
+        _rightInfo.Text = tables.RightSheets is { } rightSheets ? DescribeSheet(result.Right, rightSheets, tables.Sheet) : DescribeTable(result.Right);
+        if (tables.LeftSheets is not null && tables.RightSheets is not null && _sheet.Items.Count == 0)
+        {
+            _fillingSheets = true;
+            foreach (var name in SheetNames(tables.LeftSheets, tables.RightSheets))
+            {
+                _sheet.Items.Add(name);
+            }
+
+            _sheet.SelectedItem = tables.Sheet;
+            _fillingSheets = false;
+        }
         BuildColumns(outcome);
         ShowRows();
         ShowSummary(result);
@@ -549,6 +646,11 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         _details.ToolTip = null;
         UpdateCommands();
     }
+
+    private static string DescribeSheet(TableData table, IReadOnlyList<DiffRapid.Documents.XlsxSheet> sheets, string? name) =>
+        sheets.Any(s => s.Name == name)
+            ? $"{Plural(table.Rows.Count, "row")} · {Plural(table.ColumnCount, "column")} · {Plural(sheets.Count, "sheet")}"
+            : $"no sheet named {name} · {Plural(sheets.Count, "sheet")}";
 
     private static string DescribeTable(TableData table)
     {
@@ -910,6 +1012,13 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         public TableData Left { get; }
 
         public TableData Right { get; }
+
+        /// <summary>For workbooks: the sheet compared, and every sheet of each workbook (read once).</summary>
+        public string? Sheet { get; set; }
+
+        public IReadOnlyList<DiffRapid.Documents.XlsxSheet>? LeftSheets { get; set; }
+
+        public IReadOnlyList<DiffRapid.Documents.XlsxSheet>? RightSheets { get; set; }
     }
 
     /// <summary>A finished comparison and the rows prepared for the grid.</summary>
