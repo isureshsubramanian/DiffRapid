@@ -9,6 +9,7 @@
   <Folder Name="/src/">
     <Project Path="src/DiffRapid.Cli/DiffRapid.Cli.csproj" />
     <Project Path="src/DiffRapid.Core/DiffRapid.Core.csproj" />
+    <Project Path="src/DiffRapid.Documents/DiffRapid.Documents.csproj" />
     <Project Path="src/DiffRapid.VisualStudio/DiffRapid.VisualStudio.csproj">
       <Deploy />
     </Project>
