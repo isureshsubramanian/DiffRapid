@@ -12,6 +12,8 @@
     <PackageVersion Include="System.Reflection.Metadata" Version="9.0.0" />
     <!-- C# semantic compare; 4.14.x matches the compiler that ships in Visual Studio 17.14 -->
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <!-- MCP stdio server (Apache-2.0) -->
+    <PackageVersion Include="ModelContextProtocol" Version="2.3.1" />
     <!-- Tests -->
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <PackageVersion Include="DiffPlex" Version="1.9.0" />
