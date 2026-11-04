@@ -34,6 +34,7 @@ internal sealed class SelectFilesDialog : DialogWindow
     private static readonly string?[] LastLeft = new string?[4];
     private static readonly string?[] LastRight = new string?[4];
     private static string? _lastBase;
+    private static string? _lastFolderBase;
     private static string? _lastResult;
 
     private readonly ComparisonTarget _target;
@@ -63,7 +64,7 @@ internal sealed class SelectFilesDialog : DialogWindow
 
         _left.Text = left ?? LastLeft[(int)target] ?? string.Empty;
         _right.Text = right ?? LastRight[(int)target] ?? string.Empty;
-        _base.Text = _lastBase ?? string.Empty;
+        _base.Text = (Folders ? _lastFolderBase : _lastBase) ?? string.Empty;
         // The result starts as the left file (what Save writes over), unless this is the same merge as last time.
         var sameMerge = !string.IsNullOrEmpty(_lastResult) && string.Equals(Normalize(_left.Text), LastLeft[(int)target], StringComparison.OrdinalIgnoreCase);
         _result.Text = sameMerge ? _lastResult! : _left.Text;
@@ -91,6 +92,12 @@ internal sealed class SelectFilesDialog : DialogWindow
         {
             _right.ToolTip = "The folder the paths in the patch are relative to, usually the repository root. Choose a single file to apply a one-file patch to it whatever its name.";
         }
+        if (Folders)
+        {
+            AddRow(grid, row++, "_Base:", _base, "Select the folder both sides started from");
+            _base.ToolTip = "Optional. With the folder both sides started from, the comparison is three-way: it shows which side changed each file, and where both did.";
+        }
+
         if (Merging)
         {
             AddRow(grid, row++, "Res_ult:", _result, "Choose where to save the merged file");
@@ -350,6 +357,10 @@ internal sealed class SelectFilesDialog : DialogWindow
         {
             problem = "The base file does not exist.";
         }
+        else if (Folders && BasePath.Length > 0 && !Directory.Exists(BasePath))
+        {
+            problem = "The base folder does not exist. Leave it empty for a two-way comparison.";
+        }
         else if (Merging && SafeDirectory(ResultPath) is null)
         {
             problem = "The folder for the result file does not exist.";
@@ -373,6 +384,10 @@ internal sealed class SelectFilesDialog : DialogWindow
         {
             _lastBase = BasePath;
             _lastResult = Normalize(_result.Text);
+        }
+        else if (Folders)
+        {
+            _lastFolderBase = BasePath;
         }
 
         DialogResult = true;

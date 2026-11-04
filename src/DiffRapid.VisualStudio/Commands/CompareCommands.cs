@@ -211,6 +211,12 @@ internal static class CompareCommands
             return;
         }
 
+        if (dialog.BasePath.Length > 0)
+        {
+            await package.OpenThreeWayFolderComparisonAsync(dialog.BasePath, dialog.LeftPath, dialog.RightPath);
+            return;
+        }
+
         await package.OpenFolderComparisonAsync(dialog.LeftPath, dialog.RightPath);
     }
 

@@ -123,6 +123,14 @@ public sealed class DiffRapidPackage : AsyncPackage
             FolderName(leftPath) + " ↔ " + FolderName(rightPath),
             hostsEditors: false);
 
+    /// <summary>Opens a three-way comparison of two folders and the folder both started from.</summary>
+    public Task OpenThreeWayFolderComparisonAsync(string basePath, string leftPath, string rightPath) =>
+        OpenDocumentAsync(
+            "Loading the folder comparison",
+            async () => new ThreeWayFolderControl(this, basePath, leftPath, rightPath, (await DiffRapidSettings.ReadAsync(this)).Folder),
+            FolderName(leftPath) + " ↔ " + FolderName(rightPath) + " (base " + FolderName(basePath) + ")",
+            hostsEditors: false);
+
     /// <summary>Opens a three-way merge of two changed versions of a file and their common base.</summary>
     public Task OpenMergeAsync(string leftPath, string basePath, string rightPath, string resultPath) =>
         OpenDocumentAsync(
