@@ -36,7 +36,10 @@ internal static partial class Program
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
-          diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
+          diffrapid sync <left> <right> --profile mirror-right|mirror-left|update|update-both
+                         [--dry-run] [--yes] [--include <glob>] [--exclude <glob>] [--filter-file <path>]
+                         Prints the plan; --yes carries it out.
+          diffrapid git-config [--global]      print setup commands for Git Bash / POSIX shells
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -92,6 +95,7 @@ internal static partial class Program
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
+                "sync" => RunSync(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
