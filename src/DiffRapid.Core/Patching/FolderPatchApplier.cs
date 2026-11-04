@@ -112,6 +112,62 @@ public static class FolderPatchApplier
     }
 
     /// <summary>
+    /// When some files the patch changes or deletes are missing under <paramref name="root"/>, looks one folder
+    /// up and one folder down for a root where more of them exist (a patch made from the repository root,
+    /// applied to a project folder, or the other way round). Returns that folder, or null when the root already
+    /// holds every file or no nearby folder does better.
+    /// </summary>
+    public static string? SuggestRoot(Patch patch, string root, PatchApplyOptions? options = null)
+    {
+        options ??= new PatchApplyOptions();
+        var sources = patch.Files
+            .Select(file => options.Reverse ? file.NewPath : file.OldPath)
+            .Where(path => path is not null && !Path.IsPathRooted(path))
+            .Select(path => path!.Replace('/', Path.DirectorySeparatorChar))
+            .ToList();
+        if (sources.Count == 0)
+        {
+            return null;
+        }
+
+        var fullRoot = Path.GetFullPath(root);
+        int Found(string folder) => sources.Count(source => File.Exists(Path.Combine(folder, source)));
+        var current = Found(fullRoot);
+        if (current == sources.Count)
+        {
+            return null;
+        }
+
+        var candidates = new List<string>();
+        if (Path.GetDirectoryName(fullRoot) is { } parent)
+        {
+            candidates.Add(parent);
+        }
+
+        try
+        {
+            // A cap keeps a root like C:\ quick; the folder a patch belongs in is rarely past the first hundreds.
+            candidates.AddRange(Directory.EnumerateDirectories(fullRoot).Take(500));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        string? best = null;
+        var bestFound = current;
+        foreach (var candidate in candidates)
+        {
+            var found = Found(candidate);
+            if (found > bestFound)
+            {
+                (best, bestFound) = (candidate, found);
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
     /// Plans one file patch against <paramref name="filePath"/>, ignoring the paths in the patch
     /// (applying a patch to a file chosen by the user).
     /// </summary>

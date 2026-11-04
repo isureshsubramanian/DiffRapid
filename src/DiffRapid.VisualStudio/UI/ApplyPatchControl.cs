@@ -38,8 +38,12 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
 
     private readonly DiffRapidPackage _package;
     private readonly string _patchPath;
-    private readonly string _targetPath;
     private readonly ListView _list = new();
+    private readonly Border _suggestion = new() { Visibility = Visibility.Collapsed, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(10, 5, 10, 5) };
+    private readonly TextBlock _suggestionText = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    private string _targetPath;
+    private string? _suggestedRoot;
+    private FrameworkElement? _targetLabel;
     private readonly Button _apply;
     private readonly Button _compare;
     private readonly TextBlock _verdict = new() { VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 14, 0) };
@@ -70,6 +74,9 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         var header = BuildHeader();
         SetDock(header, Dock.Top);
         Children.Add(header);
+        BuildSuggestion();
+        SetDock(_suggestion, Dock.Top);
+        Children.Add(_suggestion);
         var footer = BuildFooter();
         SetDock(footer, Dock.Bottom);
         Children.Add(footer);
@@ -145,14 +152,58 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var patch = PathLabel("PATCH", _patchPath, DiffTheme.MovedBrush);
-        var target = PathLabel(File.Exists(_targetPath) ? "FILE" : "FOLDER", _targetPath, DiffTheme.ChangedBrush);
-        Grid.SetColumn(target, 1);
         grid.Children.Add(patch);
-        grid.Children.Add(target);
+        ShowTarget(grid);
 
         var chrome = new Border { Child = grid, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(10, 7, 10, 7) };
         chrome.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
         return chrome;
+    }
+
+    private void ShowTarget(Grid header)
+    {
+        if (_targetLabel is not null)
+        {
+            header.Children.Remove(_targetLabel);
+        }
+
+        _targetLabel = PathLabel(File.Exists(_targetPath) ? "FILE" : "FOLDER", _targetPath, DiffTheme.ChangedBrush);
+        Grid.SetColumn(_targetLabel, 1);
+        header.Children.Add(_targetLabel);
+    }
+
+    // Shown when the patch's files are missing under the chosen folder but exist one level up or down.
+    private void BuildSuggestion()
+    {
+        var use = DiffTheme.CommandButton(IconLabel(KnownMonikers.FolderOpened, "Use this folder"), "Preview the patch against the suggested folder instead", UseSuggestedRoot);
+        var panel = new DockPanel();
+        DockPanel.SetDock(use, Dock.Right);
+        panel.Children.Add(use);
+        panel.Children.Add(_suggestionText);
+        _suggestion.Child = panel;
+        _suggestion.SetResourceReference(Border.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
+        _suggestion.SetResourceReference(Border.BorderBrushProperty, EnvironmentColors.ToolWindowBorderBrushKey);
+        _suggestionText.Foreground = DiffTheme.ChangedBrush;
+    }
+
+    private void UseSuggestedRoot()
+    {
+        if (_suggestedRoot is null || _targetLabel?.Parent is not Grid header)
+        {
+            return;
+        }
+
+        _targetPath = _suggestedRoot;
+        ShowTarget(header);
+        StartPlan(null);
+    }
+
+    private void ShowSuggestion(string? root)
+    {
+        _suggestedRoot = root;
+        _suggestion.Visibility = root is null ? Visibility.Collapsed : Visibility.Visible;
+        _suggestionText.Text = root is null ? string.Empty : $"Some files in this patch are not in {_targetPath}, but they are in {root}.";
+        _suggestionText.ToolTip = root;
     }
 
     private static FrameworkElement PathLabel(string badgeText, string path, Brush accent)
@@ -273,16 +324,18 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         var cancellation = new CancellationTokenSource();
         _planCancellation = cancellation;
         var options = _options;
+        var target = _targetPath;
         var keepUnchecked = new HashSet<string>(Rows.Where(r => r.CanApply && !r.IsChecked).Select(r => r.Path), StringComparer.OrdinalIgnoreCase);
         SetBusy(true, "Reading the patch…");
 
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
             FolderPatchPlan? plan = null;
+            string? suggestion = null;
             string? problem = null;
             try
             {
-                plan = await Task.Run(() => BuildPlan(options), cancellation.Token);
+                (plan, suggestion) = await Task.Run(() => BuildPlan(target, options), cancellation.Token);
             }
             catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException or InvalidOperationException)
             {
@@ -296,11 +349,13 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
             }
 
             ShowPlan(plan, keepUnchecked);
+            ShowSuggestion(suggestion);
             SetBusy(false, message ?? problem ?? Summary(plan));
         }).FileAndForget("DiffRapid/ApplyPatchPreview");
     }
 
-    private FolderPatchPlan BuildPlan(PatchApplyOptions options)
+    /// <summary>The plan, and a nearby folder to suggest when the patch's files are missing under the target.</summary>
+    private (FolderPatchPlan Plan, string? SuggestedRoot) BuildPlan(string target, PatchApplyOptions options)
     {
         var patch = Patch.Parse(TextFileReader.ReadFile(_patchPath).Text);
         if (patch.Files.Count == 0)
@@ -308,9 +363,10 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
             throw new InvalidOperationException("The file does not contain a patch (no ---/+++ or diff --git headers were found).");
         }
 
-        if (!File.Exists(_targetPath))
+        if (!File.Exists(target))
         {
-            return FolderPatchApplier.Plan(patch, _targetPath, options);
+            var plan = FolderPatchApplier.Plan(patch, target, options);
+            return (plan, plan.AllApplicable ? null : FolderPatchApplier.SuggestRoot(patch, target, options));
         }
 
         // A single target file takes a one-file patch whatever names the patch uses.
@@ -319,8 +375,8 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
             throw new InvalidOperationException($"The patch changes {patch.Files.Count} files. Apply it to a folder instead of a single file.");
         }
 
-        var file = FolderPatchApplier.PlanFile(patch.Files[0], _targetPath, options);
-        return new FolderPatchPlan(Path.GetDirectoryName(_targetPath)!, options, new[] { file });
+        var file = FolderPatchApplier.PlanFile(patch.Files[0], target, options);
+        return (new FolderPatchPlan(Path.GetDirectoryName(target)!, options, new[] { file }), null);
     }
 
     private void ShowPlan(FolderPatchPlan? plan, ISet<string> keepUnchecked)

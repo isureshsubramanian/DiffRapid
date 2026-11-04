@@ -257,6 +257,23 @@ public sealed class FolderPatchApplierTests : IDisposable
         Assert.Equal("one\nTWO\nthree\n", File.ReadAllText(At("c.txt")));
     }
 
+    [Fact]
+    public void SuggestsTheFolderWhereThePatchFilesAre()
+    {
+        var patch = Parse(ChangeA.Replace("a.txt", "src/a.txt"));
+        Directory.CreateDirectory(At("project/src"));
+        Directory.CreateDirectory(At("other"));
+        File.WriteAllText(At("project/src/a.txt"), "one\ntwo\nthree\n");
+
+        // A folder down (patch made in the project, applied at the repository root) and a folder up.
+        Assert.Equal(At("project"), FolderPatchApplier.SuggestRoot(patch, _root));
+        Assert.Equal(At("project"), FolderPatchApplier.SuggestRoot(patch, At("project/src")));
+
+        // No suggestion when the root is right, or when nothing nearby is better.
+        Assert.Null(FolderPatchApplier.SuggestRoot(patch, At("project")));
+        Assert.Null(FolderPatchApplier.SuggestRoot(Parse(ChangeA.Replace("a.txt", "missing.txt")), At("project")));
+    }
+
     private static bool TryCreateJunction(string link, string target)
     {
         using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
