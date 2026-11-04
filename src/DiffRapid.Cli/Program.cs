@@ -36,6 +36,8 @@ internal static partial class Program
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
+          diffrapid hex <left> <right> [--resync] [--bytes-per-line 8|16|32] [--context <n>] [--summary]
+                         Binary compare shown as hex; --resync finds insertions and deletions (up to 64 MB).
           diffrapid git-config [--global]        print setup commands for Git Bash / POSIX shells
 
         Compare options:
@@ -92,6 +94,7 @@ internal static partial class Program
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
+                "hex" => RunHex(parsed, Console.Out),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
 
