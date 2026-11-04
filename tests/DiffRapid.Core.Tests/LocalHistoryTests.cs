@@ -815,6 +815,11 @@ public sealed class LocalHistoryTests : IDisposable
             // Windows can briefly deny a new handle while ReplaceFile exchanges the files.
             return null;
         }
+        catch (FileNotFoundException) when (OperatingSystem.IsWindows())
+        {
+            // ReplaceFile is not one rename: the name can be missing for a moment. A reader still never sees a partial file.
+            return null;
+        }
     }
 
     private static async Task<CliResult> RunCli(params string[] arguments)
