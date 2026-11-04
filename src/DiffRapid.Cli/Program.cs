@@ -23,12 +23,16 @@ internal static partial class Program
           diffrapid patch <left> <right> [-o <file>] [-u <n>] [compare options]
           diffrapid apply <patchfile> [--dir <root>] [--reverse] [--fuzz <0..2>]
                           [--dry-run] [--ignore-whitespace]
-          diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence]
+          diffrapid dir <left> <right> [--method full|quick|binary|date|date-size|size|existence|hash]
                          [--no-recurse] [--include <glob>] [--exclude <glob>] [--json]
                          [--only different|left|right|all]
                          [--filter-file <path>]  apply .flt file and folder rules
                          [--report <file>] [--report-format html|csv] [--include-identical]
                          Report format defaults to the extension (.html/.htm/.csv).
+                         [--renames] [--similarity <0..1>]  pair renamed and moved files
+          diffrapid dir3 <base> <left> <right> [--method ...] [--no-recurse] [--include <glob>]
+                         [--exclude <glob>] [--filter-file <path>] [--json]
+                         Exit code 1 when an entry conflicts or cannot be read.
           diffrapid diff  <left> <right> [options]
           diffrapid diff <file> --rev <revision> [options]
           diffrapid log <file> [-n <count>]
@@ -87,6 +91,7 @@ internal static partial class Program
                 "patch" => RunPatch(parsed),
                 "apply" => RunApply(parsed),
                 "dir" => RunDirectory(parsed),
+                "dir3" => RunDirectory3(parsed),
                 "diff" => RunDiff(parsed),
                 "log" => RunLog(parsed),
                 "info" => RunInfo(parsed),
