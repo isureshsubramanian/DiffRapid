@@ -48,6 +48,7 @@ internal static partial class Program
             "dir",
             "fuzz",
             "profile",
+            "bytes-per-line",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
