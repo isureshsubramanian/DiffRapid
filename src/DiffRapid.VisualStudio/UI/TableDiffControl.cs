@@ -577,7 +577,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         }
 
         _view.Columns.Clear();
-        _view.Columns.Add(new GridViewColumn { Header = "Status", Width = 104, CellTemplate = StatusTemplate() });
+        _view.Columns.Add(new GridViewColumn { Header = "Status", Width = 132, CellTemplate = StatusTemplate() });
         _view.Columns.Add(new GridViewColumn { Header = "Line", Width = 92, CellTemplate = LinesTemplate() });
         var columns = outcome.Result.Columns;
         for (var c = 0; c < columns.Count; c++)
