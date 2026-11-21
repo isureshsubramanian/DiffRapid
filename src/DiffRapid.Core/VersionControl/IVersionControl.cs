@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using DiffRapid.Core.IO;
 
 namespace DiffRapid.Core.VersionControl;
 
@@ -112,7 +113,8 @@ internal sealed class ProcessRunner : IProcessRunner
     /// code, output and diagnostics. Worst case: <paramref name="outputLimit"/> bytes of output plus one copy, and
     /// 64 KB of diagnostics, for at most <paramref name="timeout"/> plus the drain time.
     /// </summary>
-    /// <exception cref="IOException">The program could not start, wrote more than <paramref name="outputLimit"/> bytes,
+    /// <exception cref="IOException">The program could not start (a bare name is looked up only in absolute PATH
+    /// folders, never the current one), wrote more than <paramref name="outputLimit"/> bytes,
     /// or left its output open after exiting.</exception>
     /// <exception cref="TimeoutException">The program ran past <paramref name="timeout"/> and was stopped.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; the program was stopped.</exception>
@@ -122,7 +124,7 @@ internal sealed class ProcessRunner : IProcessRunner
         cancellationToken.ThrowIfCancellationRequested();
         using var process = new Process
         {
-            StartInfo = new ProcessStartInfo(executable, string.Join(" ", arguments.Select(Quote)))
+            StartInfo = new ProcessStartInfo(ExecutablePath.Resolve(executable), string.Join(" ", arguments.Select(Quote)))
             {
                 WorkingDirectory = directory ?? string.Empty,
                 UseShellExecute = false,
