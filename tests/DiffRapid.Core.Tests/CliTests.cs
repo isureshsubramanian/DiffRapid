@@ -101,8 +101,16 @@ public sealed class CliTests
     [Fact]
     public void SlashArgumentsArePathsOutsideWindows()
     {
-        var args = Program.ParsedArgs.Parse(["diff", "/tmp/left", "/o"], 1);
-        Assert.Equal(OperatingSystem.IsWindows() ? ["/tmp/left"] : ["/tmp/left", "/o"], args.Positionals);
+        // On Windows "/o" is the output option and takes the next token; "/tmp/left" has a separator in its name,
+        // so it is a path there too.
+        var args = Program.ParsedArgs.Parse(["diff", "/tmp/left", "/o", "out.txt"], 1);
+        Assert.Equal(OperatingSystem.IsWindows() ? ["/tmp/left"] : ["/tmp/left", "/o", "out.txt"], args.Positionals);
+        Assert.Equal(OperatingSystem.IsWindows() ? "out.txt" : null, args.Value("output"));
+        Assert.Equal(["C:\\a", "/x\\y"], Program.ParsedArgs.Parse(["diff", "C:\\a", "/x\\y"], 1).Positionals);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("C:\\out.txt", Program.ParsedArgs.Parse(["diff", "a", "b", "/o:C:\\out.txt"], 1).Value("output"));
+        }
     }
 
     [Theory]

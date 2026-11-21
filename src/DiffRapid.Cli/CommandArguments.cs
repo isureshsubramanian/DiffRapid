@@ -190,9 +190,24 @@ internal static partial class Program
             return (name, inlineValue);
         }
 
-        // Slash-style /o and /dl options exist for Windows tools; elsewhere "/..." is always a path.
-        private static bool IsWindowsSlashOption(string argument) =>
-            OperatingSystem.IsWindows() && argument[0] == '/' && !File.Exists(argument) && !Directory.Exists(argument);
+        // Slash-style /o and /dl options exist for Windows tools; elsewhere "/..." is always a path. An option name
+        // never holds a separator, so "/tmp/left" is a path on Windows too, while "/o:C:\out.txt" stays an option.
+        private static bool IsWindowsSlashOption(string argument)
+        {
+            if (!OperatingSystem.IsWindows() || argument[0] != '/')
+            {
+                return false;
+            }
+
+            var name = argument.AsSpan(1);
+            var separator = name.IndexOfAny(':', '=');
+            if (separator >= 0)
+            {
+                name = name[..separator];
+            }
+
+            return name.IndexOfAny('/', '\\') < 0 && !File.Exists(argument) && !Directory.Exists(argument);
+        }
 
         private void AddOption(string name, string? value)
         {
