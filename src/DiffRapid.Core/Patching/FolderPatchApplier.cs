@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using DiffRapid.Core.Folders;
 using DiffRapid.Core.IO;
 using DiffRapid.Core.Text;
 
@@ -286,7 +287,7 @@ public static class FolderPatchApplier
 
         var readPath = source ?? target!;
         var exists = File.Exists(readPath);
-        var decoded = exists ? TextFileReader.ReadFile(readPath) : new DecodedText(string.Empty, new UTF8Encoding(false), false, false);
+        var decoded = exists ? FolderComparer.ReadTextUnlessEmpty(readPath) : new DecodedText(string.Empty, new UTF8Encoding(false), false, false);
         if (decoded.IsBinary || patch.IsBinary)
         {
             return Rejected(patch, display, FilePatchStatus.Binary, "Binary changes cannot be applied from a text patch.") with { SourcePath = source, TargetPath = target, Action = action };
@@ -354,23 +355,39 @@ public static class FolderPatchApplier
             return false;
         }
 
-        return !IsCaseOnly(source, target) || (ExactEntryExists(target) && ExactEntryExists(source));
+        return !IsCaseOnly(source, target) || !SameEntry(source, target);
     }
 
     private static bool IsCaseOnly(string source, string target) =>
         string.Equals(source, target, StringComparison.OrdinalIgnoreCase) && !string.Equals(source, target, StringComparison.Ordinal);
 
-    private static bool ExactEntryExists(string path)
+    /// <summary>
+    /// Whether <paramref name="target"/>, which differs from the existing <paramref name="source"/> only in case,
+    /// names the same entry: no folder lists a name spelled exactly like the target's where the spellings differ
+    /// (in the file name or in any folder above it). Only folders on the source's own path are listed.
+    /// </summary>
+    private static bool SameEntry(string source, string target)
     {
-        if (!File.Exists(path) && !Directory.Exists(path))
+        for (string? from = source, to = target; from is not null && to is not null; from = Path.GetDirectoryName(from), to = Path.GetDirectoryName(to))
         {
-            return false;
+            var name = Path.GetFileName(to);
+            if (name.Length == 0 || string.Equals(Path.GetFileName(from), name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var parent = Path.GetDirectoryName(from);
+            if (parent is null || Directory.EnumerateFileSystemEntries(parent).Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal)))
+            {
+                return false;
+            }
         }
 
-        var name = Path.GetFileName(path);
-        return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)!)
-            .Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal));
+        return true;
     }
+
+    private static bool SameFolder(string source, string target) =>
+        string.Equals(Path.GetDirectoryName(source), Path.GetDirectoryName(target), StringComparison.Ordinal);
 
     private static string? FirstFailure(FilePatch patch, PatchApplyResult result, PatchApplyOptions options)
     {
@@ -447,7 +464,7 @@ public static class FolderPatchApplier
             return "The file was removed since the preview.";
         }
 
-        var current = TextFileReader.ReadFile(file.SourcePath).Text;
+        var current = FolderComparer.ReadTextUnlessEmpty(file.SourcePath).Text;
         return current == file.OriginalText ? null : "The file changed since the preview.";
     }
 
@@ -461,20 +478,22 @@ public static class FolderPatchApplier
 
         var preamble = file.HasByteOrderMark ? file.Encoding.GetPreamble() : Array.Empty<byte>();
         var content = file.Encoding.GetBytes(file.PatchedText);
-        var caseOnly = file.Action == FilePatchAction.Rename && IsCaseOnly(file.SourcePath!, file.TargetPath);
-
-        // On a case-insensitive file system a case-only target is the source itself: writing it and then deleting the
-        // source would delete the result. So the content goes over the source, which is then renamed.
+        // On a case-insensitive file system a case-only target is the source itself (it exists, and the plan found
+        // it to be the same entry): writing it and then deleting the source would delete the result. So the content
+        // goes over the source, which is then renamed. When the case differs in a folder name, the folder is shared
+        // with other files and is left as it is, so the change applies as an edit. On a case-sensitive file system
+        // the target does not exist, and the ordinary rename below creates its folder.
+        var caseOnly = file.Action == FilePatchAction.Rename && IsCaseOnly(file.SourcePath!, file.TargetPath) && File.Exists(file.TargetPath);
         AtomicFile.Write(caseOnly ? file.SourcePath! : file.TargetPath, stream =>
         {
             stream.Write(preamble, 0, preamble.Length);
             stream.Write(content, 0, content.Length);
         });
-        if (caseOnly)
+        if (caseOnly && SameFolder(file.SourcePath!, file.TargetPath))
         {
             RenameCase(file.SourcePath!, file.TargetPath);
         }
-        else if (file.Action == FilePatchAction.Rename)
+        else if (file.Action == FilePatchAction.Rename && !caseOnly)
         {
             File.Delete(file.SourcePath!);
         }

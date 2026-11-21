@@ -199,6 +199,25 @@ public sealed class FolderPatchApplierTests : IDisposable
     }
 
     [Fact]
+    public void FolderCaseRenameAppliesOnEveryFileSystem()
+    {
+        Directory.CreateDirectory(At("Docs"));
+        File.WriteAllText(At(Path.Combine("Docs", "a.txt")), "one\ntwo\n");
+        var patch = Parse("diff --git a/Docs/a.txt b/docs/a.txt\nsimilarity index 80%\nrename from Docs/a.txt\nrename to docs/a.txt\n" +
+            "--- a/Docs/a.txt\n+++ b/docs/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        var file = Assert.Single(plan.Files);
+        Assert.Equal(FilePatchStatus.Ready, file.Status);
+
+        Assert.True(Assert.Single(FolderPatchApplier.Apply(plan)).Written);
+
+        // A case-insensitive file system keeps the shared folder's spelling; a case-sensitive one moves the file.
+        var file1 = Assert.Single(Directory.GetFiles(_root, "*", SearchOption.AllDirectories));
+        Assert.Equal("one\nTWO\n", File.ReadAllText(file1));
+        Assert.Equal("a.txt", Path.GetFileName(file1));
+    }
+
+    [Fact]
     public void UnreadableFolderMakesOnlyItsFileUnsafe()
     {
         if (OperatingSystem.IsWindows())
