@@ -1551,9 +1551,9 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
                 return;
             }
 
-            foreach (var error in errors)
+            if (errors.Count > 0)
             {
-                Diagnostics.WriteLine($"[{DateTime.Now:HH:mm:ss}] {verb} failed: {error}");
+                Diagnostics.WriteLines(errors.Select(error => $"[{DateTime.Now:HH:mm:ss}] {verb} failed: {error}"));
             }
 
             _afterScanMessage = errors.Count == 0

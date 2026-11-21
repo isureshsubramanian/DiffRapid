@@ -45,10 +45,14 @@ internal static class Diagnostics
         });
     }
 
+    /// <summary>
+    /// Logs the exception's type and message (and the types of the exceptions inside it), with the user's profile
+    /// folder written as %USERPROFILE%; stack traces are left out, as they add little and can name local paths.
+    /// </summary>
     public static void LogError(Exception ex)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        var details = ex.ToString();
+        var details = Redact(Describe(ex));
         ActivityLog.TryLogError("DiffRapid", details);
         WriteLine($"[{DateTime.Now:HH:mm:ss}] ERROR {details}");
         AppendToLogFile($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ERROR {details}");
@@ -57,9 +61,31 @@ internal static class Diagnostics
     /// <summary>Records something that went wrong without interrupting the user (activity log and log file).</summary>
     public static void LogWarning(string message)
     {
+        message = Redact(message);
         ActivityLog.TryLogWarning("DiffRapid", message);
         AppendToLogFile($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] WARNING {message}");
     }
+
+    private static string Describe(Exception ex)
+    {
+        var text = new System.Text.StringBuilder(ex.GetType().FullName).Append(": ").Append(ex.Message);
+        for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            text.Append(" ← ").Append(inner.GetType().FullName);
+        }
+
+        return text.ToString();
+    }
+
+    private static readonly string UserProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\', '/');
+
+    // Paths under the profile folder carry the user name; the rest of the path still says which file it was.
+    private static string Redact(string text) =>
+        UserProfile.Length < 3 ? text : System.Text.RegularExpressions.Regex.Replace(
+            text,
+            System.Text.RegularExpressions.Regex.Escape(UserProfile),
+            "%USERPROFILE%",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>Logs a step on the UI thread that took long enough for the user to notice (over 200 ms).</summary>
     public static void LogIfSlow(string step, System.Diagnostics.Stopwatch elapsed)
@@ -74,12 +100,30 @@ internal static class Diagnostics
     public static string LogFilePath { get; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiffRapid", "diffrapid.log");
 
+    // Past this size the log is renamed to diffrapid.1.log (replacing the previous one) and a new one started, so it
+    // never takes more than about twice this. 1 MB is an estimate: thousands of entries, still quick to open.
+    private const long MaxLogFileSize = 1024 * 1024;
+
+    private static readonly object LogFileLock = new();
+
     private static void AppendToLogFile(string text)
     {
         try
         {
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LogFilePath)!);
-            System.IO.File.AppendAllText(LogFilePath, text + Environment.NewLine + Environment.NewLine);
+            // Warnings come from background threads too.
+            lock (LogFileLock)
+            {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LogFilePath)!);
+                var log = new System.IO.FileInfo(LogFilePath);
+                if (log.Exists && log.Length > MaxLogFileSize)
+                {
+                    var previous = System.IO.Path.ChangeExtension(LogFilePath, ".1.log");
+                    System.IO.File.Delete(previous);
+                    System.IO.File.Move(LogFilePath, previous);
+                }
+
+                System.IO.File.AppendAllText(LogFilePath, text + Environment.NewLine + Environment.NewLine);
+            }
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
         {
@@ -87,7 +131,10 @@ internal static class Diagnostics
         }
     }
 
-    public static void WriteLine(string message)
+    public static void WriteLine(string message) => WriteLines(new[] { message });
+
+    /// <summary>Writes the lines to the DiffRapid Output pane and brings the pane forward once.</summary>
+    public static void WriteLines(System.Collections.Generic.IEnumerable<string> messages)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         var pane = GetPane();
@@ -96,7 +143,11 @@ internal static class Diagnostics
             return;
         }
 
-        pane.OutputStringThreadSafe(message + Environment.NewLine);
+        foreach (var message in messages)
+        {
+            pane.OutputStringThreadSafe(message + Environment.NewLine);
+        }
+
         pane.Activate();
     }
 
