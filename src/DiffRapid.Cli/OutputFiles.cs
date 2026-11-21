@@ -52,13 +52,15 @@ internal static partial class Program
     /// <c>-o /dev/stdout</c> or <c>-o &gt;(command)</c>: no temporary file can be created beside it or renamed
     /// over it. .NET reports no file type there, so a target counts as one when it is under <c>/dev</c>, or when it
     /// lists a length of 0 (as pipes and devices do) and opens as a stream that cannot seek, which a regular file
-    /// always can. Returns null for everything else, which is written atomically.
+    /// always can. On Windows, the full path of <c>NUL</c>, <c>CON</c> and the other reserved names (in any folder)
+    /// is a <c>\\.\NAME</c> device path, which has no folder for a temporary file, so it is written in place too, as
+    /// is a named pipe (<c>\\.\pipe\name</c>). Returns null for everything else, which is written atomically.
     /// </summary>
     private static FileStream? OpenSpecial(string full)
     {
         if (OperatingSystem.IsWindows())
         {
-            return null;
+            return IsWindowsDeviceOrPipe(full) ? new FileStream(full, FileMode.Open, FileAccess.Write, FileShare.ReadWrite) : null;
         }
 
         var device = full.StartsWith("/dev/", StringComparison.Ordinal);
@@ -94,6 +96,21 @@ internal static partial class Program
 
         stream.Dispose();
         return null;
+    }
+
+    // "\\.\C:\dir\file.txt" and "\\.\Volume{...}\file.txt" also live under "\\.\" but are ordinary files, which
+    // must still be replaced atomically: only a bare device name or a named pipe is written in place.
+    private static bool IsWindowsDeviceOrPipe(string full)
+    {
+        const string devicePrefix = @"\\.\";
+        if (!full.StartsWith(devicePrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var rest = full.Substring(devicePrefix.Length);
+        return rest.Length > 0 &&
+            (rest.IndexOf('\\') < 0 || rest.StartsWith(@"pipe\", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Writes text in the encoding it was read with, keeping its byte order mark.</summary>

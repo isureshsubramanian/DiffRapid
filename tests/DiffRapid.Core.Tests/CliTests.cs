@@ -257,6 +257,55 @@ public sealed class CliTests
     }
 
     [Fact]
+    public async Task OutputToWindowsDevicesAndPipesIsWrittenInPlace()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            // NUL has no folder for a temporary file, in the current folder or any other; it discards the output.
+            Program.WriteText("NUL", text => text.Write("discarded"));
+            Program.WriteText(Path.Combine(directory, "nul"), text => text.Write("discarded"));
+            Assert.Empty(Directory.GetFileSystemEntries(directory));
+
+            // A name that only starts with a device name is an ordinary file.
+            Program.WriteText(Path.Combine(directory, "nul.txt"), text => text.Write("kept"));
+            Assert.Equal("kept", File.ReadAllText(Path.Combine(directory, "nul.txt")));
+
+            // A file reached through the \\.\ namespace is still replaced whole, and can be created there.
+            var longer = Path.Combine(directory, "longer.txt");
+            File.WriteAllText(longer, "long content here");
+            Program.WriteText(@"\\.\" + longer, text => text.Write("ab"));
+            Assert.Equal("ab", File.ReadAllText(longer));
+            Program.WriteText(@"\\.\" + Path.Combine(directory, "new.txt"), text => text.Write("new"));
+            Assert.Equal("new", File.ReadAllText(Path.Combine(directory, "new.txt")));
+
+            // A named pipe is written in place. Closing the writer waits for the reader, so both run at once.
+            var name = "diffrapid-test-" + Guid.NewGuid().ToString("N");
+            using var server = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.In, 1,
+                System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+            var read = Task.Run(async () =>
+            {
+                await server.WaitForConnectionAsync(TestContext.Current.CancellationToken);
+                using var reader = new StreamReader(server, leaveOpen: true);
+                return await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+            }, TestContext.Current.CancellationToken);
+            await Task.Run(() => Program.WriteText(@"\\.\pipe\" + name, text => text.Write("piped")), TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.Equal("piped", await read.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task MergeOutputKeepsTheFileMode()
     {
         if (OperatingSystem.IsWindows())
