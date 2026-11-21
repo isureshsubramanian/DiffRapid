@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using DiffRapid.Core.IO;
 using DiffRapid.Core.VersionControl;
 
 namespace DiffRapid.Core.Git;
@@ -74,14 +75,9 @@ public sealed class GitRepository : IVersionControl
     /// <summary>Returns a repository-relative path using forward slashes.</summary>
     public string RelativePath(string fullPath)
     {
-        var root = Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var full = Path.GetFullPath(fullPath);
-        if (!full.StartsWith(root, Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-        {
-            throw new ArgumentException("The file is outside the repository.", nameof(fullPath));
-        }
-
-        return full.Substring(root.Length).Replace('\\', '/');
+        var relative = PathContainment.RelativeInside(Root, Path.GetFullPath(fullPath))
+            ?? throw new ArgumentException("The file is outside the repository.", nameof(fullPath));
+        return relative.Replace('\\', '/');
     }
 
     private Task<ProcessResult> Run(CancellationToken cancellationToken, params string[] arguments)

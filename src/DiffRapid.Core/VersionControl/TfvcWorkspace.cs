@@ -5,6 +5,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using DiffRapid.Core.IO;
 
 namespace DiffRapid.Core.VersionControl;
 
@@ -158,13 +159,9 @@ public sealed class TfvcWorkspace : IVersionControl
     private string LocalPath(string path)
     {
         var full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Root, path));
-        var prefix = Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-        {
-            throw new ArgumentException("The file is outside the TFVC workspace.", nameof(path));
-        }
-
-        return full;
+        return PathContainment.RelativeInside(Root, full) is null
+            ? throw new ArgumentException("The file is outside the TFVC workspace.", nameof(path))
+            : full;
     }
 
     /// <summary>Lists changes using English detailed tf.exe output and invariant date parsing.</summary>
@@ -189,7 +186,7 @@ public sealed class TfvcWorkspace : IVersionControl
             throw new IOException("tf: " + result.Error.Trim());
         }
 
-        return ParseHistory(result.Text, full.Substring(Root.TrimEnd(Path.DirectorySeparatorChar).Length + 1).Replace('\\', '/'));
+        return ParseHistory(result.Text, PathContainment.RelativeInside(Root, full)!.Replace('\\', '/'));
     }
 
     /// <summary>Reads a changeset, latest server version T, or fetched workspace version W.</summary>
