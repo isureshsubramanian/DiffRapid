@@ -67,11 +67,12 @@ public static class TableReportWriter
 
         writer.WriteLine("## Rows");
         writer.WriteLine();
-        writer.WriteLine("| Status | Left line | Right line | " + string.Join(" | ", columns.Select(c => Markdown(c.Name))) + " |");
+        writer.WriteLine("| Status | Left line | Right line | " + string.Join(" | ", columns.Select(c => Markdown(c.Column.Name))) + " |");
         writer.WriteLine("|---|---:|---:|" + string.Concat(columns.Select(_ => "---|")));
         foreach (var row in rows)
         {
-            var cells = columns.Select(c => MarkdownCell(result, row, c));
+            var changed = ChangedCells(row);
+            var cells = columns.Select(c => MarkdownCell(result, row, c, changed));
             writer.WriteLine("| " + Label(row.Status) + " | " + Line(result.Left, row.LeftRow) + " | " + Line(result.Right, row.RightRow)
                 + " | " + string.Join(" | ", cells) + " |");
         }
@@ -179,7 +180,7 @@ public static class TableReportWriter
         writer.Write("<h2>Rows</h2><table><thead><tr><th>Status</th><th>Left line</th><th>Right line</th>");
         foreach (var column in columns)
         {
-            writer.Write("<th>" + Html(column.Name) + "</th>");
+            writer.Write("<th>" + Html(column.Column.Name) + "</th>");
         }
 
         writer.Write("</tr></thead><tbody>");
@@ -187,9 +188,10 @@ public static class TableReportWriter
         {
             writer.Write("<tr><td class=\"" + row.Status + "\">" + Label(row.Status) + "</td>");
             writer.Write("<td class=\"n\">" + Line(result.Left, row.LeftRow) + "</td><td class=\"n\">" + Line(result.Right, row.RightRow) + "</td>");
+            var changed = ChangedCells(row);
             foreach (var column in columns)
             {
-                writer.Write(HtmlCell(result, row, column));
+                writer.Write(HtmlCell(result, row, column, changed));
             }
 
             writer.Write("</tr>");
@@ -198,23 +200,36 @@ public static class TableReportWriter
         writer.Write("</tbody></table>");
     }
 
-    private static List<TableColumn> ShownColumns(TableDiffResult result) => result.Columns.Where(c => !c.IsIgnored).ToList();
-
-    private static string MarkdownCell(TableDiffResult result, TableRowDiff row, TableColumn column)
+    // The columns that are not ignored, each with its index in result.Columns (which TableCellDiff.Column refers to).
+    private static List<ShownColumn> ShownColumns(TableDiffResult result)
     {
-        if (ChangedCell(result, row, column) is { } cell)
+        var shown = new List<ShownColumn>();
+        for (var i = 0; i < result.Columns.Count; i++)
+        {
+            if (!result.Columns[i].IsIgnored)
+            {
+                shown.Add(new ShownColumn(result.Columns[i], i));
+            }
+        }
+
+        return shown;
+    }
+
+    private static string MarkdownCell(TableDiffResult result, TableRowDiff row, ShownColumn column, Dictionary<int, TableCellDiff>? changed)
+    {
+        if (ChangedCell(changed, column) is { } cell)
         {
             return Markdown(cell.Left) + " -> " + Markdown(cell.Right);
         }
 
-        return Markdown(CellText(result, row, column));
+        return Markdown(CellText(result, row, column.Column));
     }
 
-    private static string HtmlCell(TableDiffResult result, TableRowDiff row, TableColumn column)
+    private static string HtmlCell(TableDiffResult result, TableRowDiff row, ShownColumn column, Dictionary<int, TableCellDiff>? changed)
     {
-        if (ChangedCell(result, row, column) is not { } cell)
+        if (ChangedCell(changed, column) is not { } cell)
         {
-            return "<td>" + Html(CellText(result, row, column)) + "</td>";
+            return "<td>" + Html(CellText(result, row, column.Column)) + "</td>";
         }
 
         var left = Highlight(cell.Left, cell.Inline?.Left, "del");
@@ -243,24 +258,29 @@ public static class TableReportWriter
         return builder.ToString();
     }
 
-    private static TableCellDiff? ChangedCell(TableDiffResult result, TableRowDiff row, TableColumn column)
+    // The row's first changed cell per column index, or null when no cell changed; built once per row.
+    private static Dictionary<int, TableCellDiff>? ChangedCells(TableRowDiff row)
     {
-        var index = IndexOf(result, column);
-        return row.Cells.FirstOrDefault(c => c.Column == index && c.IsChanged);
-    }
-
-    private static int IndexOf(TableDiffResult result, TableColumn column)
-    {
-        for (var i = 0; i < result.Columns.Count; i++)
+        Dictionary<int, TableCellDiff>? changed = null;
+        foreach (var cell in row.Cells)
         {
-            if (ReferenceEquals(result.Columns[i], column))
+            if (cell.IsChanged)
             {
-                return i;
+                changed ??= new Dictionary<int, TableCellDiff>();
+                if (!changed.ContainsKey(cell.Column))
+                {
+                    changed.Add(cell.Column, cell);
+                }
             }
         }
 
-        return -1;
+        return changed;
     }
+
+    private static TableCellDiff? ChangedCell(Dictionary<int, TableCellDiff>? changed, ShownColumn column) =>
+        changed is not null && changed.TryGetValue(column.Index, out var cell) ? cell : null;
+
+    private readonly record struct ShownColumn(TableColumn Column, int Index);
 
     // Shows the left text for rows on the left, otherwise the right text.
     private static string CellText(TableDiffResult result, TableRowDiff row, TableColumn column)
