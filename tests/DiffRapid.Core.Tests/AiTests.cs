@@ -154,6 +154,51 @@ public sealed class AiTests
         Assert.DoesNotContain("sensitive-server-detail", exception.ToString());
     }
 
+    [Fact]
+    public async Task StreamingRefusedForTheModelFallsBackToOneUnstreamedRequest()
+    {
+        var streamed = new List<bool>();
+        using var client = new ChatClient(Endpoint, new FakeHandler(async (request, _) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var stream = body.RootElement.GetProperty("stream").GetBoolean();
+            streamed.Add(stream);
+            return stream
+                ? new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent("{\"error\":{\"message\":\"sensitive-server-detail\",\"type\":\"invalid_request_error\",\"param\":\"stream\",\"code\":\"unsupported_value\"}}"),
+                }
+                : Reply("whole answer");
+        }));
+        var deltas = new List<string>();
+
+        var reply = await client.StreamAsync(Prompt, deltas.Add);
+
+        Assert.Equal("whole answer", reply);
+        Assert.Equal(["whole answer"], deltas);
+        Assert.Equal([true, false], streamed);
+    }
+
+    [Theory]
+    [InlineData("{\"error\":{\"message\":\"sensitive-server-detail\",\"param\":\"messages\"}}")]
+    [InlineData("sensitive-server-detail")]
+    [InlineData("")]
+    public async Task OtherBadRequestsWhileStreamingFailWithoutRetryOrBody(string body)
+    {
+        var requests = 0;
+        using var client = new ChatClient(Endpoint, new FakeHandler((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent(body) });
+        }));
+
+        var exception = await Assert.ThrowsAsync<AiException>(() => client.StreamAsync(Prompt, _ => { }));
+
+        Assert.Equal(1, requests);
+        Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
+        Assert.DoesNotContain("sensitive-server-detail", exception.ToString());
+    }
+
     [Theory]
     [InlineData("not json")]
     [InlineData("{}")]

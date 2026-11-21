@@ -25,8 +25,10 @@ internal sealed class DiffRapidSettings
     private const string HistoryPrefix = "diffRapid.localHistory.";
     private const string AiPrefix = "diffRapid.ai.";
 
-    private DiffRapidSettings(CompareOptions compare, FolderCompareOptions folder, bool keepHistory, LocalHistoryOptions history, AiEndpoint? ai, bool redactSecrets)
+    private DiffRapidSettings(CompareOptions compare, FolderCompareOptions folder, bool keepHistory, LocalHistoryOptions history, AiEndpoint? ai, bool redactSecrets,
+        string aiKeyVariable)
     {
+        AiKeyVariable = aiKeyVariable;
         Compare = compare;
         Folder = folder;
         KeepHistory = keepHistory;
@@ -43,6 +45,9 @@ internal sealed class DiffRapidSettings
 
     /// <summary>The AI service the user set up, or null when no endpoint is set and the AI features are off.</summary>
     public AiEndpoint? Ai { get; }
+
+    /// <summary>The name of the environment variable the AI key is read from; empty when none is set up.</summary>
+    public string AiKeyVariable { get; }
 
     /// <summary>Whether passwords, keys and tokens are masked before text is sent to the AI service.</summary>
     public bool RedactSecrets { get; }
@@ -92,17 +97,19 @@ internal sealed class DiffRapidSettings
             MaxEntriesPerFile = Math.Max(1, Value(reader, HistoryPrefix + "versionsPerFile", 100)),
         };
 
+        var keyVariable = Value(reader, AiPrefix + "apiKeyVariable", "OPENAI_API_KEY").Trim();
         return new DiffRapidSettings(
             compare,
             folder,
             Value(reader, HistoryPrefix + "enabled", true),
             history,
-            ReadAi(reader),
-            Value(reader, AiPrefix + "redactSecrets", true));
+            ReadAi(reader, keyVariable),
+            Value(reader, AiPrefix + "redactSecrets", true),
+            keyVariable);
     }
 
     /// <summary>The configured AI service; the key comes from the environment variable named in the settings, never from the settings.</summary>
-    private static AiEndpoint? ReadAi(ISettingsReader? reader)
+    private static AiEndpoint? ReadAi(ISettingsReader? reader, string keyVariable)
     {
         var endpoint = Value(reader, AiPrefix + "endpoint", string.Empty).Trim();
         if (endpoint.Length == 0)
@@ -112,8 +119,7 @@ internal sealed class DiffRapidSettings
 
         var model = Value(reader, AiPrefix + "model", string.Empty).Trim();
         var kind = Enum(reader, AiPrefix + "kind", AiEndpointKind.OpenAi);
-        var keyVariable = Value(reader, AiPrefix + "apiKeyVariable", "OPENAI_API_KEY").Trim();
-        var key = keyVariable.Length == 0 ? null : Environment.GetEnvironmentVariable(keyVariable);
+        var key = keyVariable.Length == 0 ? null : ReadVariable(keyVariable);
         return new AiEndpoint
         {
             BaseUrl = endpoint,
@@ -122,7 +128,26 @@ internal sealed class DiffRapidSettings
             Deployment = kind == AiEndpointKind.AzureOpenAi ? model : null,
             ApiVersion = kind == AiEndpointKind.AzureOpenAi ? Value(reader, AiPrefix + "apiVersion", "2024-10-21").Trim() : null,
             ApiKey = string.IsNullOrEmpty(key) ? null : key,
+            // Estimate: reasoning models can think for minutes before the first word, and an unstreamed answer
+            // (the fallback when a service will not stream a model) arrives only at the end. Stop cancels sooner.
+            Timeout = TimeSpan.FromMinutes(3),
         };
+    }
+
+    // Visual Studio keeps the environment it started with, so a key set afterwards (setx, System Properties)
+    // is only in the registry: look there too, user first, as a newly started process would see it.
+    private static string? ReadVariable(string name)
+    {
+        foreach (var target in new[] { EnvironmentVariableTarget.Process, EnvironmentVariableTarget.User, EnvironmentVariableTarget.Machine })
+        {
+            var value = Environment.GetEnvironmentVariable(name, target);
+            if (!string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     private static T Value<T>(ISettingsReader? reader, string moniker, T fallback)
