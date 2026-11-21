@@ -93,7 +93,7 @@ public sealed class CliTests
         Assert.Equal(["local file", "remote file"], args.Positionals);
     }
 
-    /// <summary>WinMerge-style "/o" options are Windows only; elsewhere the same token is the dash form's path.</summary>
+    /// <summary>Slash-style "/o" options are Windows only; elsewhere the same token is the dash form's path.</summary>
     internal static string Native(string option) => OperatingSystem.IsWindows() || !option.StartsWith('/') ? option : "-" + option[1..];
 
     [Fact]

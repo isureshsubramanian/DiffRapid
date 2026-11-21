@@ -76,7 +76,7 @@ agents can call.
 
 - Tree or flat view, with summary cards for changed, one-sided, renamed or moved, and identical files.
 - Compare by full contents, quick contents, binary, xxHash64, date, date and size, size or existence.
-- Rename and move detection, include and exclude masks, WinMerge-style `.flt` filter files, time tolerance.
+- Rename and move detection, include and exclude masks, `.flt` filter files, time tolerance.
 - Three-way folder compare, with conflicts opening a merge.
 - **Synchronize** with mirror and update profiles, a preview of every operation, and deletes to the Recycle Bin.
 - HTML and CSV reports, optionally with an embedded diff of every changed file.
@@ -186,7 +186,7 @@ diffrapid history list Program.cs
 Each command accepts only its own options: an unknown option, a value given to a switch, or a missing value is an
 error (exit code `2`) that names the option, so a typo such as `--dryrun` never runs the command without it. `--`
 ends the options, for file names that start with `-`. A separate value may not start with `--`; write
-`--left-label=--text` instead. On Windows, WinMerge-style switches such as `/ignorews:1`, `/ignorecase`,
+`--left-label=--text` instead. On Windows, slash-style switches such as `/ignorews:1`, `/ignorecase`,
 `/ignoreblanklines`, `/ignoreeol`, `/o` and `/dl` are accepted; on macOS and Linux an argument starting with `/` is
 always a path (use `-o`, `--ignore-case` and so on). Run `diffrapid --help` for every option.
 

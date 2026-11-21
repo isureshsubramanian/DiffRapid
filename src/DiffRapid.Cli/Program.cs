@@ -8,7 +8,7 @@ using DiffRapid.Hosting;
 namespace DiffRapid.Cli;
 
 /// <summary>
-/// Headless entry point. Exit codes follow the WinMerge /enableexitcode convention:
+/// Headless entry point. Exit codes follow the common diff-tool convention:
 /// 0 = identical (or merged cleanly), 1 = different (or conflicts remain), 2 = error.
 /// </summary>
 internal static partial class Program

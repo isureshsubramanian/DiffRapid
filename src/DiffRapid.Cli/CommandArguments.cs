@@ -190,7 +190,7 @@ internal static partial class Program
             return (name, inlineValue);
         }
 
-        // WinMerge-style /o and /dl options exist for Windows tools; elsewhere "/..." is always a path.
+        // Slash-style /o and /dl options exist for Windows tools; elsewhere "/..." is always a path.
         private static bool IsWindowsSlashOption(string argument) =>
             OperatingSystem.IsWindows() && argument[0] == '/' && !File.Exists(argument) && !Directory.Exists(argument);
 
