@@ -21,7 +21,6 @@ using System.Windows.Threading;
 using DiffRapid.Core.Folders;
 using DiffRapid.Core.Output;
 using DiffRapid.Core.Sync;
-using Microsoft.VisualBasic.FileIO;
 using Microsoft.Win32;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Imaging;
