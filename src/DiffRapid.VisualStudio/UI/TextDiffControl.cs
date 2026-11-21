@@ -1269,7 +1269,11 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
 
             // Still dirty here means the tab was closed without saving (the user answered No). Reload the file so the
             // discarded edits do not stay in the document VS keeps, and come back in the next comparison or editor.
-            if (IsDirty && ErrorHandler.Succeeded(_docData.IsDocDataReloadable(out var reloadable)) && reloadable != 0)
+            // Not when the file is also open in an editor window: those edits are shown there too (they may even
+            // have been made there), and that window asks about them when it closes.
+            if (IsDirty
+                && !VsShellUtilities.IsDocumentOpen(ServiceProvider.GlobalProvider, Path, Guid.Empty, out _, out _, out _)
+                && ErrorHandler.Succeeded(_docData.IsDocDataReloadable(out var reloadable)) && reloadable != 0)
             {
                 var hr = _docData.ReloadDocData(0);
                 if (ErrorHandler.Failed(hr))
