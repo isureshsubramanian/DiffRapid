@@ -1269,9 +1269,12 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
 
             // Still dirty here means the tab was closed without saving (the user answered No). Reload the file so the
             // discarded edits do not stay in the document VS keeps, and come back in the next comparison or editor.
-            // Not when the file is also open in an editor window: those edits are shown there too (they may even
-            // have been made there), and that window asks about them when it closes.
+            // Only when this pane's invisible editor holds the document's last edit lock and no window shows it:
+            // another DiffRapid tab on the same file shares this document (RIEF_ENABLECACHING) through its own
+            // invisible editor, which no window frame reveals, and still shows those edits (they may even have been
+            // made there). An editor window asks about them itself when it closes.
             if (IsDirty
+                && EditLocks() == 1
                 && !VsShellUtilities.IsDocumentOpen(ServiceProvider.GlobalProvider, Path, Guid.Empty, out _, out _, out _)
                 && ErrorHandler.Succeeded(_docData.IsDocDataReloadable(out var reloadable)) && reloadable != 0)
             {
@@ -1287,6 +1290,35 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             {
                 Marshal.ReleaseComObject(invisibleEditor);
             }
+        }
+
+        // The document's edit locks in the running document table, or -1 when it cannot be read (then nothing is reloaded).
+        private int EditLocks()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (Package.GetGlobalService(typeof(SVsRunningDocumentTable)) is not IVsRunningDocumentTable table)
+            {
+                return -1;
+            }
+
+            var hr = table.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock, Path, out _, out _, out var found, out var cookie);
+            if (found != IntPtr.Zero)
+            {
+                Marshal.Release(found);
+            }
+
+            if (hr != VSConstants.S_OK || cookie == 0)
+            {
+                return -1;
+            }
+
+            hr = table.GetDocumentInfo(cookie, out _, out _, out var editLocks, out _, out _, out _, out var docData);
+            if (docData != IntPtr.Zero)
+            {
+                Marshal.Release(docData);
+            }
+
+            return ErrorHandler.Succeeded(hr) ? (int)editLocks : -1;
         }
     }
 }
