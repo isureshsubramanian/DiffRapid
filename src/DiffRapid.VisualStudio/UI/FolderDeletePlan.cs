@@ -82,7 +82,7 @@ internal sealed class FolderDeletePlan
     }
 
     /// <summary>Deletes the entries (see <see cref="RecycleBin.Delete"/>); failures are collected per entry rather than stopping.</summary>
-    public IReadOnlyList<string> Run(string root, CancellationToken cancellationToken)
+    public IReadOnlyList<string> Run(string root, IntPtr owner, bool permanent, CancellationToken cancellationToken)
     {
         var errors = new List<string>();
         foreach (var entry in _entries)
@@ -91,7 +91,7 @@ internal sealed class FolderDeletePlan
             var path = Path.Combine(root, entry.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             try
             {
-                RecycleBin.Delete(path, entry.Kind == FolderItemKind.Folder);
+                RecycleBin.Delete(path, owner, permanent);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
             {
