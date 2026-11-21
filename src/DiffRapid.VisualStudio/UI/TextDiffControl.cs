@@ -29,6 +29,8 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
+using static DiffRapid.VisualStudio.UI.UiText;
 using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
 using DefGuidList = Microsoft.VisualStudio.Editor.DefGuidList;
 using OleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
@@ -218,9 +220,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             read = stream.Read(buffer, 0, buffer.Length);
         }
 
-        // UTF-16 files contain NULs too; only treat as binary when there is no UTF-16/32 byte order mark.
-        var hasUnicodeBom = read >= 2 && ((buffer[0] == 0xFF && buffer[1] == 0xFE) || (buffer[0] == 0xFE && buffer[1] == 0xFF));
-        if (!hasUnicodeBom && Array.IndexOf(buffer, (byte)0, 0, read) >= 0)
+        // The same test that sends a file to the hex comparison, so the two never disagree (UTF-32 big endian included).
+        if (LooksBinary(buffer, read))
         {
             throw new NotSupportedException($"'{Path.GetFileName(path)}' looks like a binary file. Binary compare is not available yet.");
         }
@@ -335,16 +336,6 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         Grid.SetRow(element, row);
         Grid.SetColumn(element, column);
         grid.Children.Add(element);
-    }
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
     }
 
     private void UpdateOptions(CompareOptions options)
@@ -994,11 +985,6 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
                 ? $"{Plural(count, "difference")}  ·  press F8 or Alt+Down to step through them"
                 : $"Difference {_currentDifference + 1} of {count:N0}";
     }
-
-    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
-
-    private static string FormatElapsed(TimeSpan elapsed) =>
-        elapsed.TotalMilliseconds < 1000 ? $"{Math.Max(1, (int)elapsed.TotalMilliseconds)} ms" : $"{elapsed.TotalSeconds:0.0} s";
 
     // Forces the editor to re-query line transforms and repaint adornments.
     private static void Relayout(IWpfTextView view)

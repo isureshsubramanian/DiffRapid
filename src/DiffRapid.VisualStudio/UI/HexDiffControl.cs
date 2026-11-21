@@ -17,6 +17,7 @@ using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
 using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
 using Task = System.Threading.Tasks.Task;
 
@@ -274,16 +275,6 @@ internal sealed class HexDiffControl : DockPanel, IComparisonView, IOleCommandTa
         _leftPane.SizeChanged += (_, _) => UpdateScrollBars();
         _rightPane.SizeChanged += (_, _) => UpdateScrollBars();
         return grid;
-    }
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
     }
 
     /// <summary>Compares the files again in the current mode, then lays out the rows.</summary>

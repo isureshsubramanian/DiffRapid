@@ -21,6 +21,7 @@ using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio.UI;
@@ -515,16 +516,6 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         return table.FindDocument(path) is IVsPersistDocData document
             && document.IsDocDataDirty(out var dirty) == VSConstants.S_OK
             && dirty != 0;
-    }
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
     }
 
     /// <summary>One file of the patch as shown in the list.</summary>

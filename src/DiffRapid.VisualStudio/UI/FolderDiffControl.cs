@@ -29,6 +29,8 @@ using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
+using static DiffRapid.VisualStudio.UI.UiText;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio.UI;
@@ -500,16 +502,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         var template = new DataTemplate { VisualTree = text };
         template.Triggers.Add(newer);
         return template;
-    }
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
     }
 
     private void SetRows(ObservableCollection<FolderRow> rows)
@@ -1374,13 +1366,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         return string.IsNullOrEmpty(parent) ? FolderName(path) : Path.Combine(FolderName(parent!), FolderName(path));
     }
 
-    private static string FolderName(string path)
-    {
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var name = Path.GetFileName(trimmed);
-        return string.IsNullOrEmpty(name) ? trimmed : name;
-    }
-
     // Copies the selected entries to the other side after a confirmation, then compares again.
     private void CopySelection(bool toRight)
     {
@@ -1562,11 +1547,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             StartScan();
         }).FileAndForget("DiffRapid/Folder" + verb);
     }
-
-    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
-
-    private static string FormatElapsed(TimeSpan elapsed) =>
-        elapsed.TotalMilliseconds < 1000 ? $"{Math.Max(1, (int)elapsed.TotalMilliseconds)} ms" : $"{elapsed.TotalSeconds:0.0} s";
 
     /// <summary>What the list showed before a rescan: open folders, selected rows and the top row, by relative path.</summary>
     private sealed class ViewState

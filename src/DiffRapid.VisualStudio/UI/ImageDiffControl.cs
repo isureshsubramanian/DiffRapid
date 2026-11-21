@@ -20,6 +20,7 @@ using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
 using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
 using Rectangle = System.Windows.Shapes.Rectangle;
 using Task = System.Threading.Tasks.Task;
@@ -368,8 +369,6 @@ internal sealed class ImageDiffControl : DockPanel, IComparisonView, IOleCommand
 
         Focus();
     }
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
 
     // ---- Loading and comparing ----
 

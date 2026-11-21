@@ -13,6 +13,7 @@ using DiffRapid.VisualStudio.UI;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using static DiffRapid.VisualStudio.UI.UiText;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio;
@@ -259,10 +260,7 @@ public sealed class DiffRapidPackage : AsyncPackage
             return false;
         }
 
-        var utf16Or32Little = read >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE;
-        var utf16Big = read >= 2 && buffer[0] == 0xFE && buffer[1] == 0xFF;
-        var utf32Big = read >= 4 && buffer[0] == 0x00 && buffer[1] == 0x00 && buffer[2] == 0xFE && buffer[3] == 0xFF;
-        return !utf16Or32Little && !utf16Big && !utf32Big && Array.IndexOf(buffer, (byte)0, 0, read) >= 0;
+        return LooksBinary(buffer, read);
     }
 
     /// <summary>Opens the picture comparison for two image files; decoding and comparing run in the background.</summary>
@@ -376,13 +374,6 @@ public sealed class DiffRapidPackage : AsyncPackage
             () => Task.FromResult<FrameworkElement>(new ApplyPatchControl(this, patchPath, targetPath)),
             Path.GetFileName(patchPath) + " → " + FolderName(targetPath),
             hostsEditors: false);
-
-    private static string FolderName(string path)
-    {
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var name = Path.GetFileName(trimmed);
-        return string.IsNullOrEmpty(name) ? trimmed : name;
-    }
 
     /// <param name="hostsEditors">
     /// True when the view is made of text editors: the window then uses the DiffRapid key binding scope,
