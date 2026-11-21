@@ -8,7 +8,7 @@ namespace DiffRapid.VisualStudio.Commands;
 
 /// <summary>
 /// The copies comparisons open (clipboard, selection, earlier versions, extracted text, plugin output): each is
-/// written to its own folder %TEMP%\DiffRapid\&lt;8 hex digits&gt;, removed when its comparison closes, and swept
+/// written to its own folder %TEMP%\DiffRapid\&lt;8 hex digits&gt;, removed when the last comparison showing it closes, and swept
 /// at start-up when a comparison could not remove it (Visual Studio closed or crashed, the file was locked).
 /// </summary>
 internal static class TemporaryFiles
@@ -32,20 +32,84 @@ internal static class TemporaryFiles
         return path;
     }
 
+    // How many open comparison tabs show a file in each temporary folder: one tab can open another on the same copy
+    // ("Open as text" from a table, a structure comparison), so a folder is deleted only when the last one closes.
+    // Guarded by HoldsLock; a deletion re-checks under the lock, so a folder taken again before it runs is kept.
+    private static readonly Dictionary<string, int> Holds = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object HoldsLock = new();
+
     /// <summary>
-    /// Removes the temporary folders that hold any of <paramref name="paths"/>; paths outside %TEMP%\DiffRapid are
-    /// left alone. Failures (a file still open elsewhere) are ignored: the start-up sweep retries later.
+    /// Takes one hold on the temporary folders of <paramref name="paths"/> for a comparison tab; paths outside
+    /// %TEMP%\DiffRapid are ignored. Each call is matched by one <see cref="Release"/> with the same paths.
     /// </summary>
-    public static void DeleteFoldersOf(IEnumerable<string?> paths)
+    public static void Acquire(IEnumerable<string?> paths)
     {
-        foreach (var path in paths)
+        var folders = FoldersOf(paths);
+        lock (HoldsLock)
         {
-            if (path is not null && FolderOf(path) is { } folder)
+            foreach (var folder in folders)
             {
-                TryDeleteFolder(folder);
+                Holds[folder] = Holds.TryGetValue(folder, out var count) ? count + 1 : 1;
             }
         }
     }
+
+    /// <summary>Drops one hold taken by <see cref="Acquire"/> and deletes, in the background, the folders no tab holds any more.</summary>
+    public static void Release(IEnumerable<string?> paths)
+    {
+        var folders = FoldersOf(paths);
+        lock (HoldsLock)
+        {
+            foreach (var folder in folders)
+            {
+                if (Holds.TryGetValue(folder, out var count))
+                {
+                    if (count > 1)
+                    {
+                        Holds[folder] = count - 1;
+                    }
+                    else
+                    {
+                        Holds.Remove(folder);
+                    }
+                }
+            }
+        }
+
+        DeleteUnheld(folders);
+    }
+
+    /// <summary>
+    /// Deletes, in the background, the temporary folders of <paramref name="paths"/> that no comparison tab holds:
+    /// copies made for one view only, or written for a view that failed to open. Failures (a file still open
+    /// elsewhere) are ignored: the start-up sweep retries later.
+    /// </summary>
+    public static void DeleteUnused(IEnumerable<string?> paths) => DeleteUnheld(FoldersOf(paths));
+
+    private static void DeleteUnheld(List<string> folders)
+    {
+        if (folders.Count == 0)
+        {
+            return;
+        }
+
+        _ = System.Threading.Tasks.Task.Run(() =>
+        {
+            foreach (var folder in folders)
+            {
+                lock (HoldsLock)
+                {
+                    if (!Holds.ContainsKey(folder))
+                    {
+                        TryDeleteFolder(folder);
+                    }
+                }
+            }
+        });
+    }
+
+    private static List<string> FoldersOf(IEnumerable<string?> paths) =>
+        paths.Select(path => path is null ? null : FolderOf(path)).OfType<string>().ToList();
 
     /// <summary>Removes temporary folders older than a day; meant for a background thread at start-up.</summary>
     public static void Sweep(CancellationToken cancellationToken)

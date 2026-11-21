@@ -133,13 +133,23 @@ public sealed class DiffRapidPackage : AsyncPackage
             "Loading the comparison",
             async () =>
             {
-                var left = await Task.Run(() => AsComparableText(leftPath, leftApi));
-                var right = await Task.Run(() => AsComparableText(rightPath, rightApi));
-                var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
-                control.LeftLabel = SourceLabel(leftPath, left);
-                control.RightLabel = SourceLabel(rightPath, right);
-                control.MarkExtracted(left: control.LeftLabel is not null, right: control.RightLabel is not null);
-                return control;
+                string? left = null, right = null;
+                try
+                {
+                    left = await Task.Run(() => AsComparableText(leftPath, leftApi));
+                    right = await Task.Run(() => AsComparableText(rightPath, rightApi));
+                    var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
+                    control.LeftLabel = SourceLabel(leftPath, left);
+                    control.RightLabel = SourceLabel(rightPath, right);
+                    control.MarkExtracted(left: control.LeftLabel is not null, right: control.RightLabel is not null);
+                    return control;
+                }
+                catch
+                {
+                    // The extracted copies belong to this view only; copies another tab holds are kept.
+                    TemporaryFiles.DeleteUnused(new[] { left, right });
+                    throw;
+                }
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
             hostsEditors: true,
@@ -152,15 +162,22 @@ public sealed class DiffRapidPackage : AsyncPackage
     public async Task<IVsWindowFrame> OpenPluginComparisonAsync(string leftPath, byte[] leftContent, string rightPath, byte[] rightContent, PluginOptions plugins)
     {
         // The pipelines run first, in the background, because the tab is named after the steps that actually ran.
-        (string Path, string Steps) left, right;
+        (string Path, string Steps) left = default, right = default;
         try
         {
             left = await Task.Run(() => PreparedCopy(leftPath, leftContent, plugins));
             right = await Task.Run(() => PreparedCopy(rightPath, rightContent, plugins));
         }
-        catch (Exception ex) when (ex is InvalidDataException or PluginException or IOException or ArgumentException)
+        catch (Exception ex)
         {
-            throw new StepFailedException("Running the plugins", ex);
+            // A copy made before the other side failed has no tab to remove it.
+            TemporaryFiles.DeleteUnused(new[] { left.Path, right.Path });
+            if (ex is InvalidDataException or PluginException or IOException or ArgumentException)
+            {
+                throw new StepFailedException("Running the plugins", ex);
+            }
+
+            throw;
         }
 
         var steps = left.Steps == right.Steps ? left.Steps : left.Steps + " / " + right.Steps;
@@ -379,7 +396,7 @@ public sealed class DiffRapidPackage : AsyncPackage
     /// True when the view is made of text editors: the window then uses the DiffRapid key binding scope,
     /// which inherits the text editor's bindings so arrows, Enter, Backspace and the rest reach them.
     /// </param>
-    /// <param name="files">The compared files; those that are temporary copies are removed when the tab closes.</param>
+    /// <param name="files">The compared files; those that are temporary copies are removed when the last tab showing them closes.</param>
     private async Task<IVsWindowFrame> OpenDocumentAsync(string loadStep, Func<Task<FrameworkElement>> createView, string caption, bool hostsEditors, IReadOnlyList<string>? files = null)
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
@@ -387,6 +404,11 @@ public sealed class DiffRapidPackage : AsyncPackage
         var shell = await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell
             ?? throw new InvalidOperationException("The Visual Studio shell service is unavailable.");
 
+        // The hold on the temporary copies among the files is taken before the view loads, so closing another tab on
+        // the same copies meanwhile cannot delete them; the pane releases it when it closes. When the view fails to
+        // load, the copies written for it are removed now rather than by the next day's sweep.
+        files ??= Array.Empty<string>();
+        TemporaryFiles.Acquire(files);
         FrameworkElement view;
         try
         {
@@ -394,10 +416,16 @@ public sealed class DiffRapidPackage : AsyncPackage
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not StepFailedException)
         {
+            TemporaryFiles.Release(files);
             throw new StepFailedException(loadStep, ex);
         }
+        catch
+        {
+            TemporaryFiles.Release(files);
+            throw;
+        }
 
-        var document = new DiffDocumentPane(view, files ?? Array.Empty<string>());
+        var document = new DiffDocumentPane(view, files);
         try
         {
             var frame = Diagnostics.Step("Creating the comparison window", () => CreateDocumentWindow(shell, document, caption, hostsEditors));

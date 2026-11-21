@@ -20,7 +20,8 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData, IOleComm
 {
     private static readonly Guid EditorType = new(PackageIds.DiffWindowGuidString);
 
-    // The compared files; those that are temporary copies have their folders removed when the tab closes.
+    // The compared files. The pane owns one hold on the temporary copies among them (taken by the code that opens
+    // it, see TemporaryFiles.Acquire) and releases it when the tab closes.
     private readonly IReadOnlyList<string> _files;
 
     public DiffDocumentPane(FrameworkElement view, IReadOnlyList<string> files)
@@ -52,8 +53,7 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData, IOleComm
         // The view first: it releases the editors that hold the files open.
         View?.Dispose();
         Content = null;
-        var files = _files;
-        _ = System.Threading.Tasks.Task.Run(() => TemporaryFiles.DeleteFoldersOf(files));
+        TemporaryFiles.Release(_files);
     }
 
     // Content that hosts editors (the file comparison) gets the window's commands first, so typing,

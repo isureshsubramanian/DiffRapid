@@ -206,9 +206,9 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         _left.Close();
         _right.Close();
 
-        // Text extracted for the comparison (a document's text, an assembly's API) lives in temporary copies.
-        var files = new[] { _left.Path, _right.Path };
-        _ = Task.Run(() => DiffRapid.VisualStudio.Commands.TemporaryFiles.DeleteFoldersOf(files));
+        // Text extracted for the comparison (a document's text, an assembly's API) lives in temporary copies made for
+        // this view only. Copies a tab holds (the compared files themselves) are left to that tab to release.
+        DiffRapid.VisualStudio.Commands.TemporaryFiles.DeleteUnused(new[] { _left.Path, _right.Path });
     }
 
     private static void EnsureText(string path)
