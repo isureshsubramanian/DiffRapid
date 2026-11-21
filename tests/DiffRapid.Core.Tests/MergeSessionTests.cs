@@ -117,7 +117,7 @@ public class MergeSessionTests
             var position = 0;
             for (var i = 0; i < 3; i++)
             {
-                var range = session.OutputLineRange(i);
+                var range = session.OutputLineRanges()[i];
                 Assert.Equal(position, range.Start);
                 position += range.Count;
             }
@@ -131,12 +131,12 @@ public class MergeSessionTests
     {
         var session = new MergeSession(Conflict());
         var labels = new ConflictLabels("mine", "ancestor", "theirs");
-        Assert.Equal((1, 7), session.OutputLineRange(1, labels, includeBase: true));
-        Assert.Equal((8, 1), session.OutputLineRange(2, labels, includeBase: true));
+        Assert.Equal((1, 7), session.OutputLineRanges(labels, includeBase: true)[1]);
+        Assert.Equal((8, 1), session.OutputLineRanges(labels, includeBase: true)[2]);
         Assert.Equal(9, TextDocument.Parse(session.ToText(labels, includeBase: true)).LineCount);
         session.SetCustomText(1, Array.Empty<string>());
-        Assert.Equal((1, 0), session.OutputLineRange(1));
-        Assert.Equal((1, 1), session.OutputLineRange(2));
+        Assert.Equal((1, 0), session.OutputLineRanges()[1]);
+        Assert.Equal((1, 1), session.OutputLineRanges()[2]);
     }
     [Fact]
     public void Concatenation_keeps_missing_and_mixed_terminators()
@@ -145,10 +145,10 @@ public class MergeSessionTests
         var session = new MergeSession(result);
         session.Resolve(0, MergeResolution.LeftThenRight);
         Assert.Equal("L\r\nR\r\n", session.ToText());
-        Assert.Equal((0, 2), session.OutputLineRange(0));
+        Assert.Equal((0, 2), session.OutputLineRanges()[0]);
         session.Resolve(0, MergeResolution.RightThenLeft);
         Assert.Equal("R\r\nL", session.ToText());
-        Assert.Equal((0, 2), session.OutputLineRange(0));
+        Assert.Equal((0, 2), session.OutputLineRanges()[0]);
     }
 
     [Fact]
@@ -221,7 +221,6 @@ public class MergeSessionTests
             Assert.Throws<ArgumentOutOfRangeException>(() => session.Resolution(index));
             Assert.Throws<ArgumentOutOfRangeException>(() => session.Resolve(index, MergeResolution.Left));
             Assert.Throws<ArgumentOutOfRangeException>(() => session.SetCustomText(index, Array.Empty<string>()));
-            Assert.Throws<ArgumentOutOfRangeException>(() => session.OutputLineRange(index));
         }
 
         Assert.Throws<InvalidOperationException>(() => session.Resolve(1, MergeResolution.Custom));

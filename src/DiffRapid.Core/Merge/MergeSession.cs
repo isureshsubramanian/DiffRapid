@@ -263,13 +263,6 @@ public sealed class MergeSession
         return sb.ToString();
     }
 
-    /// <summary>Gets the zero-based output line range of one chunk for the supplied rendering options.</summary>
-    public (int Start, int Count) OutputLineRange(int chunk, ConflictLabels? labels = null, bool includeBase = false)
-    {
-        ValidateChunk(chunk);
-        return OutputLineRanges(labels, includeBase)[chunk];
-    }
-
     /// <summary>
     /// Gets the zero-based output line range of every chunk in one pass, so a view can map output lines back
     /// to chunks. A chunk that renders no text has Count 0 and starts where the next chunk starts.
