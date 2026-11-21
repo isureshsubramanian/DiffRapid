@@ -634,6 +634,9 @@ public static class FolderComparer
     /// <summary>A file or folder glob: <c>*</c> and <c>?</c> stay within a path segment, <c>**</c> crosses segments.</summary>
     private sealed class Mask
     {
+        // The same limit as FolderFilter: a glob such as many "**" in a row can backtrack on a long path.
+        private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(1);
+
         private readonly Regex _regex;
         private readonly bool _matchesPath;
 
@@ -649,12 +652,23 @@ public static class FolderComparer
                 .Replace(@"\*", "[^/]*")
                 .Replace(@"\?", "[^/]");
             var options = RegexOptions.CultureInvariant | (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
-            _regex = new Regex(@"\A" + pattern + @"\z", options);
+            _regex = new Regex(@"\A" + pattern + @"\z", options, MatchTimeout);
         }
 
         public static Mask[] CompileAll(IReadOnlyList<string> masks, bool caseSensitive) =>
             masks.Select(m => new Mask(m, caseSensitive)).ToArray();
 
-        public bool Matches(string relativePath, string name) => _regex.IsMatch(_matchesPath ? relativePath : name);
+        /// <summary>Whether the mask matches; one that runs past its time limit counts as not matching, as in FolderFilter.</summary>
+        public bool Matches(string relativePath, string name)
+        {
+            try
+            {
+                return _regex.IsMatch(_matchesPath ? relativePath : name);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return false;
+            }
+        }
     }
 }

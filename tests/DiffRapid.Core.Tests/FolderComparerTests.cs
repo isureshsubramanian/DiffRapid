@@ -249,6 +249,17 @@ public sealed class FolderComparerTests : IDisposable
     }
 
     [Fact]
+    public void A_mask_that_runs_past_its_time_limit_counts_as_not_matching()
+    {
+        var name = new string('a', 200);
+        Write(true, name + "/file", "a");
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = Compare(new() { IncludeFolders = new[] { "*a*a*a*a*a*a*a*a*a*a*b" } });
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(30));
+        Assert.Equal(FolderCompareStatus.Skipped, Item(result, name).Status);
+    }
+
+    [Fact]
     public void Followed_link_cycles_are_reported_instead_of_walked()
     {
         Write(true, "a/file", "a");
