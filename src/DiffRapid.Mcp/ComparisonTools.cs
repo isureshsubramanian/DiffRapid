@@ -486,12 +486,22 @@ internal static class ComparisonTools
             throw new ArgumentException($"'{path}' is a device, not a regular file.");
         }
 
-        if (file.Length > MaxFileBytes)
+        // On Windows a link's own length is 0, which the zero-length rule would read as an empty file, so the size
+        // (and whether there is a file at all) comes from what the link finally points to. Unix reports that anyway.
+        var final = target == file.FullName ? file : new FileInfo(target);
+        if (!final.Exists)
+        {
+            throw new FileNotFoundException($"File does not exist: '{path}'.");
+        }
+
+        if (final.Length > MaxFileBytes)
         {
             throw new ArgumentException($"'{path}' exceeds the 64 MiB per-file limit.");
         }
 
-        return (full, file.Length);
+        // The checked target is what gets opened, not the link, so re-pointing the link after this check is not
+        // followed (folders on the path can still change; this narrows the window rather than closing it).
+        return (target, final.Length);
     }
 
     private static string DirectoryPath(PathGuard paths, JsonElement arguments, string name)
