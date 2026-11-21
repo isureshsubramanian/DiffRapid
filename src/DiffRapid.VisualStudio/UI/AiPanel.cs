@@ -230,10 +230,8 @@ internal sealed class AiPanel : Border
             // Keyless local servers are allowed, so a missing key only shows when the service refuses the request.
             if (ex is AiException { StatusCode: System.Net.HttpStatusCode.Unauthorized } && endpoint.ApiKey is null)
             {
-                _text.Text += settings.AiKeyVariable.Length == 0
-                    ? " No key is sent: name the environment variable that holds it in Tools > Options > DiffRapid > AI."
-                    : $" No key was sent because the environment variable {settings.AiKeyVariable} is not set. "
-                        + $"Set it to your API key (for example: setx {settings.AiKeyVariable} <your key>) and ask again.";
+                // The setting is never repeated: it may hold a key pasted there by mistake.
+                _text.Text += " " + KeyVariable.MissingKeyAdvice(settings.AiKeyVariable);
             }
         }
         finally

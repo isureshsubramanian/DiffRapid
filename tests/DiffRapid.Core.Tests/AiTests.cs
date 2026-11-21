@@ -241,6 +241,37 @@ public sealed class AiTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledClient.CompleteAsync(Prompt, cancellationToken: cancellation.Token));
     }
 
+    [Theory]
+    [InlineData("OPENAI_API_KEY", true)]
+    [InlineData("_my_key2", true)]
+    [InlineData("sk-proj-abc123DEF456ghi789", false)]
+    [InlineData("sk-abc123", false)]
+    [InlineData("MY KEY", false)]
+    [InlineData("2KEY", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void KeyVariableNamesAreToldApartFromPastedKeys(string? setting, bool isName)
+    {
+        Assert.Equal(isName, KeyVariable.IsName(setting));
+    }
+
+    [Theory]
+    [InlineData("sk-proj-abc123DEF456ghi789", "may contain the key itself")]
+    [InlineData("0123456789abcdef0123456789abcdef", "may contain the key itself")]
+    [InlineData("abcdef0123456789abcdef0123456789", "is not set")]
+    [InlineData("MY_SERVICE_KEY", "is not set")]
+    [InlineData("", "name the environment variable")]
+    public void MissingKeyAdviceNeverRepeatsTheSetting(string setting, string expected)
+    {
+        // A key pasted into the setting by mistake, or a hex key that looks like a name, must not be shown.
+        var advice = KeyVariable.MissingKeyAdvice(setting);
+        Assert.Contains(expected, advice);
+        if (setting.Length > 0)
+        {
+            Assert.DoesNotContain(setting, advice);
+        }
+    }
+
     [Fact]
     public async Task StreamingReportsReasoningWithoutAddingItToTheReply()
     {
