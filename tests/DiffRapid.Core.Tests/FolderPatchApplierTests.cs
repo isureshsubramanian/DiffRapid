@@ -119,6 +119,35 @@ public sealed class FolderPatchApplierTests : IDisposable
     }
 
     [Fact]
+    public void RenameOntoAnExistingFileFails()
+    {
+        File.WriteAllText(At("a.txt"), "one\ntwo\nthree\n");
+        File.WriteAllText(At("b.txt"), "unrelated\n");
+        var patch = Parse("diff --git a/a.txt b/b.txt\n--- a/a.txt\n+++ b/b.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n");
+        var file = Assert.Single(FolderPatchApplier.Plan(patch, _root).Files);
+        Assert.Equal(FilePatchStatus.Failed, file.Status);
+        Assert.Equal("The file to rename to already exists.", file.Message);
+        Assert.False(FolderPatchApplier.ApplyFile(file).Written);
+        Assert.Equal("unrelated\n", File.ReadAllText(At("b.txt")));
+        Assert.True(File.Exists(At("a.txt")));
+    }
+
+    [Fact]
+    public void RenameTargetCreatedSincePreviewIsNotOverwritten()
+    {
+        File.WriteAllText(At("a.txt"), "# Samples\n");
+        var patch = Parse("diff --git a/a.txt b/b.txt\nsimilarity index 100%\nrename from a.txt\nrename to b.txt\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        Assert.Equal(FilePatchStatus.Ready, Assert.Single(plan.Files).Status);
+        File.WriteAllText(At("b.txt"), "unrelated\n");
+        var result = Assert.Single(FolderPatchApplier.Apply(plan));
+        Assert.False(result.Written);
+        Assert.Equal("The file to rename to was created since the preview.", result.Error);
+        Assert.Equal("unrelated\n", File.ReadAllText(At("b.txt")));
+        Assert.True(File.Exists(At("a.txt")));
+    }
+
+    [Fact]
     public void PureRenameIsPlannedAppliedAndThenAlreadyApplied()
     {
         Directory.CreateDirectory(At("docs"));

@@ -289,6 +289,7 @@ public static class FolderPatchApplier
         var result = PatchApplier.Apply(decoded.Text, patch, options, cancellationToken);
         var allAlreadyApplied = result.Outcomes.Count > 0 && result.Outcomes.All(o => o.Status == HunkStatus.AlreadyApplied);
         var problem = FileStateProblem(action, exists, decoded.Text, result, allAlreadyApplied);
+        problem ??= action == FilePatchAction.Rename && TargetTaken(source!, target!) ? "The file to rename to already exists." : null;
         problem ??= FirstFailure(patch, result, options);
 
         var status = problem is not null ? FilePatchStatus.Failed
@@ -333,6 +334,28 @@ public static class FolderPatchApplier
             default:
                 return exists ? null : "The file does not exist.";
         }
+    }
+
+    /// <summary>
+    /// Whether a rename would overwrite another file (git apply refuses with "already exists"). A target that differs
+    /// from the source only in case is the source itself on a case-insensitive file system, so then only an entry
+    /// spelled exactly like the target counts.
+    /// </summary>
+    private static bool TargetTaken(string source, string target)
+    {
+        if (!File.Exists(target) && !Directory.Exists(target))
+        {
+            return false;
+        }
+
+        if (!string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var name = Path.GetFileName(target);
+        return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(target)!)
+            .Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal));
     }
 
     private static string? FirstFailure(FilePatch patch, PatchApplyResult result, PatchApplyOptions options)
@@ -389,6 +412,11 @@ public static class FolderPatchApplier
     /// <summary>Returns why the disk no longer matches the preview, or null when it still does.</summary>
     private static string? StaleReason(FilePatchPlan file)
     {
+        if (file.Action == FilePatchAction.Rename && TargetTaken(file.SourcePath!, file.TargetPath!))
+        {
+            return "The file to rename to was created since the preview.";
+        }
+
         if (file.SourcePath is null)
         {
             return file.TargetPath is not null && File.Exists(file.TargetPath) ? "The file was created since the preview." : null;
