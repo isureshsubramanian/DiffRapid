@@ -41,7 +41,7 @@ internal sealed class ZipEntriesUnpacker : IUnpacker
         List<UnpackedEntry> entries;
         try
         {
-            using var archive = new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: true);
+            using var archive = ZipReadBudget.Open(input);
             var budget = new ZipReadBudget(MaxEntryLength, MaxTotalLength);
             entries = ZipReadBudget.Entries(archive)
                 .OrderBy(entry => entry.FullName, StringComparer.Ordinal)
