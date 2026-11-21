@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Design;
 using System.Windows;
+using DiffRapid.VisualStudio.Commands;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
@@ -18,10 +20,14 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData, IOleComm
 {
     private static readonly Guid EditorType = new(PackageIds.DiffWindowGuidString);
 
-    public DiffDocumentPane(FrameworkElement view)
+    // The compared files; those that are temporary copies have their folders removed when the tab closes.
+    private readonly IReadOnlyList<string> _files;
+
+    public DiffDocumentPane(FrameworkElement view, IReadOnlyList<string> files)
         : base(null)
     {
         Content = view;
+        _files = files;
     }
 
     private IComparisonView? View => Content as IComparisonView;
@@ -38,8 +44,16 @@ internal sealed class DiffDocumentPane : WindowPane, IVsPersistDocData, IOleComm
 
     private void DisposeContent()
     {
+        if (Content is null)
+        {
+            return;
+        }
+
+        // The view first: it releases the editors that hold the files open.
         View?.Dispose();
         Content = null;
+        var files = _files;
+        _ = System.Threading.Tasks.Task.Run(() => TemporaryFiles.DeleteFoldersOf(files));
     }
 
     // Content that hosts editors (the file comparison) gets the window's commands first, so typing,

@@ -115,16 +115,11 @@ internal sealed class EditorSelection
     public static string WriteTemporary(string text, string name, string extension) =>
         WriteTemporary(new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(text), name, extension);
 
-    /// <summary>Writes bytes as they are (keeping their encoding) to a new temporary folder and returns the path.</summary>
-    public static string WriteTemporary(byte[] content, string name, string extension)
-    {
-        var folder = Path.Combine(Path.GetTempPath(), "DiffRapid", Guid.NewGuid().ToString("N").Substring(0, 8));
-        Directory.CreateDirectory(folder);
-        var safeName = string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        var path = Path.Combine(folder, safeName + (safeName.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ? string.Empty : extension));
-        File.WriteAllBytes(path, content);
-        return path;
-    }
+    /// <summary>
+    /// Writes bytes as they are (keeping their encoding) to a new temporary folder and returns the path; the folder
+    /// is removed when the comparison that opens it closes (see <see cref="TemporaryFiles"/>).
+    /// </summary>
+    public static string WriteTemporary(byte[] content, string name, string extension) => TemporaryFiles.Write(content, name, extension);
 
     private static IWpfTextView? ActiveView()
     {

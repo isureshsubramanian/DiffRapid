@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -36,6 +37,9 @@ public sealed class DiffRapidPackage : AsyncPackage
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         await CompareCommands.InitializeAsync(this);
         await LocalHistoryRecorder.StartAsync(this);
+
+        // Temporary copies left by comparisons of earlier sessions (closed by a crash, or still locked then).
+        _ = Task.Run(() => TemporaryFiles.Sweep(DisposalToken), DisposalToken);
     }
 
     protected override void Dispose(bool disposing)
@@ -67,7 +71,8 @@ public sealed class DiffRapidPackage : AsyncPackage
                 "Loading the table comparison",
                 () => Task.FromResult<FrameworkElement>(new TableDiffControl(this, leftPath, rightPath)),
                 Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-                hostsEditors: false);
+                hostsEditors: false,
+                files: new[] { leftPath, rightPath });
             return;
         }
 
@@ -77,7 +82,8 @@ public sealed class DiffRapidPackage : AsyncPackage
                 "Loading the hex comparison",
                 () => Task.FromResult<FrameworkElement>(new HexDiffControl(this, leftPath, rightPath)),
                 Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-                hostsEditors: false);
+                hostsEditors: false,
+                files: new[] { leftPath, rightPath });
             return;
         }
 
@@ -111,7 +117,8 @@ public sealed class DiffRapidPackage : AsyncPackage
                 return control;
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-            hostsEditors: true);
+            hostsEditors: true,
+            files: new[] { leftPath, rightPath });
 
     /// <summary>
     /// Runs an unpacker and prediffer pipeline on two files' content and opens the resulting texts side by side,
@@ -143,7 +150,8 @@ public sealed class DiffRapidPackage : AsyncPackage
                 return control;
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath) + " (" + steps + ")",
-            hostsEditors: true);
+            hostsEditors: true,
+            files: new[] { left.Path, right.Path });
     }
 
     /// <summary>
@@ -239,7 +247,8 @@ public sealed class DiffRapidPackage : AsyncPackage
             "Loading the image comparison",
             () => Task.FromResult<FrameworkElement>(new ImageDiffControl(this, leftPath, rightPath)),
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-            hostsEditors: false);
+            hostsEditors: false,
+            files: new[] { leftPath, rightPath });
 
     /// <summary>True for the image formats the image comparison decodes (WebP only where Windows has the codec).</summary>
     private static bool IsImageFile(string path) =>
@@ -355,7 +364,8 @@ public sealed class DiffRapidPackage : AsyncPackage
     /// True when the view is made of text editors: the window then uses the DiffRapid key binding scope,
     /// which inherits the text editor's bindings so arrows, Enter, Backspace and the rest reach them.
     /// </param>
-    private async Task<IVsWindowFrame> OpenDocumentAsync(string loadStep, Func<Task<FrameworkElement>> createView, string caption, bool hostsEditors)
+    /// <param name="files">The compared files; those that are temporary copies are removed when the tab closes.</param>
+    private async Task<IVsWindowFrame> OpenDocumentAsync(string loadStep, Func<Task<FrameworkElement>> createView, string caption, bool hostsEditors, IReadOnlyList<string>? files = null)
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
 
@@ -372,7 +382,7 @@ public sealed class DiffRapidPackage : AsyncPackage
             throw new StepFailedException(loadStep, ex);
         }
 
-        var document = new DiffDocumentPane(view);
+        var document = new DiffDocumentPane(view, files ?? Array.Empty<string>());
         try
         {
             var frame = Diagnostics.Step("Creating the comparison window", () => CreateDocumentWindow(shell, document, caption, hostsEditors));
