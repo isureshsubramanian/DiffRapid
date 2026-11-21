@@ -31,24 +31,8 @@ public static class ComparisonServer
                 return ValueTask.FromResult(new ListToolsResult { Tools = Tools.ToList() });
             },
             CallToolHandler = async (request, cancellationToken) =>
-            {
-                var paths = settings.Paths;
-
-                // The server ships --roots-from-client, off by default. The MCP specification deprecates roots
-                // (version 2026-07-28, SEP-2577), so the SDK marks these members obsolete; the opt-in stays until the
-                // SDK removes them.
-#pragma warning disable MCP9005
-                if (settings.RootsFromClient && request.Server.ClientCapabilities?.Roots is not null)
-                {
-                    // Asked on every call, because a client may change its roots during a session.
-                    var listed = await request.Server.RequestRootsAsync(new ListRootsRequestParams(), cancellationToken).ConfigureAwait(false);
-                    paths = paths.WithClientRoots(listed.Roots.Select(root => root.Uri));
-                }
-#pragma warning restore MCP9005
-
-                return await Task.Run(() => CallTool(request.Params?.Name ?? "", JsonSerializer.SerializeToElement(request.Params?.Arguments), paths, cancellationToken),
-                    cancellationToken).ConfigureAwait(false);
-            },
+                await Task.Run(() => CallTool(request.Params?.Name ?? "", JsonSerializer.SerializeToElement(request.Params?.Arguments), settings.Paths, cancellationToken),
+                    cancellationToken).ConfigureAwait(false),
         },
     };
 

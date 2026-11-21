@@ -34,7 +34,7 @@ public sealed class McpServerTests : IDisposable
         using var clientInput = new AnonymousPipeClientStream(PipeDirection.In, fromServer.ClientSafePipeHandle);
         using var writer = new StreamWriter(toServer, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(clientInput);
-        await using var server = McpServer.Create(new StreamServerTransport(serverInput, fromServer), ComparisonServer.CreateOptions(new ServerSettings(Paths, false, false)));
+        await using var server = McpServer.Create(new StreamServerTransport(serverInput, fromServer), ComparisonServer.CreateOptions(new ServerSettings(Paths, false)));
         var running = server.RunAsync(cancellation.Token);
         try
         {
@@ -560,67 +560,15 @@ public sealed class McpServerTests : IDisposable
         var other = DirectoryPath("other");
         var settings = ServerSettings.Parse([], work);
         Assert.True(settings.UsesWorkingDirectory);
-        Assert.False(settings.RootsFromClient);
         Assert.Equal([work], settings.Paths.Roots);
-        settings = ServerSettings.Parse(["--root", other, "--root=" + work, "--roots-from-client"], _root);
+        settings = ServerSettings.Parse(["--root", other, "--root=" + work], _root);
         Assert.False(settings.UsesWorkingDirectory);
-        Assert.True(settings.RootsFromClient);
         Assert.Equal([other, work], settings.Paths.Roots);
         Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--root"], work));
         Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--root", Path.Combine(_root, "missing")], work));
         Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--root", "//host/share"], work));
         Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--rot", work], work));
-        var withClient = new PathGuard([work]).WithClientRoots([new Uri(other).AbsoluteUri, "https://example.com/x", "file://host/share/x", new Uri(Path.Combine(_root, "missing")).AbsoluteUri]);
-        Assert.Equal([work, other], withClient.Roots);
-    }
-
-    [Fact]
-    public async Task ClientRootsAreUsedOnlyWhenEnabled()
-    {
-        var work = DirectoryPath("work");
-        var client = DirectoryPath("client");
-        var file = File("client/a.txt", "a\n");
-        Assert.True(await CallOverStreams(enabled: false));
-        Assert.False(await CallOverStreams(enabled: true));
-
-        async Task<bool> CallOverStreams(bool enabled)
-        {
-            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            using var toServer = new AnonymousPipeServerStream(PipeDirection.Out);
-            using var serverInput = new AnonymousPipeClientStream(PipeDirection.In, toServer.ClientSafePipeHandle);
-            using var fromServer = new AnonymousPipeServerStream(PipeDirection.Out);
-            using var clientInput = new AnonymousPipeClientStream(PipeDirection.In, fromServer.ClientSafePipeHandle);
-            var settings = new ServerSettings(new PathGuard([work]), enabled, false);
-            await using var server = McpServer.Create(new StreamServerTransport(serverInput, fromServer), ComparisonServer.CreateOptions(settings));
-            var running = server.RunAsync(cancellation.Token);
-#pragma warning disable MCP9005 // the stub client lists roots, a feature the specification deprecates (SEP-2577)
-            var options = new McpClientOptions
-            {
-                Capabilities = new ClientCapabilities { Roots = new RootsCapability() },
-                Handlers = new McpClientHandlers
-                {
-                    RootsHandler = (_, _) => ValueTask.FromResult(new ListRootsResult { Roots = [new Root { Uri = new Uri(client).AbsoluteUri }] }),
-                },
-            };
-#pragma warning restore MCP9005
-            try
-            {
-                await using var mcp = await McpClient.CreateAsync(new StreamClientTransport(toServer, clientInput), options, cancellationToken: cancellation.Token);
-                var result = await mcp.CallToolAsync("compare_files", new Dictionary<string, object?> { ["left"] = file, ["right"] = file }, cancellationToken: cancellation.Token);
-                return result.IsError == true;
-            }
-            finally
-            {
-                cancellation.Cancel();
-                try
-                {
-                    await running;
-                }
-                catch (OperationCanceledException)
-                {
-                }
-            }
-        }
+        Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--roots-from-client"], work));
     }
 
     [Fact]

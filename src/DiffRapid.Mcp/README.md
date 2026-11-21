@@ -126,16 +126,15 @@ operation boundaries. There is no network transport.
 The server reads only files inside its allowed root folders:
 
 ```text
-diffrapid-mcp [--root <folder>]... [--roots-from-client]
+diffrapid-mcp [--root <folder>]...
 ```
 
 - Each `--root` (repeatable, also `--root=<folder>`) must be an existing local folder. Without `--root`, the
   directory the client starts the server in is the only root, and the server says so on stderr.
   **This changes existing registrations** (`"args": []`): they now read only below that directory. Add
   `--root` for anything else.
-- `--roots-from-client` (off by default) also accepts the folders the client lists through MCP `roots/list`,
-  checked the same way; entries that are not existing local folders are ignored. The MCP specification
-  deprecates roots (2026-07-28), so this option may go when the SDK drops them.
+- Folders a client lists through MCP `roots/list` are not used: the boundary is set by whoever starts the
+  server, not by the client the agent drives.
 - Relative tool paths resolve against the first root. A path is allowed when, made absolute, it is a root or
   lies below one (case-insensitive on Windows and macOS, case-sensitive on Linux), and every link on the way
   below the root points inside a root. Folder tools do not follow links.

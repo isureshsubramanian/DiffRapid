@@ -34,37 +34,10 @@ public sealed class PathGuard
         }
     }
 
-    private PathGuard(IReadOnlyList<Root> roots) => _roots = roots;
 
     /// <summary>The roots as given, made absolute; the first one resolves relative tool paths.</summary>
     public IReadOnlyList<string> Roots => _roots.Select(root => root.Given).ToList();
 
-    /// <summary>
-    /// Adds the client's <c>roots/list</c> folders (file URIs), validated like <c>--root</c>. Invalid or non-local
-    /// entries are skipped.
-    /// </summary>
-    public PathGuard WithClientRoots(IEnumerable<string> uris)
-    {
-        var roots = _roots.ToList();
-        foreach (var value in uris)
-        {
-            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !uri.IsFile || uri.IsUnc)
-            {
-                continue;
-            }
-
-            try
-            {
-                roots.Add(CreateRoot(uri.LocalPath));
-            }
-            catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
-            {
-                // A client root that cannot be used grants nothing.
-            }
-        }
-
-        return new PathGuard(roots.AsReadOnly());
-    }
 
     /// <summary>
     /// Returns the absolute form of <paramref name="path"/> when it lies inside a root, after resolving every link
