@@ -25,17 +25,27 @@ public sealed class ExecutablePathTests : IDisposable
     [Fact]
     public void RelativePathEntriesAndTheCurrentFolderAreSkipped()
     {
+        // The planted folder sits below the current folder, so its PATH entry is truly relative: from a temp folder on
+        // another drive (as on CI, C: temp and D: checkout) GetRelativePath gives back an absolute path.
         var trusted = Path.Combine(_folder, "trusted");
-        var planted = Path.Combine(_folder, "planted");
+        var relative = "diffrapid-planted-" + Guid.NewGuid().ToString("N");
+        var planted = Path.Combine(Environment.CurrentDirectory, relative);
         Directory.CreateDirectory(trusted);
         Directory.CreateDirectory(planted);
-        WriteProgram(Path.Combine(planted, FileName("tool")));
-        WriteProgram(Path.Combine(trusted, FileName("tool")));
-        var relative = Path.GetRelativePath(Environment.CurrentDirectory, planted);
-        var path = string.Join(Path.PathSeparator, "", ".", relative, trusted);
+        try
+        {
+            WriteProgram(Path.Combine(planted, FileName("tool")));
+            WriteProgram(Path.Combine(trusted, FileName("tool")));
+            Assert.False(Path.IsPathRooted(relative));
+            var path = string.Join(Path.PathSeparator, "", ".", relative, trusted);
 
-        Assert.Equal(Path.Combine(trusted, FileName("tool")), ExecutablePath.Search("tool", path));
-        Assert.Null(ExecutablePath.Search("tool", string.Join(Path.PathSeparator, ".", relative)));
+            Assert.Equal(Path.Combine(trusted, FileName("tool")), ExecutablePath.Search("tool", path));
+            Assert.Null(ExecutablePath.Search("tool", string.Join(Path.PathSeparator, ".", relative)));
+        }
+        finally
+        {
+            Directory.Delete(planted, recursive: true);
+        }
     }
 
     [Fact]

@@ -216,7 +216,11 @@ public sealed class FolderPatchApplierTests : IDisposable
         Assert.Equal("one\nTWO\n", File.ReadAllText(file1));
         Assert.Equal("a.txt", Path.GetFileName(file1));
 
-        // A case change in both the folder and the file name keeps the file name's new case.
+        // A case change in both the folder and the file name keeps the file name's new case. It starts again from
+        // Docs/a.txt: a case-sensitive file system has already moved the file to docs/a.txt above.
+        Directory.Delete(_root, recursive: true);
+        Directory.CreateDirectory(At("Docs"));
+        File.WriteAllText(At(Path.Combine("Docs", "a.txt")), "one\nTWO\n");
         var both = Parse("diff --git a/Docs/a.txt b/docs/A.txt\nrename from Docs/a.txt\nrename to docs/A.txt\n");
         Assert.True(Assert.Single(FolderPatchApplier.Apply(FolderPatchApplier.Plan(both, _root))).Written);
         Assert.Equal("A.txt", Path.GetFileName(Assert.Single(Directory.GetFiles(_root, "*", SearchOption.AllDirectories))));
