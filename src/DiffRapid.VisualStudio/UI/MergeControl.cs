@@ -25,6 +25,8 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Utilities;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
+using static DiffRapid.VisualStudio.UI.UiText;
 using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
 using DefGuidList = Microsoft.VisualStudio.Editor.DefGuidList;
 using OleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
@@ -323,14 +325,6 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
     }
 
     private static TextBlock Label(string text) => new() { Text = text, VerticalAlignment = VerticalAlignment.Center };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(new CrispImage { Moniker = moniker, Width = 16, Height = 16 });
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
-    }
 
     private static int LinePosition(ITextSnapshot snapshot, int line) =>
         line < snapshot.LineCount ? snapshot.GetLineFromLineNumber(line).Start.Position : snapshot.Length;
@@ -789,7 +783,8 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
             var bytes = new byte[preamble.Length + body.Length];
             Buffer.BlockCopy(preamble, 0, bytes, 0, preamble.Length);
             Buffer.BlockCopy(body, 0, bytes, preamble.Length, body.Length);
-            File.WriteAllBytes(_resultPath, bytes);
+            // Through a temporary file: the result can be one of the merged files, which a failed write must not truncate.
+            DiffRapid.Core.IO.AtomicFile.WriteAllBytes(_resultPath, bytes);
             _savedText = text;
             _resultHeader.SetDirty(false);
             _position.Text = $"Saved {Path.GetFileName(_resultPath)}";
@@ -855,8 +850,6 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
 
         return null;
     }
-
-    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
 
     // Forces the editor to re-query line transforms and repaint adornments.
     private static void Relayout(IWpfTextView view)

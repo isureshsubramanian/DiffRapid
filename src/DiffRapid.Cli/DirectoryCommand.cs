@@ -77,7 +77,7 @@ internal static partial class Program
                 {
                     if (item.Left.Exists)
                     {
-                        Console.Out.WriteLine(RenameLine(item));
+                        Console.Out.WriteLine(TerminalText.Escape(RenameLine(item)));
                     }
 
                     continue;
@@ -90,12 +90,12 @@ internal static partial class Program
                     FolderCompareStatus.Different => "M",
                     _ => "!",
                 };
-                Console.Out.WriteLine($"{marker}  {item.RelativePath}" + (item.Error is null ? "" : $": {item.Error}"));
+                Console.Out.WriteLine(TerminalText.Escape($"{marker}  {item.RelativePath}" + (item.Error is null ? "" : $": {item.Error}")));
             }
 
             if (result.Root.Error is not null)
             {
-                Console.Error.WriteLine(result.Root.Error);
+                Console.Error.WriteLine(TerminalText.Escape(result.Root.Error));
             }
 
             Console.Out.WriteLine(string.Join(", ", result.Counts.Select(c => $"{c.Key}: {c.Value}")));
@@ -103,7 +103,6 @@ internal static partial class Program
 
         if (reportPath is not null)
         {
-            using var writer = new StreamWriter(reportPath, false, new UTF8Encoding(reportFormat == "csv"));
             var options = new FolderReportOptions
             {
                 LeftRoot = args.Positionals[0],
@@ -112,14 +111,18 @@ internal static partial class Program
                 MethodLabel = method.ToString(),
                 IncludeIdentical = args.Has("include-identical"),
             };
-            if (reportFormat == "csv")
+            // CSV keeps a byte order mark so spreadsheet apps read it as UTF-8.
+            WriteText(reportPath, writer =>
             {
-                FolderReportWriter.WriteCsv(result, options, writer);
-            }
-            else
-            {
-                WriteFolderHtml(args, result, options, writer);
-            }
+                if (reportFormat == "csv")
+                {
+                    FolderReportWriter.WriteCsv(result, options, writer);
+                }
+                else
+                {
+                    WriteFolderHtml(args, result, options, writer);
+                }
+            }, new UTF8Encoding(reportFormat == "csv"));
         }
 
         return result.Root.Status == FolderCompareStatus.Error ? ExitError :

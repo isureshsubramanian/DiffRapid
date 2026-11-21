@@ -8,6 +8,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <!-- One Ctrl+C handler for both executables; the file documents the link. -->
+    <Compile Include="..\DiffRapid.Cli\ConsoleCancellation.cs" Link="ConsoleCancellation.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="ModelContextProtocol" />
     <ProjectReference Include="..\DiffRapid.Core\DiffRapid.Core.csproj" />
     <ProjectReference Include="..\DiffRapid.Documents\DiffRapid.Documents.csproj" />

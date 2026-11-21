@@ -48,6 +48,21 @@ public sealed class PatchTests
     }
 
     [Theory]
+    [InlineData(3, "1\nX\n3\n\n\n4\n5\nY\n")]
+    [InlineData(1, "1\nX\n3\n4\n5\nY\n")]
+    public void IgnoredBlankLinesInsideAWindowKeepTheSidesInStep(int context, string expected)
+    {
+        const string left = "1\n2\n3\n4\n5\n6\n";
+        const string right = "1\nX\n3\n\n\n4\n5\nY\n";
+        var diff = TextComparer.Compare(TextDocument.Parse(left), TextDocument.Parse(right), CompareOptions.Default with { IgnoreBlankLines = true });
+        Assert.Contains(diff.Hunks, h => h.Significance == DiffSignificance.Ignored);
+        var file = Assert.Single(Patch.Parse(UnifiedDiffWriter.Write(diff, "a/file", "b/file", context)).Files);
+        var applied = PatchApplier.Apply(left, file);
+        Assert.True(applied.Succeeded);
+        Assert.Equal(expected, applied.Text);
+    }
+
+    [Theory]
     [MemberData(nameof(TextPairs))]
     public void TextPairsRoundTripInBothDirections(string left, string right, int context)
     {
@@ -137,6 +152,7 @@ public sealed class PatchTests
     [InlineData("--- a/x\n+++ b/x\n@@ broken\n", "Patch line 3: invalid hunk header")]
     [InlineData("--- a/x\n@@ -1 +1 @@\n", "Patch line 2: expected +++ file header")]
     [InlineData("--- a/x\n", "Patch line 2: expected +++ file header")]
+    [InlineData("--- \"a/x\\000y\"\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n", "Patch line 1: invalid quoted patch path")]
     public void MalformedInputNamesLineAndReason(string text, string message)
     {
         Assert.Equal(message, Assert.Throws<FormatException>(() => Patch.Parse(text)).Message);

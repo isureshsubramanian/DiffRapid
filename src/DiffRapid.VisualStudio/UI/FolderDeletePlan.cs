@@ -4,13 +4,13 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using DiffRapid.Core.Folders;
-using Microsoft.VisualBasic.FileIO;
 
 namespace DiffRapid.VisualStudio.UI;
 
 /// <summary>
 /// Selected folder comparison entries to remove from one side. A selected folder goes with everything in
-/// it; entries inside a selected folder are not listed again. Items go to the Recycle Bin, not away for good.
+/// it; entries inside a selected folder are not listed again. Items go to the Recycle Bin where the drive has one
+/// (see <see cref="RecycleBin"/>).
 /// </summary>
 internal sealed class FolderDeletePlan
 {
@@ -29,6 +29,7 @@ internal sealed class FolderDeletePlan
     public static FolderDeletePlan Create(IEnumerable<FolderCompareItem> selected, bool fromLeft)
     {
         var plan = new FolderDeletePlan();
+        var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var candidates = selected
             .Where(i => i.RelativePath.Length > 0 && (fromLeft ? i.Left : i.Right).Exists)
             .OrderBy(i => i.RelativePath, StringComparer.OrdinalIgnoreCase)
@@ -36,14 +37,32 @@ internal sealed class FolderDeletePlan
 
         foreach (var item in candidates)
         {
-            // Sorted, so a containing folder is always seen before what is inside it.
-            if (!plan._entries.Any(e => e.Kind == FolderItemKind.Folder && item.RelativePath.StartsWith(e.RelativePath + "/", StringComparison.OrdinalIgnoreCase)))
+            // Sorted, so a containing folder is always seen before what is inside it; only the item's own parent
+            // folders are looked up, rather than every entry so far.
+            if (!InsideAny(item.RelativePath, folders))
             {
                 plan._entries.Add(item);
+                if (item.Kind == FolderItemKind.Folder)
+                {
+                    folders.Add(item.RelativePath);
+                }
             }
         }
 
         return plan;
+    }
+
+    private static bool InsideAny(string relativePath, HashSet<string> folders)
+    {
+        for (var slash = relativePath.IndexOf('/'); slash > 0; slash = relativePath.IndexOf('/', slash + 1))
+        {
+            if (folders.Contains(relativePath.Substring(0, slash)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The side every entry is on, when each exists on one side only; null for a mixed selection.</summary>
@@ -62,8 +81,8 @@ internal sealed class FolderDeletePlan
         return selected.All(i => i.Right.Exists && !i.Left.Exists) ? false : null;
     }
 
-    /// <summary>Moves the entries to the Recycle Bin; failures are collected per entry rather than stopping.</summary>
-    public IReadOnlyList<string> Run(string root, CancellationToken cancellationToken)
+    /// <summary>Deletes the entries (see <see cref="RecycleBin.Delete"/>); failures are collected per entry rather than stopping.</summary>
+    public IReadOnlyList<string> Run(string root, IntPtr owner, bool permanent, CancellationToken cancellationToken)
     {
         var errors = new List<string>();
         foreach (var entry in _entries)
@@ -72,14 +91,7 @@ internal sealed class FolderDeletePlan
             var path = Path.Combine(root, entry.RelativePath.Replace('/', Path.DirectorySeparatorChar));
             try
             {
-                if (entry.Kind == FolderItemKind.Folder)
-                {
-                    FileSystem.DeleteDirectory(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
-                }
-                else
-                {
-                    FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
-                }
+                RecycleBin.Delete(path, owner, permanent);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
             {

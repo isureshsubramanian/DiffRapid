@@ -16,6 +16,7 @@ using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio.UI;
@@ -381,16 +382,6 @@ internal sealed class ThreeWayFolderControl : DockPanel, IComparisonView
         basePath is not null && changed is not null ? new OpenTarget(basePath, null, changed, Merge: false)
         : (changed ?? basePath) is { } only ? new OpenTarget(only, null, null, Merge: false)
         : null;
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
-    }
 
     /// <summary>The files to open: Left and Right compared (or Left alone), or a merge when <see cref="Merge"/> is set.</summary>
     private sealed class OpenTarget

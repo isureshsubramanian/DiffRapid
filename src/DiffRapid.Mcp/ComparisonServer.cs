@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -10,11 +11,17 @@ public static class ComparisonServer
     private static readonly IReadOnlyList<Tool> Tools = CreateTools();
     private static readonly JsonSerializerOptions ReportOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    /// <summary>The build's informational version without the "+commit" source suffix.</summary>
+    internal static string ServerVersion { get; } =
+        typeof(ComparisonServer).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
+        ?? typeof(ComparisonServer).Assembly.GetName().Version?.ToString(3)
+        ?? "0.0.0";
+
     /// <summary>Creates the protocol handlers, also usable with an in-memory stream transport.</summary>
-    public static McpServerOptions CreateOptions() => new()
+    public static McpServerOptions CreateOptions(ServerSettings settings) => new()
     {
-        ServerInfo = new Implementation { Name = "diffrapid-mcp", Version = "1.0.0" },
-        ServerInstructions = "Read-only comparisons. Paths are local to the server. Line numbers are one-based. Check truncated before treating output as complete.",
+        ServerInfo = new Implementation { Name = "diffrapid-mcp", Version = ServerVersion },
+        ServerInstructions = "Read-only comparisons. Paths are local to the server and must lie inside its allowed root folders; relative paths resolve against the first root. Line numbers are one-based. Check truncated before treating output as complete.",
         Capabilities = new ServerCapabilities { Tools = new ToolsCapability() },
         Handlers = new McpServerHandlers
         {
@@ -23,13 +30,14 @@ public static class ComparisonServer
                 cancellationToken.ThrowIfCancellationRequested();
                 return ValueTask.FromResult(new ListToolsResult { Tools = Tools.ToList() });
             },
-            CallToolHandler = (request, cancellationToken) => new ValueTask<CallToolResult>(Task.Run(() =>
-                CallTool(request.Params?.Name ?? "", JsonSerializer.SerializeToElement(request.Params?.Arguments), cancellationToken), cancellationToken)),
+            CallToolHandler = async (request, cancellationToken) =>
+                await Task.Run(() => CallTool(request.Params?.Name ?? "", JsonSerializer.SerializeToElement(request.Params?.Arguments), settings.Paths, cancellationToken),
+                    cancellationToken).ConfigureAwait(false),
         },
     };
 
-    /// <summary>Calls a comparison tool; invalid inputs become readable MCP error results.</summary>
-    public static CallToolResult CallTool(string name, JsonElement arguments, CancellationToken cancellationToken = default)
+    /// <summary>Calls a comparison tool on paths inside <paramref name="paths"/>; invalid inputs become readable MCP error results.</summary>
+    public static CallToolResult CallTool(string name, JsonElement arguments, PathGuard paths, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -37,7 +45,7 @@ public static class ComparisonServer
             var tool = Tools.FirstOrDefault(candidate => candidate.Name == name)
                 ?? throw new ArgumentException($"Unknown tool '{name}'.");
             ValidateArguments(arguments, tool.InputSchema);
-            var report = ComparisonTools.Run(name, arguments, cancellationToken);
+            var report = ComparisonTools.Run(name, arguments, paths, cancellationToken);
             var structured = JsonSerializer.SerializeToElement(report, ReportOptions);
             return new CallToolResult
             {

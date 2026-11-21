@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- net472 + 17.14 SDK keeps VS 2022 support a manifest-only change (ADR-0001). -->
+    <!-- net472 + 17.14 SDK keeps VS 2022 support a manifest-only change. -->
     <TargetFramework>net472</TargetFramework>
     <RootNamespace>DiffRapid.VisualStudio</RootNamespace>
     <AssemblyName>DiffRapid.VisualStudio</AssemblyName>
@@ -39,8 +39,6 @@
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Design" />
     <Reference Include="System.Net.Http" />
-    <!-- FileSystem.DeleteFile/DeleteDirectory: move to the Recycle Bin. -->
-    <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>
 
   <ItemGroup>

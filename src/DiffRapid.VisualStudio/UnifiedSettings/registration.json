@@ -274,7 +274,7 @@
     "diffRapid.ai.apiKeyVariable": {
       "type": "string",
       "title": "Environment variable holding the API key",
-      "description": "The key is read from this environment variable and is never stored in settings. Leave the variable unset for local servers that need no key.",
+      "description": "The name of the environment variable that holds the key, such as OPENAI_API_KEY. Don't enter the key itself here: it is read from that variable and is never stored in settings. Leave the variable unset for local servers that need no key.",
       "default": "OPENAI_API_KEY",
       "order": 4
     },

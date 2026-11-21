@@ -117,7 +117,7 @@ public class MergeSessionTests
             var position = 0;
             for (var i = 0; i < 3; i++)
             {
-                var range = session.OutputLineRange(i);
+                var range = session.OutputLineRanges()[i];
                 Assert.Equal(position, range.Start);
                 position += range.Count;
             }
@@ -131,12 +131,12 @@ public class MergeSessionTests
     {
         var session = new MergeSession(Conflict());
         var labels = new ConflictLabels("mine", "ancestor", "theirs");
-        Assert.Equal((1, 7), session.OutputLineRange(1, labels, includeBase: true));
-        Assert.Equal((8, 1), session.OutputLineRange(2, labels, includeBase: true));
+        Assert.Equal((1, 7), session.OutputLineRanges(labels, includeBase: true)[1]);
+        Assert.Equal((8, 1), session.OutputLineRanges(labels, includeBase: true)[2]);
         Assert.Equal(9, TextDocument.Parse(session.ToText(labels, includeBase: true)).LineCount);
         session.SetCustomText(1, Array.Empty<string>());
-        Assert.Equal((1, 0), session.OutputLineRange(1));
-        Assert.Equal((1, 1), session.OutputLineRange(2));
+        Assert.Equal((1, 0), session.OutputLineRanges()[1]);
+        Assert.Equal((1, 1), session.OutputLineRanges()[2]);
     }
     [Fact]
     public void Concatenation_keeps_missing_and_mixed_terminators()
@@ -144,11 +144,49 @@ public class MergeSessionTests
         var result = ThreeWayMerger.Merge(TextDocument.Parse("b"), TextDocument.Parse("L"), TextDocument.Parse("R\r\n"));
         var session = new MergeSession(result);
         session.Resolve(0, MergeResolution.LeftThenRight);
-        Assert.Equal("LR\r\n", session.ToText());
-        Assert.Equal((0, 1), session.OutputLineRange(0));
+        Assert.Equal("L\r\nR\r\n", session.ToText());
+        Assert.Equal((0, 2), session.OutputLineRanges()[0]);
         session.Resolve(0, MergeResolution.RightThenLeft);
         Assert.Equal("R\r\nL", session.ToText());
-        Assert.Equal((0, 2), session.OutputLineRange(0));
+        Assert.Equal((0, 2), session.OutputLineRanges()[0]);
+    }
+
+    [Fact]
+    public void An_unterminated_last_line_is_terminated_when_later_chunks_follow()
+    {
+        // Left deletes the trailing "c" line, so its "b" ends the left file without a terminator; right appends.
+        var result = ThreeWayMerger.Merge(
+            TextDocument.Parse("a\nb\nc\n"), TextDocument.Parse("a\nb"), TextDocument.Parse("a\nb\nc\nd\n"));
+        var session = new MergeSession(result);
+        for (var i = 0; i < result.Chunks.Count; i++)
+        {
+            if (result.Chunks[i].Kind == MergeChunkKind.Conflict)
+            {
+                session.Resolve(i, MergeResolution.LeftThenRight);
+            }
+        }
+
+        var text = session.ToText();
+        Assert.Equal("a\nb\nb\nc\nd\n", text);
+        var position = 0;
+        foreach (var range in session.OutputLineRanges())
+        {
+            Assert.Equal(position, range.Start);
+            position += range.Count;
+        }
+
+        Assert.Equal(TextDocument.Parse(text).LineCount, position);
+    }
+
+    [Fact]
+    public void Custom_lines_after_an_unterminated_line_start_on_a_new_line()
+    {
+        var result = ThreeWayMerger.Merge(TextDocument.Parse("b"), TextDocument.Parse("L"), TextDocument.Parse("R"));
+        var session = new MergeSession(result);
+        session.Resolve(0, MergeResolution.LeftThenRight);
+        Assert.Equal("L" + Environment.NewLine + "R", session.ToText());
+        session.SetCustomLines(0, TextDocument.Parse("x\ny").Lines);
+        Assert.Equal("x\ny", session.ToText());
     }
 
     [Fact]
@@ -183,7 +221,6 @@ public class MergeSessionTests
             Assert.Throws<ArgumentOutOfRangeException>(() => session.Resolution(index));
             Assert.Throws<ArgumentOutOfRangeException>(() => session.Resolve(index, MergeResolution.Left));
             Assert.Throws<ArgumentOutOfRangeException>(() => session.SetCustomText(index, Array.Empty<string>()));
-            Assert.Throws<ArgumentOutOfRangeException>(() => session.OutputLineRange(index));
         }
 
         Assert.Throws<InvalidOperationException>(() => session.Resolve(1, MergeResolution.Custom));

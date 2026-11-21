@@ -6,6 +6,8 @@ using DiffRapid.Core.VersionControl;
 namespace DiffRapid.Core.Tests;
 
 /// <summary>Verifies Git repository history, revision content, discovery, and CLI commands.</summary>
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class GitRepositoryTests
 {
     /// <summary>Verifies Git history, revision content, discovery, and CLI output.</summary>
@@ -58,7 +60,7 @@ public sealed class GitRepositoryTests
         await repositoryFixture.Git("add", "--", "binary");
         await repositoryFixture.Commit("binary");
         Assert.Equal(new byte[] { 0, 255, 1, 128 }, await repository.ReadFileAsync("HEAD", "binary", default));
-        Assert.Equal(2, Program.Main(["diff", Path.Combine(repositoryFixture.Root, "binary"), "--rev", "HEAD", "--quiet"]));
+        Assert.Equal(2, await Program.Main(["diff", Path.Combine(repositoryFixture.Root, "binary"), "--rev", "HEAD", "--quiet"]));
         var worktree = Path.Combine(repositoryFixture.Root, "worktree");
         await repositoryFixture.Git("worktree", "add", "--detach", worktree);
         Assert.Equal(worktree, GitRepository.Find(Path.Combine(worktree, "binary"))!.Root);
@@ -70,14 +72,14 @@ public sealed class GitRepositoryTests
 
     private static async Task VerifyRevisionCommands(Repository repositoryFixture, GitRepository repository, string file, string renamed)
     {
-        Assert.Equal(0, Program.Main(["diff", file, "--rev", "HEAD", "--quiet"]));
+        Assert.Equal(0, await Program.Main(["diff", file, "--rev", "HEAD", "--quiet"]));
         File.WriteAllText(file, "staged\n");
         await repositoryFixture.Git("add", "--", renamed);
         Assert.Equal(Encoding.UTF8.GetBytes("staged\n"), await repository.ReadFileAsync(":0", renamed, default));
-        Assert.Equal(0, Program.Main(["diff", file, "--rev", ":0", "--quiet"]));
-        Assert.Equal(1, Program.Main(["diff", file, "--rev", "HEAD", "--quiet"]));
-        Assert.Equal(2, Program.Main(["diff", file, "--rev", "unknown-revision", "--quiet"]));
-        Assert.Equal(0, Program.Main(["log", file, "-n", "1"]));
+        Assert.Equal(0, await Program.Main(["diff", file, "--rev", ":0", "--quiet"]));
+        Assert.Equal(1, await Program.Main(["diff", file, "--rev", "HEAD", "--quiet"]));
+        Assert.Equal(2, await Program.Main(["diff", file, "--rev", "unknown-revision", "--quiet"]));
+        Assert.Equal(0, await Program.Main(["log", file, "-n", "1"]));
         var cli = typeof(Program).Assembly.Location;
         var diff = await new ProcessRunner().RunAsync("dotnet", repositoryFixture.Root, [cli, "diff", file, "--rev", "HEAD"], default);
         Assert.Equal(1, diff.ExitCode);
@@ -92,19 +94,19 @@ public sealed class GitRepositoryTests
         var argument = "space and \"quotes\" and trailing\\";
         var quoted = await repositoryFixture.Git("-c", "test.quoted=" + argument, "config", "--get", "test.quoted");
         Assert.Equal(argument, quoted.Text.TrimEnd('\r', '\n'));
-        Assert.Equal(2, Program.Main(["log"]));
+        Assert.Equal(2, await Program.Main(["log"]));
     }
 
     /// <summary>Verifies paths outside a Git repository are rejected.</summary>
     [Fact]
-    public void OutsideRepository()
+    public async Task OutsideRepository()
     {
         var folder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         try
         {
             Assert.Null(GitRepository.Find(folder));
-            Assert.Equal(2, Program.Main(["diff", Path.Combine(folder, "file"), "--rev", "HEAD", "--quiet"]));
+            Assert.Equal(2, await Program.Main(["diff", Path.Combine(folder, "file"), "--rev", "HEAD", "--quiet"]));
         }
         finally
         {
@@ -132,6 +134,7 @@ public sealed class GitRepositoryTests
             await Git("config", "user.name", "Test Author");
             await Git("config", "user.email", "test@example.invalid");
             await Git("config", "commit.gpgsign", "false");
+            await Git("config", "tag.gpgsign", "false");
         }
 
         internal Task<ProcessResult> Commit(string subject) => Git("-c", "user.name=Test Author", "commit", "-m", subject, "--date=2020-01-02T03:04:05Z");

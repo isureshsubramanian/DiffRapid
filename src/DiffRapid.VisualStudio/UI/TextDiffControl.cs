@@ -29,6 +29,8 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
+using static DiffRapid.VisualStudio.UI.UiText;
 using Constants = Microsoft.VisualStudio.OLE.Interop.Constants;
 using DefGuidList = Microsoft.VisualStudio.Editor.DefGuidList;
 using OleServiceProvider = Microsoft.VisualStudio.OLE.Interop.IServiceProvider;
@@ -203,6 +205,10 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         _right.Buffer.Changed -= OnBufferChanged;
         _left.Close();
         _right.Close();
+
+        // Text extracted for the comparison (a document's text, an assembly's API) lives in temporary copies made for
+        // this view only. Copies a tab holds (the compared files themselves) are left to that tab to release.
+        DiffRapid.VisualStudio.Commands.TemporaryFiles.DeleteUnused(new[] { _left.Path, _right.Path });
     }
 
     private static void EnsureText(string path)
@@ -214,9 +220,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             read = stream.Read(buffer, 0, buffer.Length);
         }
 
-        // UTF-16 files contain NULs too; only treat as binary when there is no UTF-16/32 byte order mark.
-        var hasUnicodeBom = read >= 2 && ((buffer[0] == 0xFF && buffer[1] == 0xFE) || (buffer[0] == 0xFE && buffer[1] == 0xFF));
-        if (!hasUnicodeBom && Array.IndexOf(buffer, (byte)0, 0, read) >= 0)
+        // The same test that sends a file to the hex comparison, so the two never disagree (UTF-32 big endian included).
+        if (LooksBinary(buffer, read))
         {
             throw new NotSupportedException($"'{Path.GetFileName(path)}' looks like a binary file. Binary compare is not available yet.");
         }
@@ -333,16 +338,6 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         grid.Children.Add(element);
     }
 
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
-    }
-
     private void UpdateOptions(CompareOptions options)
     {
         _options = options;
@@ -398,10 +393,9 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var cancellation = new CancellationTokenSource();
         _compareCancellation = cancellation;
 
+        // Snapshots never change, so their text is read on the background thread with the compare.
         var leftSnapshot = _left.Buffer.CurrentSnapshot;
         var rightSnapshot = _right.Buffer.CurrentSnapshot;
-        var leftText = leftSnapshot.GetText();
-        var rightText = rightSnapshot.GetText();
         var options = _options;
         _verdict.Text = "Comparing…";
         _verdict.ClearValue(TextBlock.ForegroundProperty);
@@ -413,7 +407,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             {
                 var stopwatch = Stopwatch.StartNew();
                 var unimportant = _greyUnimportant ? UnimportantClassifier(_left.Path) : null;
-                var model = await Task.Run(() => DiffModel.Build(leftText, rightText, options, cancellation.Token, unimportant), cancellation.Token);
+                var model = await Task.Run(() => DiffModel.Build(leftSnapshot.GetText(), rightSnapshot.GetText(), options, cancellation.Token, unimportant), cancellation.Token);
                 var elapsed = stopwatch.Elapsed;
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation.Token);
                 if (!_disposed && !cancellation.IsCancellationRequested)
@@ -513,44 +507,51 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// </summary>
     private void CreatePatch()
     {
-        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
-        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
-        var result = TextComparer.Compare(left, right, CompareOptions.Default with { Algorithm = _options.Algorithm });
-        if (result.AreEqual)
-        {
-            _position.Text = "The files are identical: there is nothing to put in a patch";
-            return;
-        }
-
+        ThreadHelper.ThrowIfNotOnUIThread();
         var leftName = System.IO.Path.GetFileName(_left.Path);
         var rightName = System.IO.Path.GetFileName(_right.Path);
-        var message = PatchExport.Save(
-            System.IO.Path.GetFileNameWithoutExtension(rightName),
-            writer => UnifiedDiffWriter.Write(writer, result, "a/" + leftName, "b/" + rightName));
-        if (message is not null)
+        CompareInBackground(CompareOptions.Default with { Algorithm = _options.Algorithm }, "Could not create the patch: ", async result =>
         {
-            _position.Text = message;
-        }
+            if (result.AreEqual)
+            {
+                _position.Text = "The files are identical: there is nothing to put in a patch";
+                return;
+            }
+
+            if (PatchExport.AskPath(System.IO.Path.GetFileNameWithoutExtension(rightName)) is not { } path)
+            {
+                return;
+            }
+
+            _position.Text = "Creating the patch…";
+            var message = await Task.Run(() => PatchExport.Write(path, writer => UnifiedDiffWriter.Write(writer, result, "a/" + leftName, "b/" + rightName)), _package.DisposalToken);
+            await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_package.DisposalToken);
+            if (!_disposed)
+            {
+                _position.Text = message;
+            }
+        });
     }
 
     /// <summary>Asks the configured AI service to explain the differences as shown, unsaved edits included.</summary>
     private void Explain()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
-        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
-        var result = TextComparer.Compare(left, right, _options);
-        if (result.AreEqual)
-        {
-            _position.Text = "The files are identical: there is nothing to explain";
-            return;
-        }
-
         var leftName = System.IO.Path.GetFileName(LeftLabel ?? _left.Path);
         var rightName = System.IO.Path.GetFileName(RightLabel ?? _right.Path);
-        var diff = UnifiedDiffWriter.Write(result, "a/" + leftName, "b/" + rightName);
         var language = System.IO.Path.GetExtension(_right.Path).TrimStart('.');
-        _ai.Ask($"What changed: {leftName} → {rightName}", builder => builder.ExplainDiff(diff, leftName, rightName, language.Length == 0 ? null : language));
+        CompareInBackground(_options, "Could not compare the files: ", result =>
+        {
+            if (result.AreEqual)
+            {
+                _position.Text = "The files are identical: there is nothing to explain";
+                return Task.CompletedTask;
+            }
+
+            var diff = UnifiedDiffWriter.Write(result, "a/" + leftName, "b/" + rightName);
+            _ai.Ask($"What changed: {leftName} → {rightName}", builder => builder.ExplainDiff(diff, leftName, rightName, language.Length == 0 ? null : language));
+            return Task.CompletedTask;
+        });
     }
 
     /// <summary>
@@ -559,9 +560,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// </summary>
     private void ExportReport()
     {
-        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
-        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
-        var result = TextComparer.Compare(left, right, _options);
+        ThreadHelper.ThrowIfNotOnUIThread();
         var leftLabel = LeftLabel ?? _left.Path;
         var rightLabel = RightLabel ?? _right.Path;
         var leftName = System.IO.Path.GetFileName(leftLabel);
@@ -570,8 +569,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Export comparison report",
-            FileName = string.Concat((leftName + " vs " + rightName + " report")
-                .Select(c => Array.IndexOf(System.IO.Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            FileName = UiText.SafeFileName(leftName + " vs " + rightName + " report"),
             Filter = "HTML report, side by side (*.html)|*.html|Markdown for a pull request (*.md)|*.md",
             AddExtension = true,
             OverwritePrompt = true,
@@ -581,6 +579,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             return;
         }
 
+        var path = dialog.FileName;
         var html = dialog.FilterIndex == 1;
         var options = new FileReportOptions
         {
@@ -590,31 +589,73 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             GeneratedAt = DateTimeOffset.Now,
         };
 
-        try
+        _position.Text = "Saving the report…";
+        CompareInBackground(_options, "Could not save the report: ", async result =>
         {
-            using (var writer = new StreamWriter(dialog.FileName, append: false, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            await Task.Run(
+                () => UiText.WriteText(path, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), writer =>
+                {
+                    if (html)
+                    {
+                        FileReportWriter.WriteHtml(result, options, writer);
+                    }
+                    else
+                    {
+                        writer.NewLine = "\n";
+                        FileReportWriter.WriteMarkdown(result, options, writer);
+                    }
+                }),
+                _package.DisposalToken);
+            await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_package.DisposalToken);
+            if (_disposed)
             {
-                if (html)
-                {
-                    FileReportWriter.WriteHtml(result, options, writer);
-                }
-                else
-                {
-                    writer.NewLine = "\n";
-                    FileReportWriter.WriteMarkdown(result, options, writer);
-                }
+                return;
             }
 
-            _position.Text = $"Saved the report to {dialog.FileName}";
+            _position.Text = $"Saved the report to {path}";
             if (html)
             {
-                Process.Start(dialog.FileName);
+                Process.Start(path);
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        });
+    }
+
+    /// <summary>
+    /// Compares the buffers as they are now (unsaved edits included) on a background thread, then runs
+    /// <paramref name="then"/> on the UI thread with the result. Failures show in the footer after <paramref name="failure"/>.
+    /// </summary>
+    private void CompareInBackground(CompareOptions options, string failure, Func<TextDiffResult, Task> then)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // Snapshots never change, so their text can be read on the background thread.
+        var leftSnapshot = _left.Buffer.CurrentSnapshot;
+        var rightSnapshot = _right.Buffer.CurrentSnapshot;
+        _package.JoinableTaskFactory.RunAsync(async () =>
         {
-            _position.Text = $"Could not save the report: {ex.Message}";
-        }
+            try
+            {
+                var result = await Task.Run(
+                    () => TextComparer.Compare(TextDocument.Parse(leftSnapshot.GetText()), TextDocument.Parse(rightSnapshot.GetText()), options),
+                    _package.DisposalToken);
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_package.DisposalToken);
+                if (!_disposed)
+                {
+                    await then(result);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (!_disposed)
+                {
+                    _position.Text = failure + ex.Message;
+                }
+            }
+        }).FileAndForget("DiffRapid/TextCompareAction");
     }
 
     private const string StructureSuffix = " (structure)";
@@ -945,11 +986,6 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
                 : $"Difference {_currentDifference + 1} of {count:N0}";
     }
 
-    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
-
-    private static string FormatElapsed(TimeSpan elapsed) =>
-        elapsed.TotalMilliseconds < 1000 ? $"{Math.Max(1, (int)elapsed.TotalMilliseconds)} ms" : $"{elapsed.TotalSeconds:0.0} s";
-
     // Forces the editor to re-query line transforms and repaint adornments.
     private static void Relayout(IWpfTextView view)
     {
@@ -1067,7 +1103,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// <summary>One side of the comparison: the document buffer and the editor view showing it.</summary>
     private sealed class Pane
     {
-        private readonly IVsInvisibleEditor _invisibleEditor;
+        // Holds the document open in the running document table (an edit lock) while the comparison shows it.
+        private IVsInvisibleEditor? _invisibleEditor;
 
         private readonly IVsTextView _textView;
 
@@ -1089,9 +1126,11 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             if (buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
             {
                 _document = document;
-                _document.DirtyStateChanged += (s, e) => DirtyStateChanged?.Invoke(this, EventArgs.Empty);
+                _document.DirtyStateChanged += OnDocumentDirtyStateChanged;
             }
         }
+
+        private void OnDocumentDirtyStateChanged(object sender, EventArgs e) => DirtyStateChanged?.Invoke(this, EventArgs.Empty);
 
         public event EventHandler? DirtyStateChanged;
 
@@ -1214,7 +1253,72 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
                 _textView.CloseView();
             }
 
-            GC.KeepAlive(_invisibleEditor);
+            if (_document is not null)
+            {
+                // The document can stay open in VS after this pane, so the pane must not stay referenced from it.
+                _document.DirtyStateChanged -= OnDocumentDirtyStateChanged;
+            }
+
+            var invisibleEditor = _invisibleEditor;
+            if (invisibleEditor is null)
+            {
+                return;
+            }
+
+            _invisibleEditor = null;
+
+            // Still dirty here means the tab was closed without saving (the user answered No). Reload the file so the
+            // discarded edits do not stay in the document VS keeps, and come back in the next comparison or editor.
+            // Only when this pane's invisible editor holds the document's last edit lock and no window shows it:
+            // another DiffRapid tab on the same file shares this document (RIEF_ENABLECACHING) through its own
+            // invisible editor, which no window frame reveals, and still shows those edits (they may even have been
+            // made there). An editor window asks about them itself when it closes.
+            if (IsDirty
+                && EditLocks() == 1
+                && !VsShellUtilities.IsDocumentOpen(ServiceProvider.GlobalProvider, Path, Guid.Empty, out _, out _, out _)
+                && ErrorHandler.Succeeded(_docData.IsDocDataReloadable(out var reloadable)) && reloadable != 0)
+            {
+                var hr = _docData.ReloadDocData(0);
+                if (ErrorHandler.Failed(hr))
+                {
+                    Diagnostics.LogWarning($"Reloading a compared document after closing without saving failed (0x{hr:X8}).");
+                }
+            }
+
+            // Releasing the invisible editor drops its edit lock, so VS can close the document when nothing else has it open.
+            if (Marshal.IsComObject(invisibleEditor))
+            {
+                Marshal.ReleaseComObject(invisibleEditor);
+            }
+        }
+
+        // The document's edit locks in the running document table, or -1 when it cannot be read (then nothing is reloaded).
+        private int EditLocks()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (Package.GetGlobalService(typeof(SVsRunningDocumentTable)) is not IVsRunningDocumentTable table)
+            {
+                return -1;
+            }
+
+            var hr = table.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock, Path, out _, out _, out var found, out var cookie);
+            if (found != IntPtr.Zero)
+            {
+                Marshal.Release(found);
+            }
+
+            if (hr != VSConstants.S_OK || cookie == 0)
+            {
+                return -1;
+            }
+
+            hr = table.GetDocumentInfo(cookie, out _, out _, out var editLocks, out _, out _, out _, out var docData);
+            if (docData != IntPtr.Zero)
+            {
+                Marshal.Release(docData);
+            }
+
+            return ErrorHandler.Succeeded(hr) ? (int)editLocks : -1;
         }
     }
 }

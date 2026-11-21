@@ -102,7 +102,7 @@ internal static partial class Program
             line.Append("  ").Append(ShowValue(difference.Left!)).Append(" -> ").Append(ShowValue(difference.Right!));
         }
 
-        return line.ToString();
+        return TerminalText.Escape(line.ToString());
     }
 
     private static string ShowValue(StructuredNode node)

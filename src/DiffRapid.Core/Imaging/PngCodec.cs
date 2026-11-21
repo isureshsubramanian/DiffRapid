@@ -16,6 +16,9 @@ public static class PngCodec
     private const int ColorTypeRgba = 6;
     private const string SupportedVariants = "DiffRapid reads 8-bit RGB and RGBA PNG images without interlacing.";
 
+    // The first inflate buffer; it doubles as data arrives, up to the size the header gives (an estimate).
+    private const int InitialInflateLength = 64 * 1024;
+
     private static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
 
     /// <summary>The PNG row filters.</summary>
@@ -81,7 +84,7 @@ public static class PngCodec
         var channels = header.ColorType == ColorTypeRgba ? 4 : 3;
         var rowBytes = (long)header.Width * channels;
         var filteredLength = (rowBytes + 1) * header.Height;
-        if (filteredLength > int.MaxValue || (long)header.Width * header.Height * PixelImage.BytesPerPixel > int.MaxValue)
+        if (filteredLength > int.MaxValue || (long)header.Width * header.Height > PixelImage.MaxPixels)
         {
             throw new NotSupportedException($"The PNG image is too large ({header.Width} x {header.Height}).");
         }
@@ -248,12 +251,28 @@ public static class PngCodec
             throw new InvalidDataException("The PNG image data does not have a valid zlib header.");
         }
 
-        // DeflateStream reports corrupt data as InvalidDataException, like the rest of this reader.
-        var output = new byte[expectedLength];
+        // DeflateStream reports corrupt data as InvalidDataException, like the rest of this reader. The buffer
+        // grows with the data actually inflated, so a small file claiming a huge size cannot allocate it up front.
+        var output = new byte[Math.Min(expectedLength, InitialInflateLength)];
+        var filled = 0;
         using (var source = new MemoryStream(zlib, 2, zlib.Length - 2))
         using (var inflater = new DeflateStream(source, CompressionMode.Decompress))
         {
-            ReadExactly(inflater, output);
+            while (filled < expectedLength)
+            {
+                if (filled == output.Length)
+                {
+                    Array.Resize(ref output, (int)Math.Min(expectedLength, 2L * output.Length));
+                }
+
+                var read = inflater.Read(output, filled, output.Length - filled);
+                if (read == 0)
+                {
+                    throw new InvalidDataException("The PNG image data is shorter than its size says.");
+                }
+
+                filled += read;
+            }
         }
 
         if (Checksums.Adler32(output, 0, output.Length) != ReadUInt32(zlib, zlib.Length - 4))
@@ -262,21 +281,6 @@ public static class PngCodec
         }
 
         return output;
-    }
-
-    private static void ReadExactly(Stream stream, byte[] output)
-    {
-        var filled = 0;
-        while (filled < output.Length)
-        {
-            var read = stream.Read(output, filled, output.Length - filled);
-            if (read == 0)
-            {
-                throw new InvalidDataException("The PNG image data is shorter than its size says.");
-            }
-
-            filled += read;
-        }
     }
 
     private static byte[] Unfilter(byte[] filtered, int rowBytes, int height, int channels)

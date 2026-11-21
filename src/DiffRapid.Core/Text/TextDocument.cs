@@ -26,7 +26,7 @@ public sealed class TextDocument
 
     public TextLine this[int index] => _lines[index];
 
-    /// <summary>True when the last line has no terminator (WinMerge: "missing trailing EOL").</summary>
+    /// <summary>True when the last line has no terminator (a "missing trailing EOL").</summary>
     public bool MissingFinalLineEnding => _lines.Length > 0 && _lines[_lines.Length - 1].Ending == LineEnding.None;
 
     /// <summary>Splits text on CRLF, LF and CR, keeping each line's terminator.</summary>

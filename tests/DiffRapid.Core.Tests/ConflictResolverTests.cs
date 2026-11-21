@@ -6,6 +6,8 @@ using static DiffRapid.Core.Tests.TextComparerTests;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public class ConflictResolverTests
 {
     private static MergeSession Session(TextDocument @base, TextDocument left, TextDocument right) =>
@@ -36,6 +38,26 @@ public class ConflictResolverTests
         var mirror = Session(Doc("a", "x = 1;", "c"), Doc("a", "x = 2;", "c"), Doc("a", "\tx = 1;", "c"));
         Assert.Equal(SimpleResolutionKind.RightWhitespaceOnly, Assert.Single(ConflictResolver.ResolveSimple(mirror)).Kind);
         Assert.Equal("a\nx = 2;\nc\n", mirror.ToText());
+    }
+
+    [Fact]
+    public void Removing_whitespace_between_characters_is_not_whitespace_only()
+    {
+        // Dropping the space inside the literal changes the string; it must not lose to the other side.
+        var session = Session(
+            Doc("a", "s = \"Hello World\";", "c"), Doc("a", "s = \"HelloWorld\";", "c"), Doc("a", "s = \"Hello World\"; // greeting", "c"));
+
+        Assert.Empty(ConflictResolver.ResolveSimple(session));
+        Assert.Equal(1, session.RemainingConflictCount);
+    }
+
+    [Fact]
+    public void Reindenting_and_rewrapping_lines_is_whitespace_only()
+    {
+        var session = Session(Doc("a", "f(x, y);", "c"), Doc("a", "    f(x,", "      y);", "c"), Doc("a", "g(x, y);", "c"));
+
+        Assert.Equal(SimpleResolutionKind.LeftWhitespaceOnly, Assert.Single(ConflictResolver.ResolveSimple(session)).Kind);
+        Assert.Equal("a\ng(x, y);\nc\n", session.ToText());
     }
 
     [Fact]
@@ -172,7 +194,7 @@ public class ConflictResolverTests
     }
 
     [Fact]
-    public void Cli_resolve_writes_output_and_sets_exit_code()
+    public async Task Cli_resolve_writes_output_and_sets_exit_code()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -182,18 +204,18 @@ public class ConflictResolverTests
             var input = Path.Combine(directory, "file.txt");
             var output = Path.Combine(directory, "out.txt");
             File.WriteAllText(input, ConflictText, encoding);
-            Assert.Equal(1, Program.Main(["resolve", input, "-o", output]));
+            Assert.Equal(1, await Program.Main(["resolve", input, "-o", output]));
             var expected = ConflictResolver.ResolveConflictText(ConflictText).Text;
             Assert.Equal(encoding.GetPreamble().Concat(encoding.GetBytes(expected)).ToArray(), File.ReadAllBytes(output));
 
             File.WriteAllText(input, "x\n<<<<<<< a\nsame\n=======\nsame\n>>>>>>> b\n");
-            Assert.Equal(0, Program.Main(["resolve", input, "--output", output]));
+            Assert.Equal(0, await Program.Main(["resolve", input, "--output", output]));
             Assert.Equal("x\nsame\n", File.ReadAllText(output));
 
-            File.WriteAllText(input, "=======\n");
-            Assert.Equal(2, Program.Main(["resolve", input, "-o", output]));
-            Assert.Equal(2, Program.Main(["resolve"]));
-            Assert.Equal(2, Program.Main(["resolve", Path.Combine(directory, "missing")]));
+            File.WriteAllText(input, "<<<<<<<\n");
+            Assert.Equal(2, await Program.Main(["resolve", input, "-o", output]));
+            Assert.Equal(2, await Program.Main(["resolve"]));
+            Assert.Equal(2, await Program.Main(["resolve", Path.Combine(directory, "missing")]));
         }
         finally
         {

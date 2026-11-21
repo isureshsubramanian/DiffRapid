@@ -23,8 +23,19 @@ public static class UnifiedDiffWriter
             throw new ArgumentOutOfRangeException(nameof(contextLines));
         }
 
-        var hunks = new List<DiffHunk>(result.ImportantHunks);
-        if (hunks.Count == 0)
+        // Every hunk, ignored ones included: an ignored hunk can still differ in line count, so the left and right
+        // positions only stay in step when it is walked like any other change.
+        var all = result.Hunks;
+        var important = new List<int>();
+        for (var index = 0; index < all.Count; index++)
+        {
+            if (all[index].Significance == DiffSignificance.Important)
+            {
+                important.Add(index);
+            }
+        }
+
+        if (important.Count == 0)
         {
             return;
         }
@@ -33,28 +44,38 @@ public static class UnifiedDiffWriter
         writer.Write("+++ " + rightLabel + "\n");
 
         var i = 0;
-        while (i < hunks.Count)
+        while (i < important.Count)
         {
-            // Merge hunks whose context windows overlap into one output hunk.
-            var first = i;
+            // Merge important hunks whose context windows overlap into one output hunk. Ignored hunks between them
+            // are written as changes, so the output still turns the left text into the right text.
             var last = i;
-            while (last + 1 < hunks.Count && hunks[last + 1].LeftStart - hunks[last].LeftEnd <= 2 * contextLines)
+            while (last + 1 < important.Count && all[important[last + 1]].LeftStart - all[important[last]].LeftEnd <= 2 * contextLines)
             {
                 last++;
             }
 
-            var leftStart = Math.Max(0, hunks[first].LeftStart - contextLines);
-            var rightStart = Math.Max(0, hunks[first].RightStart - contextLines);
-            var leftEnd = Math.Min(result.Left.LineCount, hunks[last].LeftEnd + contextLines);
-            var rightEnd = Math.Min(result.Right.LineCount, hunks[last].RightEnd + contextLines);
+            var firstIndex = important[i];
+            var lastIndex = important[last];
+            var first = all[firstIndex];
+            var final = all[lastIndex];
+
+            // Context comes only from the unchanged run next to the window, where left and right lines pair up.
+            var previousEnd = firstIndex > 0 ? all[firstIndex - 1].LeftEnd : 0;
+            var nextStart = lastIndex + 1 < all.Count ? all[lastIndex + 1].LeftStart : result.Left.LineCount;
+            var before = Math.Min(contextLines, first.LeftStart - previousEnd);
+            var after = Math.Min(contextLines, nextStart - final.LeftEnd);
+            var leftStart = first.LeftStart - before;
+            var rightStart = first.RightStart - before;
+            var leftEnd = final.LeftEnd + after;
+            var rightEnd = final.RightEnd + after;
 
             writer.Write("@@ -" + Range(leftStart, leftEnd - leftStart) + " +" + Range(rightStart, rightEnd - rightStart) + " @@\n");
 
             var l = leftStart;
             var r = rightStart;
-            for (var h = first; h <= last; h++)
+            for (var h = firstIndex; h <= lastIndex; h++)
             {
-                var hunk = hunks[h];
+                var hunk = all[h];
                 while (l < hunk.LeftStart)
                 {
                     WriteLine(writer, ' ', result.Left, l++);

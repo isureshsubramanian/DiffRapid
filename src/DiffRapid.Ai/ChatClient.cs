@@ -13,6 +13,9 @@ namespace DiffRapid.Ai;
 /// <summary>Sends explicit chat requests to a configured endpoint, with redaction enabled by default.</summary>
 public sealed class ChatClient : IDisposable
 {
+    // An error reply is a short JSON object; 16 KB is an estimate with ample room, and caps what a hostile server can make us buffer.
+    private const int MaxErrorBytes = 16 * 1024;
+
     private readonly AiEndpoint _endpoint;
     private readonly HttpClient _client;
     private readonly Uri _requestUri;
@@ -85,6 +88,28 @@ public sealed class ChatClient : IDisposable
         CancellationToken cancellationToken)
     {
         ValidatePrompt(prompt);
+        if (onContent is null)
+        {
+            return await SendOnceAsync(prompt, null, null, redactSecrets, cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await SendOnceAsync(prompt, onContent, onThinking, redactSecrets, cancellationToken).ConfigureAwait(false);
+        }
+        catch (StreamingRejectedException)
+        {
+            // Some services refuse to stream some models (OpenAI streams gpt-5 and o3 only for verified
+            // organizations) but answer the same request unstreamed, so ask once more and deliver it whole.
+            var reply = await SendOnceAsync(prompt, null, null, redactSecrets, cancellationToken).ConfigureAwait(false);
+            onContent(reply);
+            return reply;
+        }
+    }
+
+    private async Task<string> SendOnceAsync(AiPrompt prompt, Action<string>? onContent, Action? onThinking, bool redactSecrets,
+        CancellationToken cancellationToken)
+    {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_endpoint.Timeout);
         try
@@ -92,6 +117,12 @@ public sealed class ChatClient : IDisposable
             timeout.Token.ThrowIfCancellationRequested();
             using var request = CreateRequest(prompt, onContent is not null, redactSecrets, timeout.Token);
             using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+            if (onContent is not null && response.StatusCode == HttpStatusCode.BadRequest &&
+                await RejectsStreamingAsync(response, timeout.Token).ConfigureAwait(false))
+            {
+                throw new StreamingRejectedException();
+            }
+
             EnsureSuccess(response.StatusCode);
             using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
             // netstandard2.0's StreamReader has no cancellable ReadLineAsync overload.
@@ -233,6 +264,44 @@ public sealed class ChatClient : IDisposable
         throw new AiException(message, statusCode);
     }
 
+    // Reads at most MaxErrorBytes of an error reply, only to tell whether the "stream" parameter was refused
+    // (OpenAI: {"error":{"param":"stream",...}}). The body is never returned or put in a message.
+    private static async Task<bool> RejectsStreamingAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (response.Content is null)
+        {
+            return false;
+        }
+
+        var buffer = new byte[MaxErrorBytes];
+        var length = 0;
+        using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+        {
+            // As in SendOnceAsync: .NET Framework's response streams ignore the token once a read has started, so
+            // the timeout disposes the stream. The caller maps the resulting error to its timeout message.
+            using var registration = cancellationToken.Register(stream.Dispose);
+            int read;
+            while (length < buffer.Length &&
+                (read = await stream.ReadAsync(buffer, length, buffer.Length - length, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                length += read;
+            }
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(new ReadOnlyMemory<byte>(buffer, 0, length));
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object &&
+                error.TryGetProperty("param", out var param) && param.ValueKind == JsonValueKind.String &&
+                string.Equals(param.GetString(), "stream", StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static async Task<string> ReadReplyAsync(Stream stream, CancellationToken cancellationToken)
     {
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -352,5 +421,10 @@ public sealed class ChatClient : IDisposable
 
         choice = default;
         return false;
+    }
+
+    // Not an IOException, so the transport catch blocks in SendOnceAsync let it reach the retry in SendAsync.
+    private sealed class StreamingRejectedException : Exception
+    {
     }
 }

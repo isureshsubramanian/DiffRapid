@@ -71,18 +71,30 @@ public sealed class ConflictFileTests
     }
 
     [Theory]
-    [InlineData("ok\n=======\n", 2)]
     [InlineData("ok\n<<<<<<<\nleft", 2)]
     [InlineData("<<<<<<<\n<<<<<<<\n", 2)]
     [InlineData("<<<<<<<\n=======\n|||||||\n", 3)]
-    [InlineData("|||||||\n", 1)]
-    [InlineData(">>>>>>>\n", 1)]
     [InlineData("<<<<<<<\n>>>>>>>\n", 2)]
     [InlineData("<<<<<<<\n|||||||\n|||||||\n", 3)]
     [InlineData("<<<<<<<\n=======\n=======\n", 3)]
     public void RejectsMalformedStructure(string text, int line)
     {
         Assert.Contains($"line {line}", Assert.Throws<FormatException>(() => ConflictFile.Parse(text)).Message);
+    }
+
+    [Fact]
+    public void MarkerLikeLinesOutsideAConflictAreContent()
+    {
+        var text = "Title\n=======\n|||||||\n>>>>>>>\n<<<<<<< ours\nL\n=======\nR\n>>>>>>> theirs\nafter\n=======\n";
+
+        var parts = ConflictFile.Parse(text);
+
+        Assert.Equal(1, parts.ConflictCount);
+        Assert.Equal("Title\n=======\n|||||||\n>>>>>>>\nL\nafter\n=======\n", parts.Left);
+        Assert.Equal("Title\n=======\n|||||||\n>>>>>>>\nR\nafter\n=======\n", parts.Right);
+        var resolved = ConflictResolver.ResolveConflictText(text);
+        Assert.Equal(text, resolved.Text);
+        Assert.Equal(1, resolved.RemainingCount);
     }
 
     [Fact]

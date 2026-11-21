@@ -7,6 +7,8 @@ using DiffRapid.Semantic;
 
 namespace DiffRapid.Core.Tests;
 
+// Swaps the global Console.Out or Console.Error, so it shares a collection with every class that runs the CLI in-process.
+[Collection("Console")]
 public sealed class SemanticTests
 {
     // Raw string literals take the line breaks of the checkout (CRLF with core.autocrlf); the tests edit LF text.
@@ -136,6 +138,34 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MovesAcrossTypesHonourTheSimilarityPairLimit()
+    {
+        var left = "class A { int M(int x) { var y = x * 2; y += 3; y -= 1; return y; } }\nclass B { }\n";
+        var identical = "class A { }\nclass B { int M(int x) { var y = x * 2; y += 3; y -= 1; return y; } }\n";
+        var similar = "class A { }\nclass B { int M(int x) { var y = x * 2; y += 3; y -= 2; return y; } }\n";
+        var unscored = new MemberMatchOptions { MaxSimilarityPairs = 0 };
+
+        Assert.Contains(MemberMatcher.Compare(left, similar).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+        Assert.DoesNotContain(MemberMatcher.Compare(left, similar, unscored).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+        Assert.Contains(MemberMatcher.Compare(left, identical, unscored).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+    }
+
+    [Fact]
+    public void MovesOverThePairLimitPairEachRightWithItsIdenticalLeft()
+    {
+        // Two lefts share M(int)'s identity, so with no pairs allowed only identical bodies (found by lookup) pair.
+        var left = "class A { int a1; void M(int x) { One(); } }\nclass C { int c1; void M(int x) { Two(); } }\n";
+        var right = "class B { int b2; void M(int x) { Two(); } }\nclass D { int d2; void M(int x) { One(); } }\n";
+        var unscored = new MemberMatchOptions { MaxSimilarityPairs = 0 };
+
+        var moves = MemberMatcher.Compare(left, right, unscored).Flatten()
+            .Where(entry => entry.Status == MemberDiffStatus.Moved)
+            .Select(entry => entry.Left!.QualifiedName + " -> " + entry.Right!.QualifiedName)
+            .OrderBy(text => text, StringComparer.Ordinal);
+        Assert.Equal(["A.M(int) -> D.M(int)", "C.M(int) -> B.M(int)"], moves);
+    }
+
+    [Fact]
     public void DetectsMemberReorderedWithinType()
     {
         var area = "\n        public int Area(int scale)\n        {\n            var total = Width * Width;\n            return total * scale;\n        }\n";
@@ -224,6 +254,35 @@ public sealed class SemanticTests
         Assert.All(unimportant, hunk => Assert.Equal(CSharpUnimportantReason.UsingOrder, hunk.Reason));
         Assert.Equal(Compare(left, right).Hunks.Count, unimportant.Count);
         Assert.True(MemberMatcher.Compare(left, right).AreEqual);
+    }
+
+    [Theory]
+    [InlineData("class C { string s = @\"a\nb\"; }\n", "class C { string s = @\"a b\"; }\n")]
+    [InlineData("class C { string s = \"\"\"\na\nb\n\"\"\"; }\n", "class C { string s = \"\"\"\na b\n\"\"\"; }\n")]
+    [InlineData("class C { string s = @\"a\n  b\"; }\n", "class C { string s = @\"a\n    b\"; }\n")]
+    public void ChangesInsideMultiLineStringsAreImportant(string left, string right)
+    {
+        Assert.Empty(Classify(left, right));
+    }
+
+    [Fact]
+    public void ExplicitImplementationsOfDifferentGenericInterfacesKeepTheirOwnIdentity()
+    {
+        var text = "class C : IFoo<int>, IFoo<string> { void IFoo<int>.Bar() { } void IFoo<string>.Bar() { } }\n";
+
+        var members = MemberMatcher.ListMembers(text).SelectMany(member => member.Children).ToList();
+
+        Assert.Equal(2, members.Count);
+        Assert.Equal(2, members.Select(member => member.Key).Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData("class C { void IFoo<int.Bar() {} }\n")]
+    [InlineData("class C { void Bar<T() {} }\n")]
+    public void MalformedGenericNamesDoNotThrow(string text)
+    {
+        Assert.NotEmpty(MemberMatcher.ListMembers(text));
+        Assert.True(MemberMatcher.Compare(text, text).AreEqual);
     }
 
     [Fact]
@@ -380,7 +439,7 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void CliPrintsTheMemberTreeWithExitCodes()
+    public async Task CliPrintsTheMemberTreeWithExitCodes()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -393,18 +452,18 @@ public sealed class SemanticTests
             File.WriteAllText(right, Shapes.Replace("public int Area(int scale)", "public int ComputeArea(int scale)"));
             var output = new StringWriter();
             Console.SetOut(output);
-            Assert.Equal(1, Program.Main(["semantic", left, right]));
+            Assert.Equal(1, await Program.Main(["semantic", left, right]));
             var text = output.ToString();
             Assert.Contains("Unchanged  namespace Demo", text);
             Assert.Contains("    Renamed    method ComputeArea(int) (was Area(int))", text);
 
             File.WriteAllText(right, "  // comment\n" + Shapes.Replace("    ", "  "));
-            Assert.Equal(1, Program.Main(["semantic", left, right]));
-            Assert.Equal(0, Program.Main(["semantic", left, right, "--ignore", "format,comments"]));
-            Assert.Equal(0, Program.Main(["semantic", left, left]));
-            Assert.Equal(2, Program.Main(["semantic", left, right, "--ignore", "bogus"]));
-            Assert.Equal(2, Program.Main(["semantic", left]));
-            Assert.Equal(2, Program.Main(["semantic", left, Path.Combine(directory, "missing.cs")]));
+            Assert.Equal(1, await Program.Main(["semantic", left, right]));
+            Assert.Equal(0, await Program.Main(["semantic", left, right, "--ignore", "format,comments"]));
+            Assert.Equal(0, await Program.Main(["semantic", left, left]));
+            Assert.Equal(2, await Program.Main(["semantic", left, right, "--ignore", "bogus"]));
+            Assert.Equal(2, await Program.Main(["semantic", left]));
+            Assert.Equal(2, await Program.Main(["semantic", left, Path.Combine(directory, "missing.cs")]));
         }
         finally
         {

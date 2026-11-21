@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
@@ -29,13 +30,10 @@ internal sealed class XlsxCellReader
     private readonly bool _date1904;
     private readonly XlsxCellContent _content;
 
-    public XlsxCellReader(WorkbookPart workbookPart, XlsxCellContent content)
+    public XlsxCellReader(WorkbookPart workbookPart, XlsxCellContent content, CancellationToken cancellationToken)
     {
         _content = content;
-        _sharedStrings = workbookPart.SharedStringTablePart?.SharedStringTable?
-            .Elements<SharedStringItem>()
-            .Select(item => RichText(item))
-            .ToArray() ?? [];
+        _sharedStrings = ReadSharedStrings(workbookPart.SharedStringTablePart, cancellationToken);
         _styleDateKinds = ReadStyleDateKinds(workbookPart.WorkbookStylesPart?.Stylesheet);
         _date1904 = workbookPart.Workbook?.WorkbookProperties?.Date1904?.Value ?? false;
     }
@@ -253,6 +251,30 @@ internal sealed class XlsxCellReader
         }
 
         return text.ToString();
+    }
+
+    /// <summary>Streams the shared strings so that the table is not also held as a DOM.</summary>
+    private static string[] ReadSharedStrings(SharedStringTablePart? part, CancellationToken cancellationToken)
+    {
+        if (part is null)
+        {
+            return [];
+        }
+
+        var strings = new List<string>();
+        using var reader = OpenXmlReader.Create(part);
+        while (reader.Read())
+        {
+            if (reader.ElementType != typeof(SharedStringItem) || !reader.IsStartElement)
+            {
+                continue;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            strings.Add(RichText(reader.LoadCurrentElement()!));
+        }
+
+        return strings.ToArray();
     }
 
     private static DateKind[] ReadStyleDateKinds(Stylesheet? stylesheet)

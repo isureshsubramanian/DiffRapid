@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Xml;
 using DocumentFormat.OpenXml.Packaging;
 
 namespace DiffRapid.Documents.Internal;
@@ -7,8 +8,18 @@ namespace DiffRapid.Documents.Internal;
 /// <summary>Opens Open XML packages read-only and reports damaged files as <see cref="InvalidDataException"/>.</summary>
 internal static class OpenXmlPackages
 {
-    /// <summary>Opens a package from a stream, copying it to memory first when the stream cannot seek.</summary>
-    public static TPackage Open<TPackage>(Stream stream, Func<Stream, TPackage> open, string kind)
+    /// <summary>
+    /// The most characters the SDK reads from any one part (an estimate: about 256 MB of XML, far past the
+    /// parts of ordinary documents, while capping what one part can cost to parse or hold in memory).
+    /// </summary>
+    public const long MaxCharactersInPart = 128L * 1024 * 1024;
+
+    /// <summary>
+    /// Opens a package from a stream (copying it to memory first when the stream cannot seek) and reads it.
+    /// Parts load lazily, so damage found while reading is reported the same way as damage found on opening.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The package, or a part read from it, is damaged or over a limit.</exception>
+    public static TResult Read<TPackage, TResult>(Stream stream, Func<Stream, OpenSettings, TPackage> open, string kind, Func<TPackage, TResult> read)
         where TPackage : OpenXmlPackage
     {
         if (stream is null)
@@ -27,12 +38,67 @@ internal static class OpenXmlPackages
 
         try
         {
-            return open(seekable);
+            using var document = open(seekable, new OpenSettings { MaxCharactersInPart = MaxCharactersInPart });
+            CheckPartDepths(document);
+            return read(document);
         }
         catch (Exception ex) when (IsDamagedPackage(ex))
         {
             throw new InvalidDataException($"The file is not a readable {kind} document: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Streams every XML part once and rejects any nested deeper than <see cref="ExtractLimits.MaxDepth"/>, before the
+    /// SDK builds a DOM of it. The SDK's DOM load recurses once per element, so about 3,000 nested elements overflow
+    /// the stack, which no exception handler can catch; the extractors' own depth checks run only after that load.
+    /// Every part is checked, including ones the extractors load later (slides, sheets, shared strings, headers, notes).
+    /// The cost is one forward-only pass per part, bounded by <see cref="MaxCharactersInPart"/> like the SDK's own read.
+    /// </summary>
+    /// <exception cref="InvalidDataException">A part nests too deeply.</exception>
+    /// <exception cref="XmlException">A part is not well-formed XML, declares a DTD, or is over the character limit.</exception>
+    private static void CheckPartDepths(OpenXmlPackage document)
+    {
+        var settings = new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            MaxCharactersInDocument = MaxCharactersInPart,
+            IgnoreComments = true,
+            IgnoreWhitespace = true,
+        };
+        foreach (var part in document.GetAllParts())
+        {
+            if (!IsXmlPart(part))
+            {
+                continue;
+            }
+
+            using var stream = part.GetStream(FileMode.Open, FileAccess.Read);
+            using var reader = XmlReader.Create(stream, settings);
+            while (reader.Read())
+            {
+                ExtractLimits.CheckDepth(reader.Depth);
+            }
+        }
+    }
+
+    // Only parts the SDK parses as XML. Every Office content type contains "xml", including binary ones such as the
+    // printer settings Excel saves with a page setup, so the test is the "+xml" suffix or a plain XML type. Images
+    // (an SVG may carry a DOCTYPE) and embedded packages are never parsed by the SDK or the extractors.
+    private static bool IsXmlPart(OpenXmlPart part)
+    {
+        if (part is ImagePart or EmbeddedPackagePart or EmbeddedObjectPart)
+        {
+            return false;
+        }
+
+        var type = part.ContentType;
+        var parameters = type.IndexOf(';');
+        type = (parameters < 0 ? type : type.Substring(0, parameters)).Trim();
+        return type.EndsWith("+xml", StringComparison.OrdinalIgnoreCase)
+            || type.Equals("application/xml", StringComparison.OrdinalIgnoreCase)
+            || type.Equals("text/xml", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDamagedPackage(Exception exception) =>

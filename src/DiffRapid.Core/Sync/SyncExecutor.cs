@@ -4,10 +4,14 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
+using DiffRapid.Core.IO;
 
 namespace DiffRapid.Core.Sync;
 
-/// <summary>Deletes a file or an empty folder. The Visual Studio extension supplies one that uses the Recycle Bin.</summary>
+/// <summary>
+/// Deletes a file or an empty folder. The Visual Studio extension supplies one that uses the Recycle Bin. It is only
+/// given files and empty folders that are not links, and must delete just that entry: never recurse.
+/// </summary>
 public delegate void SyncDeleteHandler(string path, bool isFolder);
 
 /// <summary>What happened to one planned operation.</summary>
@@ -53,7 +57,6 @@ public sealed record SyncExecuteOptions
 public static class SyncExecutor
 {
     private const int BufferSize = 64 * 1024;
-    private const string TempSuffix = ".diffrapid-sync.tmp";
 
     /// <summary>
     /// Executes the operations of <paramref name="plan"/> that <paramref name="include"/> accepts (all when null), in
@@ -207,6 +210,16 @@ public static class SyncExecutor
         {
             RequireUnchanged(operation, target);
         }
+        else if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            // A handler such as the Recycle Bin could act on what the link points to.
+            throw new IOException("Links are not followed: " + target);
+        }
+        else if (Directory.EnumerateFileSystemEntries(target).Any())
+        {
+            // Contents are deleted one by one by earlier operations; anything left was not planned (or not included).
+            throw new IOException("The folder is not empty: " + target);
+        }
 
         delete(target, isFolder);
     }
@@ -226,29 +239,27 @@ public static class SyncExecutor
 
     private static void CopySafely(string source, string target, CancellationToken cancellationToken)
     {
-        var folder = Path.GetDirectoryName(target) ?? throw new IOException("The target has no folder: " + target);
-        var temp = Path.Combine(folder, "." + Path.GetFileName(target) + "." + Guid.NewGuid().ToString("N") + TempSuffix);
-        try
-        {
-            var sourceHash = CopyWithHash(source, temp, cancellationToken);
-            Verify(source, temp, sourceHash, cancellationToken);
-            File.SetLastWriteTimeUtc(temp, File.GetLastWriteTimeUtc(source));
-            Replace(temp, target);
-        }
-        finally
-        {
-            if (File.Exists(temp))
+        // The copy is checked on disk against the source's hash before it replaces the target. A read-only target is
+        // replaced as planned.
+        byte[]? sourceHash = null;
+        var lastWrite = DateTime.MinValue;
+        AtomicFile.Write(
+            target,
+            output => sourceHash = CopyWithHash(source, output, cancellationToken),
+            replaceReadOnly: true,
+            beforeReplace: temp =>
             {
-                File.Delete(temp);
-            }
-        }
+                Verify(source, temp, sourceHash!, cancellationToken);
+                lastWrite = File.GetLastWriteTimeUtc(source);
+                File.SetLastWriteTimeUtc(temp, lastWrite);
+            });
+        File.SetLastWriteTimeUtc(target, lastWrite);
     }
 
-    private static byte[] CopyWithHash(string source, string temp, CancellationToken cancellationToken)
+    private static byte[] CopyWithHash(string source, Stream output, CancellationToken cancellationToken)
     {
         using var hash = SHA256.Create();
         using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize);
-        using var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, BufferSize);
         var buffer = new byte[BufferSize];
         int read;
         while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
@@ -259,7 +270,6 @@ public static class SyncExecutor
         }
 
         hash.TransformFinalBlock(buffer, 0, 0);
-        output.Flush(flushToDisk: true);
         return hash.Hash;
     }
 
@@ -290,25 +300,5 @@ public static class SyncExecutor
 
         hash.TransformFinalBlock(buffer, 0, 0);
         return hash.Hash;
-    }
-
-    // The verified copy takes the target's place in one rename where the platform allows it.
-    private static void Replace(string temp, string target)
-    {
-        if (!File.Exists(target))
-        {
-            File.Move(temp, target);
-            return;
-        }
-
-        var attributes = File.GetAttributes(target);
-        if ((attributes & FileAttributes.ReadOnly) != 0)
-        {
-            File.SetAttributes(target, attributes & ~FileAttributes.ReadOnly);
-        }
-
-        var lastWrite = File.GetLastWriteTimeUtc(temp);
-        File.Replace(temp, target, destinationBackupFileName: null);
-        File.SetLastWriteTimeUtc(target, lastWrite);
     }
 }

@@ -21,7 +21,6 @@ using System.Windows.Threading;
 using DiffRapid.Core.Folders;
 using DiffRapid.Core.Output;
 using DiffRapid.Core.Sync;
-using Microsoft.VisualBasic.FileIO;
 using Microsoft.Win32;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Imaging;
@@ -29,6 +28,8 @@ using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
+using static DiffRapid.VisualStudio.UI.UiText;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio.UI;
@@ -500,16 +501,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         var template = new DataTemplate { VisualTree = text };
         template.Triggers.Add(newer);
         return template;
-    }
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
     }
 
     private void SetRows(ObservableCollection<FolderRow> rows)
@@ -1069,13 +1060,15 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         groups.Add(open);
 
+        // The entries come from cheap checks of the selected rows only; building the full copy or delete plan walks
+        // every file in a selected folder, and that waits until an entry is picked.
         var copy = new List<MenuItem>();
-        if (ready && !FolderCopyPlan.Create(selected, toRight: true).IsEmpty)
+        if (ready && selected.Any(i => MightCopy(i, toRight: true)))
         {
             copy.Add(MenuEntry("Copy to right", KnownMonikers.Forwards, "Ctrl+F8", () => CopySelection(toRight: true)));
         }
 
-        if (ready && !FolderCopyPlan.Create(selected, toRight: false).IsEmpty)
+        if (ready && selected.Any(i => MightCopy(i, toRight: false)))
         {
             copy.Add(MenuEntry("Copy to left", KnownMonikers.Backwards, "Ctrl+Shift+F8", () => CopySelection(toRight: false)));
         }
@@ -1084,12 +1077,12 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         var delete = new List<MenuItem>();
         var onlySide = FolderDeletePlan.OnlySide(selected);
-        if (ready && !FolderDeletePlan.Create(selected, fromLeft: true).IsEmpty)
+        if (ready && selected.Any(i => i.RelativePath.Length > 0 && i.Left.Exists))
         {
             delete.Add(MenuEntry("Delete from left…", KnownMonikers.Delete, onlySide == true ? "Del" : null, () => DeleteSelection(fromLeft: true)));
         }
 
-        if (ready && !FolderDeletePlan.Create(selected, fromLeft: false).IsEmpty)
+        if (ready && selected.Any(i => i.RelativePath.Length > 0 && i.Right.Exists))
         {
             delete.Add(MenuEntry("Delete from right…", KnownMonikers.Delete, onlySide == false ? "Del" : null, () => DeleteSelection(fromLeft: false)));
         }
@@ -1125,6 +1118,15 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             e.Handled = true;
         }
     }
+
+    // Whether copying this entry could do something, the way FolderCopyPlan decides, without looking inside a folder:
+    // a folder whose files are all the same on both sides is reported when the entry is picked.
+    private static bool MightCopy(FolderCompareItem item, bool toRight) =>
+        (toRight ? item.Left : item.Right).Exists
+        && item.Status is not (FolderCompareStatus.Skipped or FolderCompareStatus.TypeConflict)
+        && (item.Kind == FolderItemKind.Folder
+            ? !(toRight ? item.Right : item.Left).Exists || item.Status != FolderCompareStatus.Identical
+            : item.Kind == FolderItemKind.File && item.Status is not (FolderCompareStatus.Identical or FolderCompareStatus.Error));
 
     private static MenuItem MenuEntry(string header, ImageMoniker icon, string? gesture, Action action)
     {
@@ -1185,8 +1187,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         var dialog = new SaveFileDialog
         {
             Title = "Export folder comparison report",
-            FileName = string.Concat((left + " vs " + right + " report")
-                .Select(c => Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            FileName = UiText.SafeFileName(left + " vs " + right + " report"),
             Filter = "HTML report, differences only (*.html)|*.html"
                 + "|HTML report, all files (*.html)|*.html"
                 + "|CSV, differences only (*.csv)|*.csv"
@@ -1210,31 +1211,83 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             IncludeIdentical = dialog.FilterIndex % 2 == 0,
         };
 
+        var result = _result;
+        var path = dialog.FileName;
+        RunExport(
+            "Saving the report…",
+            "Could not save the report: ",
+            () =>
+            {
+                // CSV gets a byte order mark so Excel reads non-ASCII paths correctly.
+                UiText.WriteText(path, new UTF8Encoding(encoderShouldEmitUTF8Identifier: !html), writer =>
+                {
+                    if (html)
+                    {
+                        FolderReportWriter.WriteHtml(result, options, writer);
+                    }
+                    else
+                    {
+                        FolderReportWriter.WriteCsv(result, options, writer);
+                    }
+                });
+                return $"Saved the report to {path}";
+            },
+            html ? () => OpenReport(path) : null);
+    }
+
+    private void OpenReport(string path)
+    {
         try
         {
-            // CSV gets a byte order mark so Excel reads non-ASCII paths correctly.
-            using (var writer = new StreamWriter(dialog.FileName, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: !html)))
+            Process.Start(path);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            _position.Text = $"Saved the report, but could not open it: {ex.Message}";
+        }
+    }
+
+    // Writes a report or patch off the UI thread; the buttons stay disabled and the footer says so until it is done.
+    // The work returns the footer message; when it throws, the footer shows the failure instead and done is skipped.
+    private void RunExport(string busyText, string failure, Func<string> work, Action? done = null)
+    {
+        _busy = true;
+        UpdateActionButtons();
+        _position.Text = busyText;
+        _package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            string? message = null;
+            var succeeded = false;
+            try
             {
-                if (html)
-                {
-                    FolderReportWriter.WriteHtml(_result, options, writer);
-                }
-                else
-                {
-                    FolderReportWriter.WriteCsv(_result, options, writer);
-                }
+                message = await Task.Run(work, _package.DisposalToken);
+                succeeded = true;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                message = failure + ex.Message;
+            }
+            finally
+            {
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                _busy = false;
             }
 
-            _position.Text = $"Saved the report to {dialog.FileName}";
-            if (html)
+            if (_disposed || message is null)
             {
-                Process.Start(dialog.FileName);
+                return;
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        {
-            _position.Text = $"Could not save the report: {ex.Message}";
-        }
+
+            UpdateActionButtons();
+            _position.Text = message;
+            if (succeeded)
+            {
+                done?.Invoke();
+            }
+        }).FileAndForget("DiffRapid/FolderExport");
     }
 
     // One git-style patch for every changed, added and removed text file; it always compares exact content.
@@ -1247,16 +1300,19 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         var result = _result;
         var names = ReportNames();
-        var message = PatchExport.Save(
-            names.Left.Replace(Path.DirectorySeparatorChar, ' ') + " to " + names.Right.Replace(Path.DirectorySeparatorChar, ' '),
-            writer => FolderPatchWriter.Write(writer, result, DiffRapid.Core.Comparison.CompareOptions.Default));
-        if (message is not null)
+        var path = PatchExport.AskPath(names.Left.Replace(Path.DirectorySeparatorChar, ' ') + " to " + names.Right.Replace(Path.DirectorySeparatorChar, ' '));
+        if (path is null)
         {
-            _position.Text = message;
+            return;
         }
+
+        RunExport(
+            "Creating the patch…",
+            "Could not save the patch: ",
+            () => PatchExport.Write(path, writer => FolderPatchWriter.Write(writer, result, DiffRapid.Core.Comparison.CompareOptions.Default)));
     }
 
-    // Previews a sync profile over the current results, then runs it; deletions go to the Recycle Bin.
+    // Previews a sync profile over the current results, then runs it; deletions go to the Recycle Bin where there is one.
     private void Synchronize()
     {
         if (_scanning || _busy || _result is null)
@@ -1270,7 +1326,31 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             return;
         }
 
-        var options = new SyncExecuteOptions { Delete = RecycleDelete };
+        // Deletions on a side without a Recycle Bin are permanent, so they need a second yes.
+        var deletes = plan.Operations.Where(o => o.Action == SyncAction.Delete).ToList();
+        var permanentRoots = new List<string>();
+        foreach (var root in new[] { (Direction: SyncDirection.RightToLeft, Root: _leftRoot), (Direction: SyncDirection.LeftToRight, Root: _rightRoot) })
+        {
+            if (deletes.Any(o => o.Direction == root.Direction) && !RecycleBin.CanRecycle(root.Root))
+            {
+                if (!ConfirmPermanentDelete(root.Root))
+                {
+                    return;
+                }
+
+                permanentRoots.Add(Path.GetFullPath(root.Root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar);
+            }
+        }
+
+        // Only a side the user agreed to delete permanently on skips the Recycle Bin; anything else goes there.
+        var owner = RecycleBin.OwnerWindow();
+        var options = new SyncExecuteOptions
+        {
+            Delete = (path, _) => RecycleBin.Delete(
+                path,
+                owner,
+                permanent: permanentRoots.Any(root => Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase))),
+        };
         RunFileOperation(
             "Synchronizing…",
             cancellation => SyncExecutor.Execute(plan, null, options, cancellation)
@@ -1281,18 +1361,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             errors => errors == 0
                 ? $"Synchronized: {Plural(plan.Operations.Count(o => o.ChangesFiles), "operation")}."
                 : $"Synchronized with {errors:N0} {(errors == 1 ? "failure" : "failures")}");
-    }
-
-    private static void RecycleDelete(string path, bool isFolder)
-    {
-        if (isFolder)
-        {
-            FileSystem.DeleteDirectory(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
-        }
-        else
-        {
-            FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
-        }
     }
 
     // Folders with the same name are told apart by their parent folder, e.g. "Xls" vs "Xls-10272026\Xls".
@@ -1309,13 +1377,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
     {
         var parent = Path.GetDirectoryName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return string.IsNullOrEmpty(parent) ? FolderName(path) : Path.Combine(FolderName(parent!), FolderName(path));
-    }
-
-    private static string FolderName(string path)
-    {
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var name = Path.GetFileName(trimmed);
-        return string.IsNullOrEmpty(name) ? trimmed : name;
     }
 
     // Copies the selected entries to the other side after a confirmation, then compares again.
@@ -1402,14 +1463,36 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             return;
         }
 
+        var recycle = RecycleBin.CanRecycle(root);
+        if (!recycle && !ConfirmPermanentDelete(root))
+        {
+            return;
+        }
+
+        var owner = RecycleBin.OwnerWindow();
         RunFileOperation(
             $"Deleting {what} on the {side}…",
-            token => plan.Run(root, token),
+            token => plan.Run(root, owner, permanent: !recycle, token),
             "Delete",
             errors => errors == 0
-                ? $"Moved {what} on the {side} to the Recycle Bin."
+                ? recycle ? $"Moved {what} on the {side} to the Recycle Bin." : $"Deleted {what} on the {side} permanently."
                 : $"Deleted on the {side} with {errors:N0} {(errors == 1 ? "failure" : "failures")}");
     }
+
+    // A second question for a drive without a Recycle Bin (a network share, a removable drive, or a link that may
+    // lead to one), where the first question's "Recycle Bin" would not be true: there the delete cannot be undone.
+    private bool ConfirmPermanentDelete(string root) =>
+        VsShellUtilities.ShowMessageBox(
+            _package,
+            "This folder is on a network share, a drive without a Recycle Bin or behind a link to another location, so the items cannot be moved there."
+                + Environment.NewLine + Environment.NewLine
+                + "Delete them permanently? This cannot be undone."
+                + Environment.NewLine + Environment.NewLine
+                + "From: " + root,
+            "DiffRapid: Delete permanently",
+            OLEMSGICON.OLEMSGICON_WARNING,
+            OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND) == (int)VSConstants.MessageBoxResult.IDYES;
 
     private bool Confirm(string message, string title, bool warn) =>
         VsShellUtilities.ShowMessageBox(
@@ -1428,7 +1511,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _position.Text = busyText;
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
-            IReadOnlyList<string> errors;
+            IReadOnlyList<string> errors = Array.Empty<string>();
+            Exception? failure = null;
             try
             {
                 errors = await Task.Run(() => work(_package.DisposalToken));
@@ -1437,10 +1521,19 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             {
                 return;
             }
+            catch (Exception ex)
+            {
+                // Anything the per-item handling did not expect still ends the operation.
+                failure = ex;
+            }
             finally
             {
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
                 _busy = false;
+                if (!_disposed)
+                {
+                    UpdateActionButtons();
+                }
             }
 
             if (_disposed)
@@ -1448,9 +1541,18 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
                 return;
             }
 
-            foreach (var error in errors)
+            if (failure is not null)
             {
-                Diagnostics.WriteLine($"[{DateTime.Now:HH:mm:ss}] {verb} failed: {error}");
+                // The folders may have changed part-way, so they are compared again.
+                Diagnostics.LogError(failure);
+                _afterScanMessage = $"{verb} stopped: {failure.Message}";
+                StartScan();
+                return;
+            }
+
+            if (errors.Count > 0)
+            {
+                Diagnostics.WriteLines(errors.Select(error => $"[{DateTime.Now:HH:mm:ss}] {verb} failed: {error}"));
             }
 
             _afterScanMessage = errors.Count == 0
@@ -1459,11 +1561,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             StartScan();
         }).FileAndForget("DiffRapid/Folder" + verb);
     }
-
-    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
-
-    private static string FormatElapsed(TimeSpan elapsed) =>
-        elapsed.TotalMilliseconds < 1000 ? $"{Math.Max(1, (int)elapsed.TotalMilliseconds)} ms" : $"{elapsed.TotalSeconds:0.0} s";
 
     /// <summary>What the list showed before a rescan: open folders, selected rows and the top row, by relative path.</summary>
     private sealed class ViewState

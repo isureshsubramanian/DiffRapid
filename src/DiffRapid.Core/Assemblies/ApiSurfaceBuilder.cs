@@ -26,7 +26,7 @@ internal sealed partial class ApiSurfaceBuilder
         var visible = new List<TypeDefinitionHandle>();
         foreach (var handle in _reader.TypeDefinitions)
         {
-            if (IsVisible(_reader.GetTypeDefinition(handle)))
+            if (IsVisible(_reader.GetTypeDefinition(handle), 0))
             {
                 visible.Add(handle);
             }
@@ -45,7 +45,7 @@ internal sealed partial class ApiSurfaceBuilder
         return _entries;
     }
 
-    private bool IsVisible(TypeDefinition definition)
+    private bool IsVisible(TypeDefinition definition, int depth)
     {
         switch (definition.Attributes & TypeAttributes.VisibilityMask)
         {
@@ -54,7 +54,8 @@ internal sealed partial class ApiSurfaceBuilder
             case TypeAttributes.NestedPublic:
             case TypeAttributes.NestedFamily:
             case TypeAttributes.NestedFamORAssem:
-                return IsVisible(_reader.GetTypeDefinition(definition.GetDeclaringType()));
+                MetadataNames.CheckNestingDepth(depth + 1);
+                return IsVisible(_reader.GetTypeDefinition(definition.GetDeclaringType()), depth + 1);
             default:
                 return false;
         }
@@ -165,7 +166,7 @@ internal sealed partial class ApiSurfaceBuilder
             var field = _reader.GetFieldDefinition(handle);
             if ((field.Attributes & FieldAttributes.Static) == 0)
             {
-                return TypeShapeWriter.WriteOblivious(field.DecodeSignature(_provider, scope.Generics));
+                return TypeShapeWriter.WriteOblivious(DecodeField(field, scope.Generics));
             }
         }
 
@@ -182,7 +183,7 @@ internal sealed partial class ApiSurfaceBuilder
                 continue;
             }
 
-            var signature = method.DecodeSignature(_provider, scope.Generics);
+            var signature = DecodeMethod(method, scope.Generics);
             var context = MetadataNames.NullableContext(_reader, method.GetCustomAttributes()) ?? scope.NullableContext;
             var rows = ParameterRows(method, signature.ParameterTypes.Length);
             var returns = ReturnText(signature.ReturnType, rows[0], context);
@@ -264,9 +265,34 @@ internal sealed partial class ApiSurfaceBuilder
     {
         HandleKind.TypeDefinition => _provider.GetTypeFromDefinition(_reader, (TypeDefinitionHandle)handle, 0),
         HandleKind.TypeReference => _provider.GetTypeFromReference(_reader, (TypeReferenceHandle)handle, 0),
-        HandleKind.TypeSpecification => _reader.GetTypeSpecification((TypeSpecificationHandle)handle).DecodeSignature(_provider, generics),
+        HandleKind.TypeSpecification => DecodeTypeSpecification((TypeSpecificationHandle)handle, generics),
         _ => TypeShape.Named("?", false),
     };
+
+    // Every signature decode goes through these, so each blob is depth-checked before the recursive decoder reads it.
+    private TypeShape DecodeTypeSpecification(TypeSpecificationHandle handle, GenericScope generics)
+    {
+        SignatureDepth.CheckTypeSpecification(_reader, handle);
+        return _reader.GetTypeSpecification(handle).DecodeSignature(_provider, generics);
+    }
+
+    private TypeShape DecodeField(FieldDefinition field, GenericScope generics)
+    {
+        SignatureDepth.CheckSignature(_reader, field.Signature);
+        return field.DecodeSignature(_provider, generics);
+    }
+
+    private MethodSignature<TypeShape> DecodeMethod(MethodDefinition method, GenericScope generics)
+    {
+        SignatureDepth.CheckSignature(_reader, method.Signature);
+        return method.DecodeSignature(_provider, generics);
+    }
+
+    private MethodSignature<TypeShape> DecodeProperty(PropertyDefinition property, GenericScope generics)
+    {
+        SignatureDepth.CheckSignature(_reader, property.Signature);
+        return property.DecodeSignature(_provider, generics);
+    }
 
     private NullableFlags Flags(CustomAttributeHandleCollection attributes, byte context) =>
         new(MetadataNames.NullableFlags(_reader, attributes), context);
@@ -292,8 +318,9 @@ internal sealed partial class ApiSurfaceBuilder
             SimpleName = tick < 0 ? name : name.Substring(0, tick);
             var outermost = Definition;
             byte? context = MetadataNames.NullableContext(reader, Definition.GetCustomAttributes());
-            while (!outermost.GetDeclaringType().IsNil)
+            for (var depth = 1; !outermost.GetDeclaringType().IsNil; depth++)
             {
+                MetadataNames.CheckNestingDepth(depth);
                 outermost = reader.GetTypeDefinition(outermost.GetDeclaringType());
                 context ??= MetadataNames.NullableContext(reader, outermost.GetCustomAttributes());
             }

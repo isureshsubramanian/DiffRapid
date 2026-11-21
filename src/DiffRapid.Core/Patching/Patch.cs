@@ -222,26 +222,23 @@ public sealed record Patch(IReadOnlyList<FilePatch> Files)
 
     private static string? ParsePath(string value, int line)
     {
-        var tab = value.IndexOf('\t');
-        if (tab >= 0)
-        {
-            value = value.Substring(0, tab);
-        }
-
         if (value.StartsWith("\"", StringComparison.Ordinal))
         {
-            if (!value.EndsWith("\"", StringComparison.Ordinal) || value.Length < 2)
+            // Git's C-style quoting; after the closing quote only a tab (and a timestamp) may follow.
+            var unquoted = PatchPath.Unquote(value);
+            if (unquoted is not { } quoted || (quoted.End < value.Length && value[quoted.End] != '\t'))
             {
                 throw Error(line, "invalid quoted patch path");
             }
 
-            try
+            value = quoted.Path;
+        }
+        else
+        {
+            var tab = value.IndexOf('\t');
+            if (tab >= 0)
             {
-                value = Regex.Unescape(value.Substring(1, value.Length - 2));
-            }
-            catch (ArgumentException)
-            {
-                throw Error(line, "invalid escape in quoted patch path");
+                value = value.Substring(0, tab);
             }
         }
 

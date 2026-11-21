@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
+using DiffRapid.Core.Plugins;
 
 namespace DiffRapid.Core.Assemblies;
 
@@ -61,6 +62,27 @@ public sealed record NuGetPackage(string Id, string Version, IReadOnlyList<NuGet
 /// <summary>Reads a NuGet package (a zip file) without extracting it to disk.</summary>
 public static class NuGetPackageReader
 {
+    /// <summary>
+    /// The largest library read (an estimate: well above the biggest managed assemblies shipped on nuget.org,
+    /// whose whole packages are limited to 250 MB compressed).
+    /// </summary>
+    internal const long MaxLibraryBytes = 256L * 1024 * 1024;
+
+    /// <summary>The most library bytes inflated from one package (an estimate: four libraries at the limit).</summary>
+    internal const long MaxTotalLibraryBytes = 4 * MaxLibraryBytes;
+
+    /// <summary>
+    /// The largest .nuspec read (an estimate: real nuspecs are a few kilobytes, even with long descriptions and
+    /// release notes), so a highly compressed one cannot inflate without bound.
+    /// </summary>
+    internal const long MaxNuspecBytes = 1024 * 1024;
+
+    /// <summary>
+    /// The deepest element nesting read from a .nuspec (an estimate: real ones nest five levels, package to
+    /// dependency). XElement.Value recurses once per level, so deeper nesting could overflow the stack.
+    /// </summary>
+    internal const int MaxNuspecDepth = 32;
+
     /// <summary>Reads a .nupkg file.</summary>
     /// <exception cref="InvalidDataException">The file is not a valid package, or a library is not a valid assembly.</exception>
     public static NuGetPackage Read(string path, CancellationToken cancellationToken = default)
@@ -73,18 +95,20 @@ public static class NuGetPackageReader
     /// <exception cref="InvalidDataException">The data is not a valid package, or a library is not a valid assembly.</exception>
     public static NuGetPackage Read(Stream stream, CancellationToken cancellationToken = default)
     {
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
-        var nuspec = archive.Entries.FirstOrDefault(entry => entry.FullName.IndexOfAny(['/', '\\']) < 0
+        using var archive = ZipReadBudget.Open(stream);
+        var entries = ZipReadBudget.Entries(archive);
+        var nuspec = entries.FirstOrDefault(entry => entry.FullName.IndexOfAny(['/', '\\']) < 0
             && entry.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException("The package has no .nuspec file at its root.");
-        var metadata = ReadNuspec(nuspec);
+        var metadata = ReadNuspec(nuspec, cancellationToken);
         var libraries = new List<NuGetLibrary>();
-        foreach (var entry in archive.Entries)
+        var budget = new ZipReadBudget(MaxLibraryBytes, MaxTotalLibraryBytes);
+        foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (LibraryFramework(entry.FullName) is { } framework)
             {
-                libraries.Add(ReadLibrary(entry, framework, cancellationToken));
+                libraries.Add(ReadLibrary(entry, framework, budget, cancellationToken));
             }
         }
 
@@ -92,14 +116,27 @@ public static class NuGetPackageReader
         return metadata with { Libraries = libraries.AsReadOnly() };
     }
 
-    private static NuGetPackage ReadNuspec(ZipArchiveEntry entry)
+    private static NuGetPackage ReadNuspec(ZipArchiveEntry entry, CancellationToken cancellationToken)
     {
+        // The total is set past the entry size only so that the entry size is the limit that reports.
+        var bytes = new ZipReadBudget(MaxNuspecBytes, 2 * MaxNuspecBytes).Read(entry, cancellationToken)
+            ?? throw new InvalidDataException($"The package's .nuspec is larger than {MaxNuspecBytes} bytes.");
         XDocument document;
         try
         {
-            using var stream = entry.Open();
-            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
-            using var reader = XmlReader.Create(stream, settings);
+            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxNuspecBytes };
+            using (var scan = XmlReader.Create(new MemoryStream(bytes, writable: false), settings))
+            {
+                while (scan.Read())
+                {
+                    if (scan.Depth > MaxNuspecDepth)
+                    {
+                        throw new InvalidDataException($"The package's .nuspec nests more than {MaxNuspecDepth} levels deep.");
+                    }
+                }
+            }
+
+            using var reader = XmlReader.Create(new MemoryStream(bytes, writable: false), settings);
             document = XDocument.Load(reader);
         }
         catch (XmlException exception)
@@ -158,17 +195,14 @@ public static class NuGetPackageReader
         return isLibrary ? Uri.UnescapeDataString(parts[1]) : null;
     }
 
-    private static NuGetLibrary ReadLibrary(ZipArchiveEntry entry, string framework, CancellationToken cancellationToken)
+    private static NuGetLibrary ReadLibrary(ZipArchiveEntry entry, string framework, ZipReadBudget budget, CancellationToken cancellationToken)
     {
-        // The metadata reader needs a seekable stream, which a zip entry is not.
-        using var buffer = new MemoryStream();
-        using (var source = entry.Open())
-        {
-            source.CopyTo(buffer);
-        }
-
-        buffer.Position = 0;
         var path = Uri.UnescapeDataString(entry.FullName.Replace('\\', '/'));
+
+        // The metadata reader needs a seekable stream, which a zip entry is not.
+        var bytes = budget.Read(entry, cancellationToken)
+            ?? throw new InvalidDataException($"{path}: the library is larger than {MaxLibraryBytes} bytes.");
+        using var buffer = new MemoryStream(bytes, writable: false);
         try
         {
             return new NuGetLibrary(framework, path, ApiReader.Read(buffer, cancellationToken));

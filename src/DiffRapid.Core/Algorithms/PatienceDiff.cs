@@ -6,34 +6,28 @@ namespace DiffRapid.Core.Algorithms;
 /// <summary>
 /// Patience diff: anchors on elements that occur exactly once on each side, keeps the longest
 /// increasing run of those anchors, recurses between them and falls back to Myers when no unique
-/// anchors exist.
+/// anchors exist. Regions nested deeper than <see cref="MaxDepth"/> anchor levels also fall back to Myers.
 /// </summary>
 public sealed class PatienceDiff : IDiffAlgorithm
 {
+    // Same bound as HistogramDiff. Each level scans disjoint ranges, so anchoring costs at most
+    // MaxDepth + 1 passes over the input, and the stack stays a fixed size whatever the input.
+    private const int MaxDepth = 64;
+
     public void Compare(int[] a, int[] b, bool[] changedA, bool[] changedB, CancellationToken cancellationToken)
     {
-        Diff(a, 0, a.Length, b, 0, b.Length, changedA, changedB, cancellationToken);
+        Diff(a, 0, a.Length, b, 0, b.Length, changedA, changedB, 0, cancellationToken);
     }
 
     private static void Diff(
         int[] a, int aLo, int aHi, int[] b, int bLo, int bHi,
-        bool[] changedA, bool[] changedB, CancellationToken cancellationToken)
+        bool[] changedA, bool[] changedB, int depth, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        while (aLo < aHi && bLo < bHi && a[aLo] == b[bLo])
-        {
-            aLo++;
-            bLo++;
-        }
+        MyersDiff.TrimCommonEnds(a, ref aLo, ref aHi, b, ref bLo, ref bHi);
 
-        while (aLo < aHi && bLo < bHi && a[aHi - 1] == b[bHi - 1])
-        {
-            aHi--;
-            bHi--;
-        }
-
-        if (aLo == aHi || bLo == bHi)
+        if (aLo == aHi || bLo == bHi || depth > MaxDepth)
         {
             MyersDiff.CompareRange(a, aLo, aHi, b, bLo, bHi, changedA, changedB, cancellationToken);
             return;
@@ -50,12 +44,12 @@ public sealed class PatienceDiff : IDiffAlgorithm
         var prevB = bLo;
         foreach (var (ai, bj) in anchors)
         {
-            Diff(a, prevA, ai, b, prevB, bj, changedA, changedB, cancellationToken);
+            Diff(a, prevA, ai, b, prevB, bj, changedA, changedB, depth + 1, cancellationToken);
             prevA = ai + 1;
             prevB = bj + 1;
         }
 
-        Diff(a, prevA, aHi, b, prevB, bHi, changedA, changedB, cancellationToken);
+        Diff(a, prevA, aHi, b, prevB, bHi, changedA, changedB, depth + 1, cancellationToken);
     }
 
     // Returns the longest chain of (aIndex, bIndex) pairs of unique-on-both-sides elements that is

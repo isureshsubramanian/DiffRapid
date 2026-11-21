@@ -4,6 +4,8 @@ using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class TextFileInfoTests
 {
     [Theory]
@@ -67,7 +69,7 @@ public sealed class TextFileInfoTests
     }
 
     [Fact]
-    public void CliInfoAndCodePageOverride()
+    public async Task CliInfoAndCodePageOverride()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -77,15 +79,15 @@ public sealed class TextFileInfoTests
             var right = Path.Combine(directory, "right.txt");
             File.WriteAllBytes(left, [0x80]);
             File.WriteAllBytes(right, [0x3F]);
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet"]));
-            Assert.Equal(0, Program.Main(["diff", left, right, "--quiet", "--cp", "20127"]));
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet", "--cp", "1252"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--cp", "invalid"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--cp", "99999"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--cp"]));
-            Assert.Equal(0, Program.Main(["info", left]));
-            Assert.Equal(2, Program.Main(["info"]));
-            Assert.Equal(2, Program.Main(["info", left, right]));
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet"]));
+            Assert.Equal(0, await Program.Main(["diff", left, right, "--quiet", "--cp", "20127"]));
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet", "--cp", "1252"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--cp", "invalid"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--cp", "99999"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--cp"]));
+            Assert.Equal(0, await Program.Main(["info", left]));
+            Assert.Equal(2, await Program.Main(["info"]));
+            Assert.Equal(2, await Program.Main(["info", left, right]));
             Assert.Equal("\u20ac", TextFileReader.ReadFile(left,
                 overrideEncoding: Encoding.GetEncoding(1252)).Text);
             Assert.Equal("Encoding: Latin-1\nHas BOM: False\nDominant line ending: NONE\n" +

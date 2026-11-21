@@ -16,7 +16,10 @@ namespace DiffRapid.Core.Folders;
 /// </summary>
 internal static class FolderRenameDetector
 {
-    private const int TextProbeSize = 8000;
+    // Estimate: a line found in more right-side files than this (a lone brace, a license header) says little about
+    // which pair belongs together, and leaving it out keeps the shared-line counting at most this many updates per
+    // left line instead of quadratic in the number of files.
+    private const int MaxFilesPerLine = 100;
     private static readonly string[] LineBreaks = { "\r\n", "\n", "\r" };
 
     /// <summary>Returns the root with paired files marked Renamed or Moved, and adds every changed item to <paramref name="revised"/>.</summary>
@@ -191,6 +194,14 @@ internal static class FolderRenameDetector
             }
         }
 
+        // Too-common lines (a shared header) leave the index, so they alone never make two files candidates and the
+        // lookup stays fast. The similarity of a candidate pair still counts them, measured over the full line sets.
+        var common = new HashSet<ulong>(index.Where(entry => entry.Value.Count > MaxFilesPerLine).Select(entry => entry.Key));
+        foreach (var line in common)
+        {
+            index.Remove(line);
+        }
+
         var scored = new List<Pair>();
         for (var i = 0; i < leftLines.Length; i++)
         {
@@ -210,9 +221,11 @@ internal static class FolderRenameDetector
                 }
             }
 
+            var leftCommon = common.Count == 0 ? null : leftLines[i].Where(common.Contains).ToList();
             foreach (var match in shared)
             {
-                var similarity = match.Value / (double)(leftLines[i].Count + rightLines[match.Key].Count - match.Value);
+                var both = match.Value + (leftCommon?.Count(rightLines[match.Key].Contains) ?? 0);
+                var similarity = both / (double)(leftLines[i].Count + rightLines[match.Key].Count - both);
                 if (similarity >= threshold)
                 {
                     scored.Add(new Pair(lefts[i], rights[match.Key], similarity));
@@ -254,10 +267,10 @@ internal static class FolderRenameDetector
             return lines;
         }
 
-        byte[] bytes;
+        byte[]? bytes;
         try
         {
-            bytes = File.ReadAllBytes(candidate.FullPath);
+            bytes = ReadText(candidate.FullPath, maxTextFileSize);
         }
         catch (IOException)
         {
@@ -268,7 +281,7 @@ internal static class FolderRenameDetector
             return lines;
         }
 
-        if (!LooksLikeText(bytes))
+        if (bytes is null)
         {
             return lines;
         }
@@ -286,13 +299,46 @@ internal static class FolderRenameDetector
         return lines;
     }
 
-    // A NUL byte near the start means binary, unless a UTF-16/32 byte order mark says otherwise.
-    private static bool LooksLikeText(byte[] bytes)
+    /// <summary>
+    /// Reads a file's bytes when its first <see cref="TextProbe.Size"/> bytes look like text, or returns null, so a
+    /// large binary file costs one small read. A file that grew past <paramref name="maxTextFileSize"/> is also null.
+    /// </summary>
+    private static byte[]? ReadText(string path, long maxTextFileSize)
     {
-        var count = Math.Min(bytes.Length, TextProbeSize);
-        var hasUnicodeBom = (count >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF)))
-            || (count >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xFE && bytes[3] == 0xFF);
-        return hasUnicodeBom || Array.IndexOf(bytes, (byte)0, 0, count) < 0;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var probe = new byte[TextProbe.Size];
+        var probed = Fill(stream, probe, 0, probe.Length);
+        if (!TextProbe.LooksLikeText(probe, probed) || stream.Length > maxTextFileSize)
+        {
+            return null;
+        }
+
+        var bytes = new byte[stream.Length];
+        Array.Copy(probe, bytes, Math.Min(probed, bytes.Length));
+        var count = probed + Fill(stream, bytes, probed, bytes.Length - probed);
+        if (count < bytes.Length)
+        {
+            Array.Resize(ref bytes, count);
+        }
+
+        return bytes;
+    }
+
+    private static int Fill(Stream stream, byte[] buffer, int offset, int length)
+    {
+        var total = 0;
+        while (total < length)
+        {
+            var read = stream.Read(buffer, offset + total, length - total);
+            if (read == 0)
+            {
+                break;
+            }
+
+            total += read;
+        }
+
+        return total;
     }
 
     private static FolderCompareItem Rebuild(FolderCompareItem item, Dictionary<string, FolderCompareItem> replacements)

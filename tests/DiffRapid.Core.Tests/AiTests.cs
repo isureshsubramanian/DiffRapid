@@ -7,6 +7,8 @@ using DiffRapid.Cli;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class AiTests
 {
     private static readonly AiEndpoint Endpoint = new() { BaseUrl = "https://example.test/v1", Model = "test-model" };
@@ -154,6 +156,51 @@ public sealed class AiTests
         Assert.DoesNotContain("sensitive-server-detail", exception.ToString());
     }
 
+    [Fact]
+    public async Task StreamingRefusedForTheModelFallsBackToOneUnstreamedRequest()
+    {
+        var streamed = new List<bool>();
+        using var client = new ChatClient(Endpoint, new FakeHandler(async (request, _) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var stream = body.RootElement.GetProperty("stream").GetBoolean();
+            streamed.Add(stream);
+            return stream
+                ? new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent("{\"error\":{\"message\":\"sensitive-server-detail\",\"type\":\"invalid_request_error\",\"param\":\"stream\",\"code\":\"unsupported_value\"}}"),
+                }
+                : Reply("whole answer");
+        }));
+        var deltas = new List<string>();
+
+        var reply = await client.StreamAsync(Prompt, deltas.Add);
+
+        Assert.Equal("whole answer", reply);
+        Assert.Equal(["whole answer"], deltas);
+        Assert.Equal([true, false], streamed);
+    }
+
+    [Theory]
+    [InlineData("{\"error\":{\"message\":\"sensitive-server-detail\",\"param\":\"messages\"}}")]
+    [InlineData("sensitive-server-detail")]
+    [InlineData("")]
+    public async Task OtherBadRequestsWhileStreamingFailWithoutRetryOrBody(string body)
+    {
+        var requests = 0;
+        using var client = new ChatClient(Endpoint, new FakeHandler((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent(body) });
+        }));
+
+        var exception = await Assert.ThrowsAsync<AiException>(() => client.StreamAsync(Prompt, _ => { }));
+
+        Assert.Equal(1, requests);
+        Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
+        Assert.DoesNotContain("sensitive-server-detail", exception.ToString());
+    }
+
     [Theory]
     [InlineData("not json")]
     [InlineData("{}")]
@@ -194,6 +241,37 @@ public sealed class AiTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledClient.CompleteAsync(Prompt, cancellationToken: cancellation.Token));
     }
 
+    [Theory]
+    [InlineData("OPENAI_API_KEY", true)]
+    [InlineData("_my_key2", true)]
+    [InlineData("sk-proj-abc123DEF456ghi789", false)]
+    [InlineData("sk-abc123", false)]
+    [InlineData("MY KEY", false)]
+    [InlineData("2KEY", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void KeyVariableNamesAreToldApartFromPastedKeys(string? setting, bool isName)
+    {
+        Assert.Equal(isName, KeyVariable.IsName(setting));
+    }
+
+    [Theory]
+    [InlineData("sk-proj-abc123DEF456ghi789", "may contain the key itself")]
+    [InlineData("0123456789abcdef0123456789abcdef", "may contain the key itself")]
+    [InlineData("abcdef0123456789abcdef0123456789", "is not set")]
+    [InlineData("MY_SERVICE_KEY", "is not set")]
+    [InlineData("", "name the environment variable")]
+    public void MissingKeyAdviceNeverRepeatsTheSetting(string setting, string expected)
+    {
+        // A key pasted into the setting by mistake, or a hex key that looks like a name, must not be shown.
+        var advice = KeyVariable.MissingKeyAdvice(setting);
+        Assert.Contains(expected, advice);
+        if (setting.Length > 0)
+        {
+            Assert.DoesNotContain(setting, advice);
+        }
+    }
+
     [Fact]
     public async Task StreamingReportsReasoningWithoutAddingItToTheReply()
     {
@@ -207,18 +285,23 @@ public sealed class AiTests
         Assert.Equal(2, thinking);
     }
 
-    [Fact]
-    public async Task StreamingTimeoutLimitsSilenceNotTheWholeAnswer()
+    // Measures real gaps between events, so it runs alone: with the full suite in parallel, thread-pool starvation
+    // on Windows stretched 150 ms gaps past the 1.5 s timeout.
+    [Collection(SerialCollection.Name)]
+    public sealed class StreamingTiming
     {
-        // Twelve events 50 ms apart take longer than the 400 ms timeout, but no gap between them comes close,
-        // even when the full suite loads the machine.
-        var chunks = Enumerable.Range(0, 12)
-            .Select(i => $"data: {{\"choices\":[{{\"delta\":{{\"reasoning\":\"step {i}\"}}}}]}}\n\n")
-            .Append("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
-        using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(50));
-        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(400) }, new FakeHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
-        Assert.Equal("ok", await client.StreamAsync(Prompt, _ => { }));
+        [Fact]
+        public async Task StreamingTimeoutLimitsSilenceNotTheWholeAnswer()
+        {
+            // Thirteen events 150 ms apart (1.95 s) outlast the 1.5 s timeout, while each gap stays a tenth of it.
+            var chunks = Enumerable.Range(0, 12)
+                .Select(i => $"data: {{\"choices\":[{{\"delta\":{{\"reasoning\":\"step {i}\"}}}}]}}\n\n")
+                .Append("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
+            using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(150));
+            using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(1500) }, new FakeHandler((_, _) =>
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
+            Assert.Equal("ok", await client.StreamAsync(Prompt, _ => { }));
+        }
     }
 
     // Returns one chunk per read, each after a delay, like a server streaming a slow model.
@@ -264,6 +347,16 @@ public sealed class AiTests
         using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(30) }, new FakeHandler((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
         var exception = await Assert.ThrowsAsync<AiException>(() => client.StreamAsync(Prompt, _ => { }));
+        Assert.Contains("timed out", exception.Message);
+    }
+
+    [Fact]
+    public async Task TimeoutCoversAStalledErrorBody()
+    {
+        using var stream = new GatedStream("", ignoresToken: true);
+        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(30) }, new FakeHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StreamContent(stream) })));
+        var exception = await Assert.ThrowsAsync<AiException>(() => client.StreamAsync(Prompt, _ => { }).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
         Assert.Contains("timed out", exception.Message);
     }
 
@@ -469,9 +562,9 @@ public sealed class AiTests
     [InlineData("explain", "--endpoint")]
     [InlineData("explain", "--endpoint=https://example.test", "--model")]
     [InlineData("explain", "--api-key=never-print-this")]
-    public void CliReturnsExitTwoForMissingConfigurationOrInvalidOptions(params string[] arguments)
+    public async Task CliReturnsExitTwoForMissingConfigurationOrInvalidOptions(params string[] arguments)
     {
-        Assert.Equal(2, Program.Main(arguments));
+        Assert.Equal(2, await Program.Main(arguments));
     }
 
     [Fact]
@@ -513,11 +606,13 @@ public sealed class AiTests
                 Assert.Contains("@@", content);
                 Assert.Equal(noRedact, content.Contains("old-secret", StringComparison.Ordinal));
                 Assert.Equal(noRedact, content.Contains("new-secret", StringComparison.Ordinal));
-                return Reply("Changed the password. test-credential");
+                return Reply("Changed the password. test-credential\u001b]0;pwned\u0007\nSecond line.");
             });
             Assert.Equal(0, await Program.RunExplainAsync(arguments.ToArray(), output, handler));
             Assert.Equal(1, calls);
             Assert.Contains("Changed the password.", output.ToString());
+            Assert.Contains("\\x1B]0;pwned\\x07\nSecond line.", output.ToString());
+            Assert.DoesNotContain('\u001b', output.ToString());
             Assert.DoesNotContain("test-credential", output.ToString());
             Assert.Equal("password=old-secret\n", File.ReadAllText(left));
             Assert.Equal("password=new-secret\n", File.ReadAllText(right));
@@ -604,7 +699,8 @@ public sealed class AiTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken);
     }
 
-    private sealed class GatedStream(string initial) : Stream
+    // With ignoresToken, a read ends only when the stream is disposed, as .NET Framework's response streams do.
+    private sealed class GatedStream(string initial, bool ignoresToken = false) : Stream
     {
         private readonly MemoryStream _initial = new(Encoding.UTF8.GetBytes(initial));
         private readonly CancellationTokenSource _closed = new();
@@ -627,7 +723,7 @@ public sealed class AiTests
                 return read;
             }
 
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closed.Token);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ignoresToken ? CancellationToken.None : cancellationToken, _closed.Token);
             await Task.Delay(Timeout.Infinite, linked.Token);
             return 0;
         }

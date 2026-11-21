@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using DiffRapid.Core.History;
 using DiffRapid.VisualStudio.Options;
@@ -17,16 +19,32 @@ namespace DiffRapid.VisualStudio.Commands;
 /// </summary>
 internal sealed class LocalHistoryRecorder : IVsRunningDocTableEvents3
 {
+    // Latin-1 maps each byte to the char of the same value and back, with no preamble, so a file's bytes pass
+    // through LocalHistoryStore.SnapshotText unchanged.
+    private static readonly Encoding ByteExact = Encoding.GetEncoding(28591);
+
+    private static LocalHistoryRecorder? _instance;
+
     private readonly DiffRapidPackage _package;
     private readonly RunningDocumentTable _documents;
     private readonly LocalHistoryStore _store;
-    private bool _enabled;
+    private readonly long _maxFileSize;
 
-    private LocalHistoryRecorder(DiffRapidPackage package, LocalHistoryStore store, bool enabled)
+    // Files known to have at least one version in the history, so their later saves skip reading the old version.
+    private readonly ConcurrentDictionary<string, bool> _hasHistory = new(StringComparer.OrdinalIgnoreCase);
+    private bool _enabled;
+    private uint _cookie;
+
+    // Saves are recorded in the background, one at a time and in the order of the saves, so a file's
+    // "Before save" version is stored before its "Saved" one. Only the UI thread adds to the queue.
+    private Task _queue = Task.CompletedTask;
+
+    private LocalHistoryRecorder(DiffRapidPackage package, LocalHistoryStore store, bool enabled, long maxFileSize)
     {
         _package = package;
         _store = store;
         _enabled = enabled;
+        _maxFileSize = maxFileSize;
         _documents = new RunningDocumentTable(package);
     }
 
@@ -43,29 +61,61 @@ internal sealed class LocalHistoryRecorder : IVsRunningDocTableEvents3
         var store = new LocalHistoryStore(StoreFolder, settings.History);
         Store = store;
         await package.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
-        var recorder = new LocalHistoryRecorder(package, store, settings.KeepHistory);
-        recorder._documents.Advise(recorder);
+        var recorder = new LocalHistoryRecorder(package, store, settings.KeepHistory, settings.History.MaxFileSize);
+        recorder._cookie = recorder._documents.Advise(recorder);
+        _instance = recorder;
 
         _ = Task.Run(() => Guard("Pruning the local history", () => store.Prune(package.DisposalToken)));
+    }
+
+    /// <summary>Stops listening to saves; called when the package is disposed.</summary>
+    public static void Stop()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var recorder = _instance;
+        _instance = null;
+        if (recorder is not null && recorder._cookie != 0)
+        {
+            recorder._documents.Unadvise(recorder._cookie);
+            recorder._cookie = 0;
+        }
     }
 
     public int OnBeforeSave(uint docCookie)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         var path = FilePath(docCookie);
-        if (path is null)
+        // HasHistory only checks that the file's index exists: no lock, so it is safe on the UI thread.
+        if (path is null || _hasHistory.ContainsKey(path) || _store.HasHistory(path))
+        {
+            // The previous version is already in the history.
+            return VSConstants.S_OK;
+        }
+
+        // The old version has to be read before the save overwrites it, so this read stays on the UI thread. It is
+        // bounded by the history's size limit (larger files are not kept anyway). The store, whose lock can wait for
+        // another Visual Studio instance, is used in the background.
+        byte[]? before = null;
+        Guard("Reading the version before the save", () =>
+        {
+            if (new FileInfo(path).Length <= _maxFileSize)
+            {
+                before = File.ReadAllBytes(path);
+            }
+        });
+        if (before is not { } content)
         {
             return VSConstants.S_OK;
         }
 
-        // Only the first save of a file reads the old version here, on the UI thread, before it is overwritten;
-        // later saves already have their previous version in the history.
-        Guard("Keeping the version before the save", () =>
+        Enqueue("Keeping the version before the save", () =>
         {
-            if (_store.List(path).Count == 0)
+            if (_store.List(path, _package.DisposalToken).Count == 0)
             {
-                _store.Snapshot(path, "Before save");
+                _store.SnapshotText(path, ByteExact.GetString(content), ByteExact, "Before save", _package.DisposalToken);
             }
+
+            _hasHistory[path] = true;
         });
         return VSConstants.S_OK;
     }
@@ -76,7 +126,7 @@ internal sealed class LocalHistoryRecorder : IVsRunningDocTableEvents3
         var path = FilePath(docCookie);
         if (path is not null)
         {
-            _ = Task.Run(() => Guard("Keeping the saved version", () => _store.Snapshot(path, "Saved")));
+            Enqueue("Keeping the saved version", () => _store.Snapshot(path, "Saved", cancellationToken: _package.DisposalToken));
         }
 
         // Settings may have changed since the last save; read them again for the next one.
@@ -86,10 +136,12 @@ internal sealed class LocalHistoryRecorder : IVsRunningDocTableEvents3
 
     public int OnAfterAttributeChangeEx(uint docCookie, uint grfAttribs, IVsHierarchy pHierOld, uint itemidOld, string pszMkDocumentOld, IVsHierarchy pHierNew, uint itemidNew, string pszMkDocumentNew)
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
         // A renamed file takes its history with it.
         if ((grfAttribs & (uint)__VSRDTATTRIB.RDTA_MkDocument) != 0 && File.Exists(pszMkDocumentNew) && !string.IsNullOrEmpty(pszMkDocumentOld))
         {
-            _ = Task.Run(() => Guard("Moving the local history of a renamed file", () => _store.Rename(pszMkDocumentOld, pszMkDocumentNew)));
+            Enqueue("Moving the local history of a renamed file", () => _store.Rename(pszMkDocumentOld, pszMkDocumentNew, _package.DisposalToken));
         }
 
         return VSConstants.S_OK;
@@ -123,6 +175,13 @@ internal sealed class LocalHistoryRecorder : IVsRunningDocTableEvents3
         // Comparison copies (earlier versions, extracted text) live in the temporary folder and are not worth keeping.
         var temporary = Path.GetFullPath(Path.GetTempPath());
         return Path.GetFullPath(moniker).StartsWith(temporary, StringComparison.OrdinalIgnoreCase) ? null : moniker;
+    }
+
+    /// <summary>Runs a step of the history after the ones queued before it, on a background thread.</summary>
+    private void Enqueue(string step, Action action)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        _queue = _queue.ContinueWith(_ => Guard(step, action), _package.DisposalToken, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
     // The history must never get in the way of saving: failures are only logged.

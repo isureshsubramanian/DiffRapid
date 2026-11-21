@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Table;
@@ -34,15 +35,21 @@ public static class DelimitedReader
 
     private const int DetectionLineCount = 20;
 
+    // Detection reads at most this many characters (an estimate: 20 lines of about 3,000 characters each),
+    // so a long first line or an unclosed quote is not scanned to the end once per candidate.
+    private const int DetectionSampleLength = 64 * 1024;
+
     /// <summary>Reads a file, detecting its encoding from the byte order mark or content.</summary>
-    public static TableData ReadFile(string path, DelimitedReadOptions? options = null)
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    public static TableData ReadFile(string path, DelimitedReadOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= DelimitedReadOptions.Default;
-        return Parse(TextFileReader.ReadFile(path, options.FallbackEncoding).Text, options);
+        return Parse(TextFileReader.ReadFile(path, options.FallbackEncoding).Text, options, cancellationToken);
     }
 
     /// <summary>Splits text into a table.</summary>
-    public static TableData Parse(string text, DelimitedReadOptions? options = null)
+    /// <exception cref="OperationCanceledException">The token was cancelled.</exception>
+    public static TableData Parse(string text, DelimitedReadOptions? options = null, CancellationToken cancellationToken = default)
     {
         if (text is null)
         {
@@ -61,6 +68,7 @@ public static class DelimitedReader
         IReadOnlyList<string>? header = null;
         foreach (var (record, line) in ReadRecords(text, delimiter, options.Quote))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (options.HasHeader && header is null)
             {
                 header = record;
@@ -80,8 +88,8 @@ public static class DelimitedReader
     }
 
     /// <summary>
-    /// Picks the candidate delimiter that splits the first lines into the same, largest number of cells.
-    /// Falls back to a comma.
+    /// Picks the candidate delimiter that splits the first lines (within the first 64 K characters) into the
+    /// same, largest number of cells. Falls back to a comma.
     /// </summary>
     public static char DetectDelimiter(string text, char quote = '"')
     {
@@ -90,6 +98,7 @@ public static class DelimitedReader
             throw new ArgumentNullException(nameof(text));
         }
 
+        text = DetectionSample(text);
         var best = ',';
         var bestScore = 0L;
         foreach (var candidate in CandidateDelimiters)
@@ -103,6 +112,18 @@ public static class DelimitedReader
         }
 
         return best;
+    }
+
+    // The start of the text, cut after its last line break when there is one, so no line is counted half read.
+    private static string DetectionSample(string text)
+    {
+        if (text.Length <= DetectionSampleLength)
+        {
+            return text;
+        }
+
+        var lastBreak = text.LastIndexOfAny(['\r', '\n'], DetectionSampleLength - 1);
+        return text.Substring(0, lastBreak > 0 ? lastBreak : DetectionSampleLength);
     }
 
     // Lines that agree with the first line's cell count weigh most; wider splits break ties.

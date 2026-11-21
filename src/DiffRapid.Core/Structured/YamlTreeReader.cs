@@ -400,7 +400,7 @@ public static class YamlTreeReader
                 case '"':
                 case '\'':
                     var end = 0;
-                    var value = ReadQuoted(line, start, text, ref end);
+                    var value = ReadQuoted(line, start, text, 0, ref end);
                     if (end != text.Length)
                     {
                         throw Error(line, line.Indent + start + end, "unexpected text after the quoted scalar");
@@ -433,11 +433,16 @@ public static class YamlTreeReader
         }
 
         /// <summary>Reads a quoted scalar that starts at text[0]; <paramref name="end"/> is set past the closing quote.</summary>
-        private string ReadQuoted(Line line, int start, string text, ref int end)
+        /// <summary>
+        /// Reads the quoted scalar whose opening quote is at <paramref name="from"/> in <paramref name="text"/>,
+        /// in place; <paramref name="end"/> receives the index just past the closing quote. <paramref name="start"/>
+        /// is the column of <c>text[0]</c> in the line's content, for error positions.
+        /// </summary>
+        private string ReadQuoted(Line line, int start, string text, int from, ref int end)
         {
-            var quote = text[0];
+            var quote = text[from];
             var builder = new StringBuilder();
-            var position = 1;
+            var position = from + 1;
             while (position < text.Length)
             {
                 var current = text[position];
@@ -464,7 +469,7 @@ public static class YamlTreeReader
                 position++;
             }
 
-            throw Error(line, line.Indent + start, "the quoted scalar is not closed on this line (multi-line quoted scalars are not supported)");
+            throw Error(line, line.Indent + start + from, "the quoted scalar is not closed on this line (multi-line quoted scalars are not supported)");
         }
 
         private int ReadEscape(Line line, int start, string text, int position, StringBuilder builder)
@@ -666,7 +671,7 @@ public static class YamlTreeReader
         {
             var content = line.Content;
             var end = 0;
-            var name = ReadQuoted(line, 0, content, ref end);
+            var name = ReadQuoted(line, 0, content, 0, ref end);
             var colon = end;
             while (colon < content.Length && content[colon] == ' ')
             {
@@ -708,6 +713,7 @@ public static class YamlTreeReader
 
             private NodeBuilder ParseValue(string name, int level)
             {
+                owner._cancellationToken.ThrowIfCancellationRequested();
                 owner.CheckDepth(level);
                 SkipSpaces();
                 if (_position >= _text.Length)
@@ -776,8 +782,8 @@ public static class YamlTreeReader
                 if (_position < _text.Length && _text[_position] is '"' or '\'')
                 {
                     var end = 0;
-                    var quoted = owner.ReadQuoted(line, begin, _text.Substring(begin), ref end);
-                    _position = begin + end;
+                    var quoted = owner.ReadQuoted(line, 0, _text, begin, ref end);
+                    _position = end;
                     return new NodeBuilder(StructuredNodeKind.String, name, line.Number) { Value = quoted };
                 }
 

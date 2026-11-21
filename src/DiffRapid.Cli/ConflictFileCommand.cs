@@ -24,7 +24,7 @@ internal static partial class Program
         if (parts.ConflictCount == 0)
         {
             System.Console.Out.WriteLine("No conflicts found.");
-            return ExitDifferent;
+            return ExitSame;
         }
 
         var directory = Path.GetFullPath(args.Value("out-dir") ?? Path.GetDirectoryName(path)!);
@@ -36,21 +36,13 @@ internal static partial class Program
             WriteVersion("base", parts.Base);
         }
 
-        return ExitSame;
+        // Like merge: 1 while the file still has conflicts to resolve.
+        return ExitDifferent;
 
         void WriteVersion(string side, string text)
         {
             var output = Path.Combine(directory, Path.GetFileNameWithoutExtension(path) + "." + side + Path.GetExtension(path));
-            using (var stream = File.Create(output))
-            {
-                if (decoded.HasByteOrderMark)
-                {
-                    stream.Write(decoded.Encoding.GetPreamble());
-                }
-
-                stream.Write(decoded.Encoding.GetBytes(text));
-            }
-
+            WriteInOriginalEncoding(output, text, decoded);
             System.Console.Out.WriteLine(output);
         }
     }

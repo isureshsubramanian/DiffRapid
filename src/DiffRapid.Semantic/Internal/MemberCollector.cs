@@ -204,7 +204,7 @@ internal sealed class MemberCollector
         var start = ExtendedStart(node);
         var span = CreateSpan(start, node.Span.End);
         var compareSpan = CreateSpan(start, HeaderEnd(node));
-        var key = kind + ":" + GenericPositions(RemoveParameterNames(signature), MethodTypeParameters(node));
+        var key = kind + ":" + GenericPositions(RemoveParameterNames(signature, name.Length), MethodTypeParameters(node));
         return new CSharpMember(kind, name, signature, key, parent, span, compareSpan, node, identifier);
     }
 
@@ -306,17 +306,24 @@ internal sealed class MemberCollector
         return key.Substring(0, paren) + parameters;
     }
 
-    /// <summary>Generic parameter names do not change an overload's identity; only their count does.</summary>
-    private static string RemoveParameterNames(string signature)
+    /// <summary>
+    /// Generic parameter names do not change an overload's identity; only their count does. The member's own list
+    /// starts right after its name, so type arguments in an explicit interface or operator name are kept.
+    /// </summary>
+    private static string RemoveParameterNames(string signature, int nameLength)
     {
-        var open = signature.IndexOf('<');
-        var paren = signature.IndexOfAny(['(', '[']);
-        if (open < 0 || (paren >= 0 && open > paren))
+        var open = nameLength;
+        if (open >= signature.Length || signature[open] != '<')
         {
             return signature;
         }
 
         var close = signature.IndexOf('>', open);
+        if (close < 0)
+        {
+            return signature;
+        }
+
         var arity = signature.Substring(open, close - open).Count(c => c == ',') + 1;
         return signature.Substring(0, open) + "`" + arity + signature.Substring(close + 1);
     }

@@ -10,36 +10,29 @@ internal static partial class Program
 {
     private static int RunApi(ParsedArgs args)
     {
-        try
+        if (args.Positionals.Count == 1)
         {
-            if (args.Positionals.Count == 1)
-            {
-                WriteApi(args.Positionals[0]);
-                return ExitSame;
-            }
-
-            if (args.Positionals.Count != 2)
-            {
-                throw new UsageException("api needs one or two .dll or .nupkg files.");
-            }
-
-            var left = args.Positionals[0];
-            var right = args.Positionals[1];
-            var isPackage = IsPackage(left);
-            if (isPackage != IsPackage(right))
-            {
-                throw new UsageException("api compares a .dll with a .dll, or a .nupkg with a .nupkg.");
-            }
-
-            var breakingOnly = args.Has("breaking-only");
-            return isPackage
-                ? ReportPackages(NuGetPackageReader.Read(left), NuGetPackageReader.Read(right), breakingOnly)
-                : ReportAssemblies(ApiReader.Read(left), ApiReader.Read(right), breakingOnly);
+            WriteApi(args.Positionals[0]);
+            return ExitSame;
         }
-        catch (InvalidDataException exception)
+
+        if (args.Positionals.Count != 2)
         {
-            return Fail(exception.Message);
+            throw new UsageException("api needs one or two .dll or .nupkg files.");
         }
+
+        var left = args.Positionals[0];
+        var right = args.Positionals[1];
+        var isPackage = IsPackage(left);
+        if (isPackage != IsPackage(right))
+        {
+            throw new UsageException("api compares a .dll with a .dll, or a .nupkg with a .nupkg.");
+        }
+
+        var breakingOnly = args.Has("breaking-only");
+        return isPackage
+            ? ReportPackages(NuGetPackageReader.Read(left), NuGetPackageReader.Read(right), breakingOnly)
+            : ReportAssemblies(ApiReader.Read(left), ApiReader.Read(right), breakingOnly);
     }
 
     private static bool IsPackage(string path) => path.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase);
@@ -48,21 +41,21 @@ internal static partial class Program
     {
         if (!IsPackage(path))
         {
-            Console.Out.Write(ApiReader.Read(path).ToText());
+            Console.Out.Write(TerminalText.Escape(ApiReader.Read(path).ToText(), keepLineFeeds: true));
             return;
         }
 
         var package = NuGetPackageReader.Read(path);
         foreach (var property in package.ToProperties())
         {
-            Console.Out.WriteLine(property.Key + ": " + property.Value);
+            Console.Out.WriteLine(TerminalText.Escape(property.Key + ": " + property.Value));
         }
 
         foreach (var library in package.Libraries)
         {
             Console.Out.WriteLine();
-            Console.Out.WriteLine("== " + library.Path);
-            Console.Out.Write(library.Api.ToText());
+            Console.Out.WriteLine("== " + TerminalText.Escape(library.Path));
+            Console.Out.Write(TerminalText.Escape(library.Api.ToText(), keepLineFeeds: true));
         }
     }
 
@@ -81,7 +74,7 @@ internal static partial class Program
         var counts = WriteInfoChanges(comparison.InfoChanges, breakingOnly, string.Empty);
         foreach (var library in comparison.Libraries.Where(library => breakingOnly ? library.Comparison.HasBreakingChanges : !library.Comparison.IsIdentical))
         {
-            Console.Out.WriteLine(library.Path);
+            Console.Out.WriteLine(TerminalText.Escape(library.Path));
             var libraryCounts = WriteComparison(library.Comparison, breakingOnly, "  ");
             counts = (counts.Breaking + libraryCounts.Breaking, counts.Other + libraryCounts.Other);
         }
@@ -95,7 +88,7 @@ internal static partial class Program
         var counts = WriteInfoChanges(comparison.InfoChanges, breakingOnly, indent);
         foreach (var change in comparison.Changes.Where(change => !breakingOnly || change.IsBreaking))
         {
-            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + change);
+            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + TerminalText.Escape(change.ToString()));
             counts = change.IsBreaking ? (counts.Breaking + 1, counts.Other) : (counts.Breaking, counts.Other + 1);
         }
 
@@ -108,7 +101,7 @@ internal static partial class Program
         var other = 0;
         foreach (var change in changes.Where(change => !breakingOnly || change.IsBreaking))
         {
-            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + change);
+            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + TerminalText.Escape(change.ToString()));
             if (change.IsBreaking)
             {
                 breaking++;

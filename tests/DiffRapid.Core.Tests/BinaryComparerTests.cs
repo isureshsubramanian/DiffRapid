@@ -3,6 +3,8 @@ using DiffRapid.Core.Binary;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class BinaryComparerTests
 {
     private static readonly BinaryCompareOptions Resync = new() { Mode = BinaryCompareMode.Resync };
@@ -345,7 +347,7 @@ public sealed class BinaryCliTests : IDisposable
     }
 
     [Fact]
-    public void SummaryAndExitCodes()
+    public async Task SummaryAndExitCodes()
     {
         var data = BinaryComparerTests.Random(64, 13);
         var same = Run(Write("a", data), Write("b", data));
@@ -357,12 +359,12 @@ public sealed class BinaryCliTests : IDisposable
         Assert.Contains("Differences: 1 (4 left bytes, 0 right bytes)", summary.Output);
         Assert.DoesNotContain("| ", summary.Output);
 
-        Assert.Equal(0, Program.Main(["hex", Write("a", data), Write("b", data), "--summary"]));
-        Assert.Equal(1, Program.Main(["hex", Write("a", data), Write("c", [1]), "--summary"]));
-        Assert.Equal(2, Program.Main(["hex", Write("a", data)]));
-        Assert.Equal(2, Program.Main(["hex", Write("a", data), Path.Combine(_root, "missing")]));
-        Assert.Equal(2, Program.Main(["hex", Write("a", data), _root]));
-        Assert.Equal(2, Program.Main(["hex", Write("a", data), Write("b", data), "--bytes-per-line", "12"]));
+        Assert.Equal(0, await Program.Main(["hex", Write("a", data), Write("b", data), "--summary"]));
+        Assert.Equal(1, await Program.Main(["hex", Write("a", data), Write("c", [1]), "--summary"]));
+        Assert.Equal(2, await Program.Main(["hex", Write("a", data)]));
+        Assert.Equal(2, await Program.Main(["hex", Write("a", data), Path.Combine(_root, "missing")]));
+        Assert.Equal(2, await Program.Main(["hex", Write("a", data), _root]));
+        Assert.Equal(2, await Program.Main(["hex", Write("a", data), Write("b", data), "--bytes-per-line", "12"]));
     }
 
     private (int Exit, string Output) Run(params string[] args)

@@ -13,6 +13,7 @@ public sealed class RevisionCommandTests
     [InlineData("/n:3", null)]
     public void ParsesHistoryCountAliases(string option, string? value)
     {
+        option = CliTests.Native(option);
         string[] arguments = value is null ? ["log", "file", option] : ["log", "file", option, value];
         var parsed = Program.ParsedArgs.Parse(arguments, 1);
         Assert.Equal(["file"], parsed.Positionals);
@@ -26,9 +27,10 @@ public sealed class RevisionCommandTests
     [InlineData("/ignorews:2", WhitespaceMode.IgnoreAll)]
     public void ParsesWhitespaceAndRepeatedOptions(string option, WhitespaceMode expected)
     {
-        var parsed = Program.ParsedArgs.Parse(["diff", "file", "--rev=HEAD~1", option, "--include=*.cs", "--include", "*.txt", "--exclude=bin"], 1);
+        var parsed = Program.ParsedArgs.Parse(["diff", "file", "--rev=HEAD~1", CliTests.Native(option)], 1);
         Assert.Equal("HEAD~1", parsed.Value("rev"));
         Assert.Equal(expected, parsed.ToCompareOptions().Whitespace);
+        parsed = Program.ParsedArgs.Parse(["dir", "a", "b", "--include=*.cs", "--include", "*.txt", "--exclude=bin"], 1);
         Assert.Equal(["*.cs", "*.txt"], parsed.Values("include"));
         Assert.Equal(["bin"], parsed.Values("exclude"));
     }

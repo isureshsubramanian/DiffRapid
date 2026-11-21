@@ -119,6 +119,35 @@ public sealed class FolderPatchApplierTests : IDisposable
     }
 
     [Fact]
+    public void RenameOntoAnExistingFileFails()
+    {
+        File.WriteAllText(At("a.txt"), "one\ntwo\nthree\n");
+        File.WriteAllText(At("b.txt"), "unrelated\n");
+        var patch = Parse("diff --git a/a.txt b/b.txt\n--- a/a.txt\n+++ b/b.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n");
+        var file = Assert.Single(FolderPatchApplier.Plan(patch, _root).Files);
+        Assert.Equal(FilePatchStatus.Failed, file.Status);
+        Assert.Equal("The file to rename to already exists.", file.Message);
+        Assert.False(FolderPatchApplier.ApplyFile(file).Written);
+        Assert.Equal("unrelated\n", File.ReadAllText(At("b.txt")));
+        Assert.True(File.Exists(At("a.txt")));
+    }
+
+    [Fact]
+    public void RenameTargetCreatedSincePreviewIsNotOverwritten()
+    {
+        File.WriteAllText(At("a.txt"), "# Samples\n");
+        var patch = Parse("diff --git a/a.txt b/b.txt\nsimilarity index 100%\nrename from a.txt\nrename to b.txt\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        Assert.Equal(FilePatchStatus.Ready, Assert.Single(plan.Files).Status);
+        File.WriteAllText(At("b.txt"), "unrelated\n");
+        var result = Assert.Single(FolderPatchApplier.Apply(plan));
+        Assert.False(result.Written);
+        Assert.Equal("The file to rename to was created since the preview.", result.Error);
+        Assert.Equal("unrelated\n", File.ReadAllText(At("b.txt")));
+        Assert.True(File.Exists(At("a.txt")));
+    }
+
+    [Fact]
     public void PureRenameIsPlannedAppliedAndThenAlreadyApplied()
     {
         Directory.CreateDirectory(At("docs"));
@@ -151,6 +180,93 @@ public sealed class FolderPatchApplierTests : IDisposable
         var patch = Parse("diff --git a/a.txt b/b.txt\n--- a/a.txt\n+++ b/b.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n");
         FolderPatchApplier.Apply(FolderPatchApplier.Plan(patch, _root));
         Assert.Equal(FilePatchStatus.AlreadyApplied, Assert.Single(FolderPatchApplier.Plan(patch, _root).Files).Status);
+    }
+
+    [Fact]
+    public void CaseOnlyRenameKeepsOneFileWithTheNewNameAndContent()
+    {
+        File.WriteAllText(At("Foo.txt"), "one\ntwo\nthree\n");
+        var patch = Parse("diff --git a/Foo.txt b/foo.txt\nsimilarity index 80%\nrename from Foo.txt\nrename to foo.txt\n" +
+            "--- a/Foo.txt\n+++ b/foo.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        var file = Assert.Single(plan.Files);
+        Assert.Equal(FilePatchAction.Rename, file.Action);
+        Assert.Equal(FilePatchStatus.Ready, file.Status);
+
+        Assert.True(Assert.Single(FolderPatchApplier.Apply(plan)).Written);
+        Assert.Equal([At("foo.txt")], Directory.GetFiles(_root));
+        Assert.Equal("one\nTWO\nthree\n", File.ReadAllText(At("foo.txt")));
+    }
+
+    [Fact]
+    public void FolderCaseRenameAppliesOnEveryFileSystem()
+    {
+        Directory.CreateDirectory(At("Docs"));
+        File.WriteAllText(At(Path.Combine("Docs", "a.txt")), "one\ntwo\n");
+        var patch = Parse("diff --git a/Docs/a.txt b/docs/a.txt\nsimilarity index 80%\nrename from Docs/a.txt\nrename to docs/a.txt\n" +
+            "--- a/Docs/a.txt\n+++ b/docs/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        var file = Assert.Single(plan.Files);
+        Assert.Equal(FilePatchStatus.Ready, file.Status);
+
+        Assert.True(Assert.Single(FolderPatchApplier.Apply(plan)).Written);
+
+        // A case-insensitive file system keeps the shared folder's spelling; a case-sensitive one moves the file.
+        var file1 = Assert.Single(Directory.GetFiles(_root, "*", SearchOption.AllDirectories));
+        Assert.Equal("one\nTWO\n", File.ReadAllText(file1));
+        Assert.Equal("a.txt", Path.GetFileName(file1));
+
+        // A case change in both the folder and the file name keeps the file name's new case. It starts again from
+        // Docs/a.txt: a case-sensitive file system has already moved the file to docs/a.txt above.
+        Directory.Delete(_root, recursive: true);
+        Directory.CreateDirectory(At("Docs"));
+        File.WriteAllText(At(Path.Combine("Docs", "a.txt")), "one\nTWO\n");
+        var both = Parse("diff --git a/Docs/a.txt b/docs/A.txt\nrename from Docs/a.txt\nrename to docs/A.txt\n");
+        Assert.True(Assert.Single(FolderPatchApplier.Apply(FolderPatchApplier.Plan(both, _root))).Written);
+        Assert.Equal("A.txt", Path.GetFileName(Assert.Single(Directory.GetFiles(_root, "*", SearchOption.AllDirectories))));
+    }
+
+    [Fact]
+    public void UnreadableFolderMakesOnlyItsFileUnsafe()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Unix permission bits are needed to make a folder unreadable.");
+            return; // Tells the platform analyzer that the rest runs on Unix only.
+        }
+
+        File.WriteAllText(At("a.txt"), "one\ntwo\nthree\n");
+        Directory.CreateDirectory(At("locked"));
+        File.SetUnixFileMode(At("locked"), UnixFileMode.None);
+        try
+        {
+            if (CanList(At("locked")))
+            {
+                Assert.Skip("The folder stays readable (running as root).");
+            }
+
+            var patch = Parse(ChangeA + ChangeA.Replace("a/a.txt", "a/locked/a.txt").Replace("b/a.txt", "b/locked/a.txt"));
+            var plan = FolderPatchApplier.Plan(patch, _root);
+            Assert.Equal(FilePatchStatus.Ready, plan.Files[0].Status);
+            Assert.Equal(FilePatchStatus.Unsafe, plan.Files[1].Status);
+        }
+        finally
+        {
+            File.SetUnixFileMode(At("locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static bool CanList(string folder)
+    {
+        try
+        {
+            _ = Directory.GetFiles(folder);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     [Fact]
@@ -200,6 +316,57 @@ public sealed class FolderPatchApplierTests : IDisposable
         {
             Directory.Delete(outside, true);
         }
+    }
+
+    [Fact]
+    public void LinkCreatedAfterThePreviewIsNotWrittenThrough()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "diffrapid-fpa-outside-" + Guid.NewGuid());
+        Directory.CreateDirectory(outside);
+        try
+        {
+            Directory.CreateDirectory(At("sub"));
+            File.WriteAllText(At("sub/a.txt"), "one\ntwo\nthree\n");
+            File.WriteAllText(Path.Combine(outside, "a.txt"), "one\ntwo\nthree\n");
+            var plan = FolderPatchApplier.Plan(Parse(ChangeA.Replace("/a.txt", "/sub/a.txt")), _root);
+            Assert.Equal(FilePatchStatus.Ready, Assert.Single(plan.Files).Status);
+
+            Directory.Delete(At("sub"), true);
+            try
+            {
+                Directory.CreateSymbolicLink(At("sub"), outside);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Assert.Skip("Symbolic links cannot be created here.");
+            }
+
+            var result = Assert.Single(FolderPatchApplier.Apply(plan));
+            Assert.False(result.Written);
+            Assert.StartsWith("The patch path goes through a link", result.Error);
+            Assert.Equal("one\ntwo\nthree\n", File.ReadAllText(Path.Combine(outside, "a.txt")));
+        }
+        finally
+        {
+            Directory.Delete(outside, true);
+        }
+    }
+
+    [Fact]
+    public void AddThroughDanglingLinkIsRejected()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "diffrapid-fpa-missing-" + Guid.NewGuid(), "new.txt");
+        try
+        {
+            File.CreateSymbolicLink(At("new.txt"), outside);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Assert.Skip("Symbolic links cannot be created here.");
+        }
+
+        var patch = Parse("--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+x\n");
+        Assert.Equal(FilePatchStatus.Unsafe, Assert.Single(FolderPatchApplier.Plan(patch, _root).Files).Status);
     }
 
     [Fact]

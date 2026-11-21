@@ -33,22 +33,33 @@ internal static partial class Program
             Title = "Comparison of " + Path.GetFileName(rightLabel),
             ContextLines = args.IntValue("context", 3),
         };
-        var output = args.Value("output");
-        using var stream = output is null ? Console.OpenStandardOutput() : File.Create(output);
-        if (format == "json")
+        void Write(Stream stream)
         {
-            JsonReportWriter.WriteFile(result, options, stream);
-            return true;
+            if (format == "json")
+            {
+                JsonReportWriter.WriteFile(result, options, stream);
+                return;
+            }
+
+            using var writer = new StreamWriter(stream, Utf8NoBom, bufferSize: -1, leaveOpen: true) { NewLine = "\n" };
+            if (format == "html")
+            {
+                FileReportWriter.WriteHtml(result, options with { GeneratedAt = DateTimeOffset.UtcNow }, writer);
+            }
+            else
+            {
+                FileReportWriter.WriteMarkdown(result, options, writer);
+            }
         }
 
-        using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { NewLine = "\n" };
-        if (format == "html")
+        if (args.Value("output") is { } output)
         {
-            FileReportWriter.WriteHtml(result, options with { GeneratedAt = DateTimeOffset.UtcNow }, writer);
+            WriteFile(output, Write);
         }
         else
         {
-            FileReportWriter.WriteMarkdown(result, options, writer);
+            using var stdout = Console.OpenStandardOutput();
+            Write(stdout);
         }
 
         return true;

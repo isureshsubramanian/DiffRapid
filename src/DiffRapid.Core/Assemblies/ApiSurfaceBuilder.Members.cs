@@ -23,7 +23,7 @@ internal sealed partial class ApiSurfaceBuilder
                 continue;
             }
 
-            var type = TypeShapeWriter.Write(field.DecodeSignature(_provider, scope.Generics), Flags(field.GetCustomAttributes(), scope.NullableContext));
+            var type = TypeShapeWriter.Write(DecodeField(field, scope.Generics), Flags(field.GetCustomAttributes(), scope.NullableContext));
             var name = _reader.GetString(field.Name);
             var modifiers = FieldModifiers(attributes);
             var value = (attributes & FieldAttributes.Literal) != 0 ? " = " + MetadataNames.ConstantText(_reader, field.GetDefaultValue()) : string.Empty;
@@ -64,7 +64,7 @@ internal sealed partial class ApiSurfaceBuilder
     {
         var genericNames = method.GetGenericParameters().Select(handle => _reader.GetString(_reader.GetGenericParameter(handle).Name)).ToImmutableArray();
         var generics = scope.Generics.WithMethodParameters(genericNames);
-        var signature = method.DecodeSignature(_provider, generics);
+        var signature = DecodeMethod(method, generics);
         var context = MetadataNames.NullableContext(_reader, method.GetCustomAttributes()) ?? scope.NullableContext;
         var rows = ParameterRows(method, signature.ParameterTypes.Length);
         var isConstructor = name == ".ctor";
@@ -99,7 +99,7 @@ internal sealed partial class ApiSurfaceBuilder
     private void AddProperty(TypeScope scope, PropertyDefinition property, MethodDefinition primary, int getRank, int setRank, MethodDefinition? setter)
     {
         var context = MetadataNames.NullableContext(_reader, primary.GetCustomAttributes()) ?? scope.NullableContext;
-        var signature = property.DecodeSignature(_provider, scope.Generics);
+        var signature = DecodeProperty(property, scope.Generics);
         var type = (signature.ReturnType.Unmodified().Kind == TypeShapeKind.ByRef ? "ref " : string.Empty)
             + TypeShapeWriter.Write(signature.ReturnType, Flags(property.GetCustomAttributes(), context));
         var name = _reader.GetString(property.Name);
@@ -107,7 +107,7 @@ internal sealed partial class ApiSurfaceBuilder
         var title = name;
         if (isIndexer)
         {
-            var accessorSignature = primary.DecodeSignature(_provider, scope.Generics);
+            var accessorSignature = DecodeMethod(primary, scope.Generics);
             var count = signature.ParameterTypes.Length;
             var rows = ParameterRows(primary, accessorSignature.ParameterTypes.Length);
             title = "this[" + ParameterList(accessorSignature.ParameterTypes.Take(count).ToImmutableArray(), rows, context, false) + "]";
@@ -122,7 +122,7 @@ internal sealed partial class ApiSurfaceBuilder
 
         if (setRank > 0)
         {
-            var isInit = setter!.Value.DecodeSignature(_provider, scope.Generics).ReturnType.HasModifier(MetadataNames.IsExternalInit);
+            var isInit = DecodeMethod(setter!.Value, scope.Generics).ReturnType.HasModifier(MetadataNames.IsExternalInit);
             parts.Add((setRank < rank ? "protected " : string.Empty) + (isInit ? "init;" : "set;"));
         }
 

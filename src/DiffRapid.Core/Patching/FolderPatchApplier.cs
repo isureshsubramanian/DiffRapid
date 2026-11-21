@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using DiffRapid.Core.Folders;
+using DiffRapid.Core.IO;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Patching;
@@ -74,6 +76,9 @@ public sealed record FilePatchPlan(
 
     /// <summary>True when the file can be written.</summary>
     public bool CanApply => Status == FilePatchStatus.Ready;
+
+    /// <summary>The folder the patch paths were resolved under, or null for a file chosen by the user.</summary>
+    internal string? Root { get; init; }
 }
 
 /// <summary>The preview of a whole patch applied under a root folder.</summary>
@@ -97,17 +102,15 @@ public static class FolderPatchApplier
 {
     private static readonly IReadOnlyList<HunkOutcome> NoOutcomes = Array.Empty<HunkOutcome>();
 
-    private static StringComparison PathComparison =>
-        RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
     /// <summary>
     /// Plans every file of <paramref name="patch"/> relative to <paramref name="root"/> without writing anything.
     /// </summary>
-    public static FolderPatchPlan Plan(Patch patch, string root, PatchApplyOptions? options = null)
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static FolderPatchPlan Plan(Patch patch, string root, PatchApplyOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new PatchApplyOptions();
         var fullRoot = Path.GetFullPath(root);
-        var files = patch.Files.Select(file => PlanUnderRoot(file, fullRoot, options)).ToList();
+        var files = patch.Files.Select(file => PlanUnderRoot(file, fullRoot, options, cancellationToken)).ToList();
         return new FolderPatchPlan(fullRoot, options, files.AsReadOnly());
     }
 
@@ -171,14 +174,15 @@ public static class FolderPatchApplier
     /// Plans one file patch against <paramref name="filePath"/>, ignoring the paths in the patch
     /// (applying a patch to a file chosen by the user).
     /// </summary>
-    public static FilePatchPlan PlanFile(FilePatch patch, string filePath, PatchApplyOptions? options = null)
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static FilePatchPlan PlanFile(FilePatch patch, string filePath, PatchApplyOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new PatchApplyOptions();
         var fullPath = Path.GetFullPath(filePath);
         var deletes = (options.Reverse ? patch.OldPath : patch.NewPath) is null;
         var target = deletes ? null : fullPath;
         var action = deletes ? FilePatchAction.Delete : FilePatchAction.Modify;
-        return PlanContent(patch, Path.GetFileName(fullPath), fullPath, target, action, options);
+        return PlanContent(patch, Path.GetFileName(fullPath), fullPath, target, action, options, cancellationToken);
     }
 
     /// <summary>
@@ -201,7 +205,10 @@ public static class FolderPatchApplier
         return results.AsReadOnly();
     }
 
-    /// <summary>Writes one planned file; see <see cref="Apply(FolderPatchPlan, Func{FilePatchPlan, bool}?)"/>.</summary>
+    /// <summary>
+    /// Writes one planned file; see <see cref="Apply(FolderPatchPlan, Func{FilePatchPlan, bool}?)"/>. The containment
+    /// and link checks of planning run again first, since a link may have been created after the preview.
+    /// </summary>
     public static FilePatchWriteResult ApplyFile(FilePatchPlan file)
     {
         if (!file.CanApply)
@@ -211,7 +218,9 @@ public static class FolderPatchApplier
 
         try
         {
-            var stale = StaleReason(file);
+            var stale = file.Root is null ? null
+                : UnsafeReason(file.Root, file.SourcePath, file.DisplayPath) ?? UnsafeReason(file.Root, file.TargetPath, file.DisplayPath);
+            stale ??= StaleReason(file);
             if (stale is not null)
             {
                 return new FilePatchWriteResult(file, false, stale);
@@ -226,7 +235,7 @@ public static class FolderPatchApplier
         }
     }
 
-    private static FilePatchPlan PlanUnderRoot(FilePatch patch, string root, PatchApplyOptions options)
+    private static FilePatchPlan PlanUnderRoot(FilePatch patch, string root, PatchApplyOptions options, CancellationToken cancellationToken)
     {
         var sourceName = options.Reverse ? patch.NewPath : patch.OldPath;
         var targetName = options.Reverse ? patch.OldPath : patch.NewPath;
@@ -255,18 +264,20 @@ public static class FolderPatchApplier
 
         var action = source is null ? FilePatchAction.Add
             : target is null ? FilePatchAction.Delete
-            : string.Equals(source, target, PathComparison) ? FilePatchAction.Modify
+            // A target differing only in case is a rename on every platform (git records it as one), not a modify.
+            : string.Equals(source, target, StringComparison.Ordinal) ? FilePatchAction.Modify
             : FilePatchAction.Rename;
-        return PlanContent(patch, display, source, target, action, options);
+        return PlanContent(patch, display, source, target, action, options, cancellationToken) with { Root = root };
     }
 
     /// <summary>Reads the source, applies the hunks in memory and decides whether the result can be written.</summary>
-    private static FilePatchPlan PlanContent(FilePatch patch, string display, string? source, string? target, FilePatchAction action, PatchApplyOptions options)
+    private static FilePatchPlan PlanContent(FilePatch patch, string display, string? source, string? target, FilePatchAction action, PatchApplyOptions options, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // A rename whose old file is gone and whose new file already holds the result has been applied.
         if (action == FilePatchAction.Rename && !File.Exists(source) && File.Exists(target))
         {
-            var atTarget = PlanContent(patch, display, target, target, FilePatchAction.Modify, options);
+            var atTarget = PlanContent(patch, display, target, target, FilePatchAction.Modify, options, cancellationToken);
             var applied = atTarget.Status == FilePatchStatus.AlreadyApplied || (patch.Hunks.Count == 0 && atTarget.Status == FilePatchStatus.Ready);
             if (applied)
             {
@@ -276,15 +287,16 @@ public static class FolderPatchApplier
 
         var readPath = source ?? target!;
         var exists = File.Exists(readPath);
-        var decoded = exists ? TextFileReader.ReadFile(readPath) : new DecodedText(string.Empty, new UTF8Encoding(false), false, false);
+        var decoded = exists ? FolderComparer.ReadTextUnlessEmpty(readPath) : new DecodedText(string.Empty, new UTF8Encoding(false), false, false);
         if (decoded.IsBinary || patch.IsBinary)
         {
             return Rejected(patch, display, FilePatchStatus.Binary, "Binary changes cannot be applied from a text patch.") with { SourcePath = source, TargetPath = target, Action = action };
         }
 
-        var result = PatchApplier.Apply(decoded.Text, patch, options);
+        var result = PatchApplier.Apply(decoded.Text, patch, options, cancellationToken);
         var allAlreadyApplied = result.Outcomes.Count > 0 && result.Outcomes.All(o => o.Status == HunkStatus.AlreadyApplied);
         var problem = FileStateProblem(action, exists, decoded.Text, result, allAlreadyApplied);
+        problem ??= action == FilePatchAction.Rename && TargetTaken(source!, target!) ? "The file to rename to already exists." : null;
         problem ??= FirstFailure(patch, result, options);
 
         var status = problem is not null ? FilePatchStatus.Failed
@@ -331,6 +343,49 @@ public static class FolderPatchApplier
         }
     }
 
+    /// <summary>
+    /// Whether a rename would overwrite another file (git apply refuses with "already exists"). A target that differs
+    /// from the source only in case is the source itself on a case-insensitive file system, so then it counts only
+    /// when entries spelled exactly like both the source and the target exist (a case-sensitive file system).
+    /// </summary>
+    private static bool TargetTaken(string source, string target)
+    {
+        if (!File.Exists(target) && !Directory.Exists(target))
+        {
+            return false;
+        }
+
+        return !IsCaseOnly(source, target) || !SameEntry(source, target);
+    }
+
+    private static bool IsCaseOnly(string source, string target) =>
+        string.Equals(source, target, StringComparison.OrdinalIgnoreCase) && !string.Equals(source, target, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="target"/>, which differs from the existing <paramref name="source"/> only in case,
+    /// names the same entry: no folder lists a name spelled exactly like the target's where the spellings differ
+    /// (in the file name or in any folder above it). Only folders on the source's own path are listed.
+    /// </summary>
+    private static bool SameEntry(string source, string target)
+    {
+        for (string? from = source, to = target; from is not null && to is not null; from = Path.GetDirectoryName(from), to = Path.GetDirectoryName(to))
+        {
+            var name = Path.GetFileName(to);
+            if (name.Length == 0 || string.Equals(Path.GetFileName(from), name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var parent = Path.GetDirectoryName(from);
+            if (parent is null || Directory.EnumerateFileSystemEntries(parent).Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static string? FirstFailure(FilePatch patch, PatchApplyResult result, PatchApplyOptions options)
     {
         for (var i = 0; i < result.Outcomes.Count; i++)
@@ -349,42 +404,53 @@ public static class FolderPatchApplier
     private static FilePatchPlan Rejected(FilePatch patch, string display, FilePatchStatus status, string message) =>
         new(patch, display, null, null, FilePatchAction.Modify, status, string.Empty, string.Empty, NoOutcomes, message);
 
-    /// <summary>Rejects absolute paths, parent traversal, drive-qualified components, and links on the way.</summary>
+    /// <summary>Rejects absolute paths, parent traversal, drive-qualified components, NUL characters, and links on the way.</summary>
     private static string Resolve(string root, string path)
     {
         var components = path.Split('/', '\\');
-        if (Path.IsPathRooted(path) || components.Any(c => c == ".." || c.IndexOf(':') >= 0))
+        if (path.IndexOf('\0') >= 0 || Path.IsPathRooted(path) || components.Any(c => c == ".." || c.IndexOf(':') >= 0))
         {
             throw new UnsafePathException("Unsafe patch path: " + path);
         }
 
         var resolved = Path.GetFullPath(Path.Combine(root, path));
-        var trimmedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var rootPrefix = trimmedRoot + Path.DirectorySeparatorChar;
-        if (!resolved.StartsWith(rootPrefix, PathComparison))
+        var problem = UnsafeReason(root, resolved, path);
+        return problem is null ? resolved : throw new UnsafePathException(problem);
+    }
+
+    /// <summary>Why <paramref name="fullPath"/> may not be touched under <paramref name="root"/>, or null when it may.</summary>
+    private static string? UnsafeReason(string root, string? fullPath, string shown)
+    {
+        if (fullPath is null)
         {
-            throw new UnsafePathException("The patch path leaves the folder: " + path);
+            return null;
         }
 
-        // Existing links can redirect an otherwise safe path outside the root.
-        var current = resolved;
-        while (current is not null && current.Length > trimmedRoot.Length)
+        if (PathContainment.RelativeInside(root, fullPath) is null)
         {
-            var entryExists = File.Exists(current) || Directory.Exists(current);
-            if (entryExists && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new UnsafePathException("The patch path goes through a link: " + path);
-            }
-
-            current = Path.GetDirectoryName(current);
+            return "The patch path leaves the folder: " + shown;
         }
 
-        return resolved;
+        // Existing links can redirect an otherwise safe path outside the root. A folder that cannot be read cannot be
+        // checked, so only this file is refused rather than the whole patch.
+        try
+        {
+            return PathContainment.PassesThroughLink(root, fullPath) ? "The patch path goes through a link: " + shown : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "The patch path cannot be checked for links: " + shown;
+        }
     }
 
     /// <summary>Returns why the disk no longer matches the preview, or null when it still does.</summary>
     private static string? StaleReason(FilePatchPlan file)
     {
+        if (file.Action == FilePatchAction.Rename && TargetTaken(file.SourcePath!, file.TargetPath!))
+        {
+            return "The file to rename to was created since the preview.";
+        }
+
         if (file.SourcePath is null)
         {
             return file.TargetPath is not null && File.Exists(file.TargetPath) ? "The file was created since the preview." : null;
@@ -395,7 +461,7 @@ public static class FolderPatchApplier
             return "The file was removed since the preview.";
         }
 
-        var current = TextFileReader.ReadFile(file.SourcePath).Text;
+        var current = FolderComparer.ReadTextUnlessEmpty(file.SourcePath).Text;
         return current == file.OriginalText ? null : "The file changed since the preview.";
     }
 
@@ -407,44 +473,46 @@ public static class FolderPatchApplier
             return;
         }
 
-        WriteAtomically(file.TargetPath, file.PatchedText, file.Encoding, file.HasByteOrderMark);
-        if (file.Action == FilePatchAction.Rename)
+        var preamble = file.HasByteOrderMark ? file.Encoding.GetPreamble() : Array.Empty<byte>();
+        var content = file.Encoding.GetBytes(file.PatchedText);
+        // On a case-insensitive file system a case-only target is the source itself (it exists, and the plan found
+        // it to be the same entry): writing it and then deleting the source would delete the result. So the content
+        // goes over the source, which is then renamed. When the case differs in a folder name, the folder is shared
+        // with other files and is left as it is, so the change applies as an edit. On a case-sensitive file system
+        // the target does not exist, and the ordinary rename below creates its folder.
+        var caseOnly = file.Action == FilePatchAction.Rename && IsCaseOnly(file.SourcePath!, file.TargetPath) && File.Exists(file.TargetPath);
+        AtomicFile.Write(caseOnly ? file.SourcePath! : file.TargetPath, stream =>
+        {
+            stream.Write(preamble, 0, preamble.Length);
+            stream.Write(content, 0, content.Length);
+        });
+        if (caseOnly && !string.Equals(Path.GetFileName(file.SourcePath), Path.GetFileName(file.TargetPath), StringComparison.Ordinal))
+        {
+            // Only the file name is renamed; the folders keep their spelling (see above).
+            RenameCase(file.SourcePath!, Path.Combine(Path.GetDirectoryName(file.SourcePath)!, Path.GetFileName(file.TargetPath)));
+        }
+        else if (file.Action == FilePatchAction.Rename && !caseOnly)
         {
             File.Delete(file.SourcePath!);
         }
     }
 
-    /// <summary>Writes through a temporary file in the same folder so a failure never leaves a half-written file.</summary>
-    private static void WriteAtomically(string path, string text, Encoding encoding, bool byteOrderMark)
+    /// <summary>
+    /// Renames a file to a name that differs only in case. The move goes through a temporary name, since a direct
+    /// move between two spellings of one file may change nothing; when the second step fails the first is undone.
+    /// </summary>
+    private static void RenameCase(string source, string target)
     {
-        var folder = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(folder);
-        var temporary = Path.Combine(folder, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp");
+        var temporary = Path.Combine(Path.GetDirectoryName(source)!, ".~dr" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp");
+        File.Move(source, temporary);
         try
         {
-            var preamble = byteOrderMark ? encoding.GetPreamble() : Array.Empty<byte>();
-            var content = encoding.GetBytes(text);
-            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write))
-            {
-                stream.Write(preamble, 0, preamble.Length);
-                stream.Write(content, 0, content.Length);
-            }
-
-            if (File.Exists(path))
-            {
-                File.Replace(temporary, path, null);
-            }
-            else
-            {
-                File.Move(temporary, path);
-            }
+            File.Move(temporary, target);
         }
-        finally
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            if (File.Exists(temporary))
-            {
-                File.Delete(temporary);
-            }
+            File.Move(temporary, source);
+            throw;
         }
     }
 

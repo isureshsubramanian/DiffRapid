@@ -6,6 +6,8 @@ using DiffRapid.Core.Plugins;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class PluginTests
 {
     private static readonly string SortProgram = OperatingSystem.IsWindows() ? "sort.exe" : "sort";
@@ -250,31 +252,71 @@ public sealed class PluginTests
         Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c16tmp"));
     }
 
-    [Fact]
-    public void ExternalCommandReportsTimeoutsFailuresAndMissingPrograms()
+    // Measures how soon a stopped program returns, so it runs alone: with the full suite in parallel, thread-pool
+    // starvation on Windows held the 300 ms timeout back past the 15 s bound.
+    [Collection(SerialCollection.Name)]
+    public sealed class ExternalCommandTiming
     {
-        var sleeper = OperatingSystem.IsWindows()
-            ? new ExternalCommandPlugin("Sleep", "ping.exe", ["-n", "30", "127.0.0.1"])
-            : new ExternalCommandPlugin("Sleep", "sleep", ["30"]);
-        var stopwatch = Stopwatch.StartNew();
-        var timeout = Assert.Throws<PluginException>(() =>
-            sleeper.Transform("x", new PluginContext("x.txt", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
-        Assert.Contains("did not finish", timeout.Message);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
+        [Fact]
+        public void ExternalCommandReportsTimeoutsFailuresAndMissingPrograms()
+        {
+            var sleeper = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Sleep", "ping.exe", ["-n", "30", "127.0.0.1"])
+                : new ExternalCommandPlugin("Sleep", "sleep", ["30"]);
+            var stopwatch = Stopwatch.StartNew();
+            var timeout = Assert.Throws<PluginException>(() =>
+                sleeper.Transform("x", new PluginContext("x.txt", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
+            Assert.Contains("did not finish", timeout.Message);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
 
-        var failing = OperatingSystem.IsWindows()
-            ? new ExternalCommandPlugin("Find", "findstr.exe", ["no-such-text", ExternalCommandPlugin.FilePlaceholder])
-            : new ExternalCommandPlugin("Find", "grep", ["no-such-text", ExternalCommandPlugin.FilePlaceholder]);
-        var failure = Assert.Throws<PluginException>(() => failing.Transform("abc\n", PluginContext.ForArguments()));
-        Assert.Contains("exited with code 1", failure.Message);
+            // A stopped program has exited before its temporary file is removed. ping.exe rejects the extra file
+            // argument and exits at once, so Windows sleeps in PowerShell, where the file path lands in a comment.
+            var fileSleeper = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Sleep", "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep 30 #", ExternalCommandPlugin.FilePlaceholder])
+                : new ExternalCommandPlugin("Sleep", "/bin/sh", ["-c", "sleep 30", ExternalCommandPlugin.FilePlaceholder]);
+            Assert.Throws<PluginException>(() =>
+                fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
+            Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
+            using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+            {
+                Assert.ThrowsAny<OperationCanceledException>(() =>
+                    fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromSeconds(30), cancellation.Token)));
+            }
 
-        var missing = new ExternalCommandPlugin("Missing", "diffrapid-no-such-program-" + Guid.NewGuid().ToString("N"));
-        Assert.Throws<PluginException>(() => missing.Transform("x", PluginContext.ForArguments()));
-        Assert.Throws<ArgumentException>(() => PluginPipeline.ApplyPrediffers("x", "x.txt", new PluginOptions { Prediffer = "Exec" }));
+            Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
+
+            var failing = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Find", "findstr.exe", ["no-such-text", ExternalCommandPlugin.FilePlaceholder])
+                : new ExternalCommandPlugin("Find", "grep", ["no-such-text", ExternalCommandPlugin.FilePlaceholder]);
+            var failure = Assert.Throws<PluginException>(() => failing.Transform("abc\n", PluginContext.ForArguments()));
+            Assert.Contains("exited with code 1", failure.Message);
+
+            var missing = new ExternalCommandPlugin("Missing", "diffrapid-no-such-program-" + Guid.NewGuid().ToString("N"));
+            Assert.Throws<PluginException>(() => missing.Transform("x", PluginContext.ForArguments()));
+            Assert.Throws<ArgumentException>(() => PluginPipeline.ApplyPrediffers("x", "x.txt", new PluginOptions { Prediffer = "Exec" }));
+        }
+
+        [Fact]
+        public void ProgramThatExitsBeforeTheLimitIsNotATimeoutWhileItsOutputDrains()
+        {
+            // The program exits at once and succeeds, but a child it leaves running keeps its output open for about
+            // four seconds: the 3 s limit passes while the output drains, and that is not a timeout. The limit leaves
+            // PowerShell time to start on a loaded machine, and the child ends inside the runner's 5 s drain wait.
+            // (The runner quotes every argument, which cmd.exe /c misreads, so Windows starts the child from PowerShell.)
+            const string windowsScript =
+                "$i = New-Object Diagnostics.ProcessStartInfo 'ping.exe', '-n 5 127.0.0.1'; $i.UseShellExecute = $false; [void][Diagnostics.Process]::Start($i)";
+            var early = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Early", "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsScript])
+                : new ExternalCommandPlugin("Early", "/bin/sh", ["-c", "sleep 4 &"]);
+            var limit = TimeSpan.FromSeconds(3);
+            var stopwatch = Stopwatch.StartNew();
+            early.Transform("x", new PluginContext("x.txt", [], limit, CancellationToken.None));
+            Assert.True(stopwatch.Elapsed > limit, "The output closed before the limit, so the test proves nothing.");
+        }
     }
 
     [Fact]
-    public void CliDiffRunsUnpackersAndPrediffers()
+    public async Task CliDiffRunsUnpackersAndPrediffers()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -284,13 +326,13 @@ public sealed class PluginTests
             var right = Path.Combine(directory, "right.txt");
             File.WriteAllText(left, "b // one\na\n");
             File.WriteAllText(right, "a\nb // two\n");
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet"]));
-            Assert.Equal(0, Program.Main(["diff", left, right, "--quiet", "--prediffer", "IgnoreComments c | SortLines"]));
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines |"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer", "NoSuchPlugin"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer", "PrettifyJson"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer"]));
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet"]));
+            Assert.Equal(0, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "IgnoreComments c | SortLines"]));
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines |"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "NoSuchPlugin"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "PrettifyJson"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer"]));
 
             var leftZip = Path.Combine(directory, "left.zip");
             var rightZip = Path.Combine(directory, "right.zip");
@@ -298,10 +340,10 @@ public sealed class PluginTests
             File.WriteAllBytes(leftZip, CreateZip(("a.txt", "one\n"u8.ToArray()), ("b.txt", "two\n"u8.ToArray())));
             File.WriteAllBytes(rightZip, CreateZip(("b.txt", "two\n"u8.ToArray()), ("a.txt", "one\n"u8.ToArray())));
             File.WriteAllBytes(changedZip, CreateZip(("a.txt", "one\n"u8.ToArray()), ("b.txt", "TWO\n"u8.ToArray())));
-            Assert.Equal(2, Program.Main(["diff", leftZip, rightZip, "--quiet"]));
-            Assert.Equal(0, Program.Main(["diff", leftZip, rightZip, "--quiet", "--unpacker", "auto"]));
-            Assert.Equal(1, Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries"]));
-            Assert.Equal(0, Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries", "--prediffer", "ToLower"]));
+            Assert.Equal(2, await Program.Main(["diff", leftZip, rightZip, "--quiet"]));
+            Assert.Equal(0, await Program.Main(["diff", leftZip, rightZip, "--quiet", "--unpacker", "auto"]));
+            Assert.Equal(1, await Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries"]));
+            Assert.Equal(0, await Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries", "--prediffer", "ToLower"]));
         }
         finally
         {
@@ -310,7 +352,7 @@ public sealed class PluginTests
     }
 
     [Fact]
-    public void CliListsEveryBuiltInPlugin()
+    public async Task CliListsEveryBuiltInPlugin()
     {
         var listing = Program.FormatPlugins(PluginRegistry.Default);
         string[] names =
@@ -321,8 +363,8 @@ public sealed class PluginTests
 
         Assert.All(names, name => Assert.Contains("  " + name, listing));
         Assert.Contains("IgnoreColumns <ranges such as 1-8,20->", listing);
-        Assert.Equal(0, Program.Main(["plugins"]));
-        Assert.Equal(2, Program.Main(["plugins", "extra"]));
+        Assert.Equal(0, await Program.Main(["plugins"]));
+        Assert.Equal(2, await Program.Main(["plugins", "extra"]));
         var parsed = Program.ParsedArgs.Parse(["diff", "a", "b", "--unpacker", "auto", "--prediffer", "SortLines desc"], 1);
         var options = Program.ToPluginOptions(parsed, null)!;
         Assert.Equal(["a", "b"], parsed.Positionals);

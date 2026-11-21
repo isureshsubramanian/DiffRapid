@@ -1,6 +1,6 @@
 namespace DiffRapid.Core.Algorithms;
 
-/// <summary>Line-matching algorithms offered to the user (WinMerge-compatible set).</summary>
+/// <summary>Line-matching algorithms offered to the user (the set common diff tools offer).</summary>
 public enum DiffAlgorithmKind
 {
     /// <summary>Myers O(ND), the classic default.</summary>

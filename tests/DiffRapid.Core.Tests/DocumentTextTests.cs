@@ -10,6 +10,8 @@ using W = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class DocumentTextTests
 {
     [Fact]
@@ -165,7 +167,7 @@ public sealed class DocumentTextTests
     }
 
     [Fact]
-    public void CliDiffComparesDocumentsAsText()
+    public async Task CliDiffComparesDocumentsAsText()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -182,9 +184,9 @@ public sealed class DocumentTextTests
 
             Assert.True(DocumentText.TryExtract(left, out var text));
             Assert.Equal("Version one\n", text);
-            Assert.Equal(0, Program.Main(["diff", left, same, "--quiet"]));
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet"]));
-            Assert.Equal(2, Program.Main(["diff", left, broken, "--quiet"]));
+            Assert.Equal(0, await Program.Main(["diff", left, same, "--quiet"]));
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet"]));
+            Assert.Equal(2, await Program.Main(["diff", left, broken, "--quiet"]));
         }
         finally
         {

@@ -15,7 +15,11 @@ public static class ConflictFile
     /// <summary>Extracts versions from a conflict file, rejecting malformed markers.</summary>
     public static ConflictFileParts Parse(string text)
     {
-        var document = TextDocument.Parse(text);
+        return Parse(TextDocument.Parse(text));
+    }
+
+    internal static ConflictFileParts Parse(TextDocument document)
+    {
         var left = new StringBuilder();
         var right = new StringBuilder();
         var original = new StringBuilder();
@@ -28,6 +32,14 @@ public static class ConflictFile
         {
             var line = document[i];
             var marker = Marker(line.Content);
+
+            // Only an opening marker starts a conflict; the others outside one are ordinary text
+            // (for example a Markdown setext heading underline).
+            if (state == Section.Outside && marker != '<')
+            {
+                marker = '\0';
+            }
+
             switch (marker)
             {
                 case '<' when state == Section.Outside:
@@ -91,7 +103,8 @@ public static class ConflictFile
             baseCount == count ? original.ToString() : null, count, leftLabel, baseLabel, rightLabel);
     }
 
-    private static char Marker(string content)
+    // Seven identical marker characters followed by the end of the line, a space or a tab.
+    internal static char Marker(string content)
     {
         if (content.Length < 7 || (content[0] != '<' && content[0] != '|' && content[0] != '=' && content[0] != '>'))
         {

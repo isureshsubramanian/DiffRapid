@@ -97,6 +97,8 @@ namespace DiffRapid.Core.Tests.ApiFixtures
 
 namespace DiffRapid.Core.Tests
 {
+    // Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+    [Collection("Console")]
     public sealed class AssemblyApiTests : IDisposable
     {
         private const string FixtureNamespace = "DiffRapid.Core.Tests.ApiFixtures";
@@ -315,26 +317,26 @@ namespace DiffRapid.Core.Tests
         }
 
         [Fact]
-        public void CliReportsApiChanges()
+        public async Task CliReportsApiChanges()
         {
-            Assert.Equal(0, Program.Main(["api", CorePath, CorePath]));
-            Assert.Equal(1, Program.Main(["api", CorePath, TestPath]));
-            Assert.Equal(0, Program.Main(["api", CorePath]));
+            Assert.Equal(0, await Program.Main(["api", CorePath, CorePath]));
+            Assert.Equal(1, await Program.Main(["api", CorePath, TestPath]));
+            Assert.Equal(0, await Program.Main(["api", CorePath]));
             CreatePackage("left.nupkg", "1.0.0", ("netstandard2.0", CorePath));
             CreatePackage("right.nupkg", "1.0.0", ("netstandard2.0", CorePath), ("net10.0", TestPath));
-            Assert.Equal(1, Program.Main(["api", At("left.nupkg"), At("right.nupkg")]));
-            Assert.Equal(0, Program.Main(["api", At("left.nupkg"), At("right.nupkg"), "--breaking-only"]));
-            Assert.Equal(1, Program.Main(["api", At("right.nupkg"), At("left.nupkg"), "--breaking-only"]));
+            Assert.Equal(1, await Program.Main(["api", At("left.nupkg"), At("right.nupkg")]));
+            Assert.Equal(0, await Program.Main(["api", At("left.nupkg"), At("right.nupkg"), "--breaking-only"]));
+            Assert.Equal(1, await Program.Main(["api", At("right.nupkg"), At("left.nupkg"), "--breaking-only"]));
         }
 
         [Fact]
-        public void CliRejectsMixedOrInvalidInputs()
+        public async Task CliRejectsMixedOrInvalidInputs()
         {
             CreatePackage("left.nupkg", "1.0.0", ("netstandard2.0", CorePath));
             File.WriteAllText(At("text.dll"), "not an assembly");
-            Assert.Equal(2, Program.Main(["api", CorePath, At("left.nupkg")]));
-            Assert.Equal(2, Program.Main(["api", At("text.dll"), CorePath]));
-            Assert.Equal(2, Program.Main(["api"]));
+            Assert.Equal(2, await Program.Main(["api", CorePath, At("left.nupkg")]));
+            Assert.Equal(2, await Program.Main(["api", At("text.dll"), CorePath]));
+            Assert.Equal(2, await Program.Main(["api"]));
         }
 
         private static ApiEntry Type(string name, string declaration) =>
