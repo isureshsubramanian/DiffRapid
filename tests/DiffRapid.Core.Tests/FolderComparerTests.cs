@@ -248,6 +248,36 @@ public sealed class FolderComparerTests : IDisposable
         Assert.Single(Item(Compare(new() { FollowSymlinks = true }), "link").Children);
     }
 
+    [Fact]
+    public void Followed_link_cycles_are_reported_instead_of_walked()
+    {
+        Write(true, "a/file", "a");
+        Write(false, "a/file", "a");
+        try
+        {
+            // Two links back to the root at every level would be 2^128 folders without cycle detection.
+            Directory.CreateSymbolicLink(Path.Combine(Left, "a", "up1"), Left);
+            Directory.CreateSymbolicLink(Path.Combine(Left, "a", "up2"), Path.Combine("..", "..", "left"));
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            Assert.Skip("Creating symbolic links is not permitted: " + ex.Message);
+        }
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = Compare(new() { FollowSymlinks = true });
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(30));
+        foreach (var path in new[] { "a/up1", "a/up2" })
+        {
+            var item = Item(result, path);
+            Assert.Equal(FolderCompareStatus.Error, item.Status);
+            Assert.Contains("link cycle", item.Error);
+            Assert.Empty(item.Children);
+        }
+
+        Assert.Equal(FolderCompareStatus.Identical, Item(result, "a/file").Status);
+    }
+
     [Theory]
     [InlineData(0, 1)]
     [InlineData(1, -1)]
