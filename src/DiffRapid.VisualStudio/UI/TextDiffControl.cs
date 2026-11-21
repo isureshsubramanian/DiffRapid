@@ -1067,7 +1067,8 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// <summary>One side of the comparison: the document buffer and the editor view showing it.</summary>
     private sealed class Pane
     {
-        private readonly IVsInvisibleEditor _invisibleEditor;
+        // Holds the document open in the running document table (an edit lock) while the comparison shows it.
+        private IVsInvisibleEditor? _invisibleEditor;
 
         private readonly IVsTextView _textView;
 
@@ -1089,9 +1090,11 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             if (buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
             {
                 _document = document;
-                _document.DirtyStateChanged += (s, e) => DirtyStateChanged?.Invoke(this, EventArgs.Empty);
+                _document.DirtyStateChanged += OnDocumentDirtyStateChanged;
             }
         }
+
+        private void OnDocumentDirtyStateChanged(object sender, EventArgs e) => DirtyStateChanged?.Invoke(this, EventArgs.Empty);
 
         public event EventHandler? DirtyStateChanged;
 
@@ -1214,7 +1217,36 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
                 _textView.CloseView();
             }
 
-            GC.KeepAlive(_invisibleEditor);
+            if (_document is not null)
+            {
+                // The document can stay open in VS after this pane, so the pane must not stay referenced from it.
+                _document.DirtyStateChanged -= OnDocumentDirtyStateChanged;
+            }
+
+            var invisibleEditor = _invisibleEditor;
+            if (invisibleEditor is null)
+            {
+                return;
+            }
+
+            _invisibleEditor = null;
+
+            // Still dirty here means the tab was closed without saving (the user answered No). Reload the file so the
+            // discarded edits do not stay in the document VS keeps, and come back in the next comparison or editor.
+            if (IsDirty && ErrorHandler.Succeeded(_docData.IsDocDataReloadable(out var reloadable)) && reloadable != 0)
+            {
+                var hr = _docData.ReloadDocData(0);
+                if (ErrorHandler.Failed(hr))
+                {
+                    Diagnostics.LogWarning($"Reloading a compared document after closing without saving failed (0x{hr:X8}).");
+                }
+            }
+
+            // Releasing the invisible editor drops its edit lock, so VS can close the document when nothing else has it open.
+            if (Marshal.IsComObject(invisibleEditor))
+            {
+                Marshal.ReleaseComObject(invisibleEditor);
+            }
         }
     }
 }
