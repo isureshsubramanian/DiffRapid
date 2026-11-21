@@ -197,6 +197,24 @@ public sealed class CliTests
     }
 
     [Fact]
+    public async Task UsageListsEachCommandOnce()
+    {
+        var output = Console.Out;
+        using var captured = new StringWriter();
+        Console.SetOut(captured);
+        try
+        {
+            Assert.Equal(0, await Program.Main(["--help"]));
+        }
+        finally
+        {
+            Console.SetOut(output);
+        }
+
+        Assert.Single(captured.ToString().Split('\n'), line => line.TrimStart().StartsWith("diffrapid git-config", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DoubleDashEndsOptions()
     {
         var args = Program.ParsedArgs.Parse(["diff", "--quiet", "--", "--left", "-o"], 1);

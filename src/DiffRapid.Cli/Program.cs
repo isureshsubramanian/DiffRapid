@@ -81,7 +81,6 @@ internal static partial class Program
           diffrapid image <left> <right> [--tolerance <0..255>] [--diff-out <file.png>]
                          [--ignore-alpha] [--max-offset <n>]
                          Compares PNG or BMP images; --diff-out writes the differences highlighted.
-          diffrapid git-config [--global]      print setup commands for Git Bash / POSIX shells
           diffrapid api <left.dll|.nupkg> [<right.dll|.nupkg>] [--breaking-only]
                          One file: print its public API. Two: list API changes, marking breaking ones.
           diffrapid plugins                      list the built-in unpackers and prediffers
