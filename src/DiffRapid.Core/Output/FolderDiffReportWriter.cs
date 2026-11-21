@@ -107,8 +107,8 @@ public static class FolderDiffReportWriter
         DecodedText right;
         try
         {
-            left = TextFileReader.ReadFile(Path.Combine(result.LeftRoot, item.RelativePath));
-            right = TextFileReader.ReadFile(Path.Combine(result.RightRoot, item.RelativePath));
+            left = FolderComparer.ReadTextUnlessEmpty(Path.Combine(result.LeftRoot, item.RelativePath));
+            right = FolderComparer.ReadTextUnlessEmpty(Path.Combine(result.RightRoot, item.RelativePath));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {

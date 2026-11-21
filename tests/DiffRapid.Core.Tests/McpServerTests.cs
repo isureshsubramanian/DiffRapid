@@ -726,6 +726,18 @@ public sealed class McpServerTests : IDisposable
         var text = (await patch.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).GetProperty("patch").GetString();
         Assert.Contains("+text", text);
         Assert.Contains("+b", text);
+
+        // The HTML folder report and the patch planner read through the same rule.
+        var report = Task.Run(() =>
+        {
+            using var writer = new StringWriter();
+            DiffRapid.Core.Output.FolderDiffReportWriter.WriteHtml(
+                DiffRapid.Core.Folders.FolderComparer.Compare(left, right), new DiffRapid.Core.Folders.FolderReportOptions(), new DiffRapid.Core.Output.FolderDiffReportOptions(), writer);
+            return writer.ToString();
+        }, TestContext.Current.CancellationToken);
+        Assert.Contains("fifo-vs-file", await report.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        var plan = Task.Run(() => DiffRapid.Core.Patching.FolderPatchApplier.Plan(DiffRapid.Core.Patching.Patch.Parse("--- a/fifo\n+++ b/fifo\n@@ -0,0 +1 @@\n+x\n"), left), TestContext.Current.CancellationToken);
+        Assert.Single((await plan.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).Files);
     }
 
     [Fact]

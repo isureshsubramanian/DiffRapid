@@ -635,6 +635,18 @@ public static class FolderComparer
         ? new MemoryStream(Array.Empty<byte>(), writable: false)
         : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1);
 
+    /// <summary>
+    /// Reads and decodes a file under the same rule as <see cref="OpenUnlessEmpty"/>: a file listed with a size of 0
+    /// is empty text and is never opened, so a pipe, socket or device cannot block the caller.
+    /// </summary>
+    internal static DecodedText ReadTextUnlessEmpty(string path)
+    {
+        using var stream = OpenUnlessEmpty(path, new FileInfo(path).Length);
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return TextFileReader.Decode(bytes.ToArray());
+    }
+
     /// <summary>A followed folder on the current branch of the scan, by real path (null when unknown).</summary>
     private sealed record Branch(string? RealPath, Branch? Parent, bool IsCycle);
 
