@@ -109,6 +109,12 @@ internal static partial class Program
           --diff3                               include base text in conflict markers
           /dl <text>, /dm <text>, /dr <text>     local, base, and remote conflict labels
 
+        Options:
+          Each command accepts only the options listed for it; others are an error (exit code 2).
+          --                                    end of options; later arguments are file names
+          --name=value or --name value          a separate value may not start with --
+          /name                                 Windows only; elsewhere an argument starting with / is a path
+
         Exit codes: 0 identical/clean, 1 different/conflicts, 2 error.
         """;
 
@@ -147,14 +153,14 @@ internal static partial class Program
                 "dir3" => RunDirectory3(parsed),
                 "diff" => await RunDiffAsync(parsed, cancellationToken).ConfigureAwait(false),
                 "log" => await RunLogAsync(parsed, cancellationToken).ConfigureAwait(false),
-                "history" => RunHistory(args, cancellationToken),
+                "history" => RunHistory(parsed, cancellationToken),
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
                 "sync" => RunSync(parsed),
-                "table" => RunTable(args),
+                "table" => RunTable(parsed),
                 "hex" => RunHex(parsed, Console.Out),
-                "image" => RunImage(args),
+                "image" => RunImage(parsed),
                 "resolve" => RunResolve(parsed),
                 "api" => RunApi(parsed),
                 "plugins" => RunPlugins(parsed),

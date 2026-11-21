@@ -182,8 +182,12 @@ diffrapid history list Program.cs
 | `explain` | Ask an AI service to explain a diff or propose conflict resolutions |
 | `plugins`, `info`, `git-config`, `mcp` | Utilities and setup |
 
-WinMerge-style switches such as `/ignorews:1`, `/ignorecase`, `/ignoreblanklines` and `/ignoreeol` are accepted.
-Run `diffrapid --help` for every option.
+Each command accepts only its own options: an unknown option, a value given to a switch, or a missing value is an
+error (exit code `2`) that names the option, so a typo such as `--dryrun` never runs the command without it. `--`
+ends the options, for file names that start with `-`. A separate value may not start with `--`; write
+`--left-label=--text` instead. On Windows, WinMerge-style switches such as `/ignorews:1`, `/ignorecase`,
+`/ignoreblanklines`, `/ignoreeol`, `/o` and `/dl` are accepted; on macOS and Linux an argument starting with `/` is
+always a path (use `-o`, `--ignore-case` and so on). Run `diffrapid --help` for every option.
 
 ### Use with Git
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using DiffRapid.Core.Algorithms;
 using DiffRapid.Core.Comparison;
 
@@ -8,6 +9,48 @@ namespace DiffRapid.Cli;
 
 internal static partial class Program
 {
+    /// <summary>The switches and value options one command accepts; anything else is a usage error.</summary>
+    private sealed record CommandSchema(string[] Switches, string[] Values, IReadOnlyDictionary<string, string>? Refused = null)
+    {
+        /// <summary>The compare options every text-comparing command accepts.</summary>
+        public static readonly CommandSchema Compare = new(
+            ["ignore-case", "ignore-blank-lines", "ignore-eol", "ignore-numbers", "ignore-missing-trailing-eol"],
+            ["algorithm", "ignore-whitespace", "line-filter", "substitute"]);
+
+        public CommandSchema With(string[] switches, string[] values) => new([.. Switches, .. switches], [.. Values, .. values], Refused);
+    }
+
+    private static readonly Dictionary<string, CommandSchema> Commands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["info"] = new([], []),
+        ["patch"] = CommandSchema.Compare.With([], ["output", "context"]),
+        ["explain"] = new(["conflicts", "no-redact"], ["endpoint", "model", "api-key-env", "azure-deployment", "api-version"],
+            new Dictionary<string, string> { ["api-key"] = "Read an API key from an environment variable using --api-key-env <VAR>." }),
+
+        // For apply, --ignore-whitespace is a switch rather than the compare option that takes a mode.
+        ["apply"] = new(["reverse", "dry-run", "ignore-whitespace"], ["dir", "fuzz"]),
+        ["dir"] = CommandSchema.Compare.With(["no-recurse", "json", "include-identical", "include-diffs", "renames"],
+            ["method", "include", "exclude", "only", "filter-file", "report", "report-format", "similarity", "context"]),
+        ["dir3"] = CommandSchema.Compare.With(["no-recurse", "json"], ["method", "include", "exclude", "filter-file"]),
+        ["diff"] = CommandSchema.Compare.With(["quiet"],
+            ["cp", "context", "left-label", "right-label", "unpacker", "prediffer", "rev", "report", "output"]),
+        ["log"] = new([], ["count"]),
+        ["history"] = CommandSchema.Compare.With(["quiet"], ["store", "label", "cp", "context", "left-label", "right-label"]),
+        ["merge"] = CommandSchema.Compare.With(["diff3"], ["output", "left-label", "base-label", "right-label"]),
+        ["split-conflicts"] = new([], ["out-dir"]),
+        ["sync"] = CommandSchema.Compare.With(["dry-run", "yes"], ["profile", "include", "exclude", "filter-file"]),
+        ["table"] = new(["no-header", "ignore-case", "trim", "by-position", "ignore-order", "quiet"],
+            ["delimiter", "quote", "key", "ignore-column", "tolerance", "relative-tolerance", "report", "output"]),
+        ["hex"] = new(["resync", "summary"], ["bytes-per-line", "context"]),
+        ["image"] = new(["ignore-alpha"], ["tolerance", "diff-out", "max-offset"]),
+        ["resolve"] = new([], ["output"]),
+        ["api"] = new(["breaking-only"], []),
+        ["plugins"] = new([], []),
+        ["struct"] = new(["ordered"], ["format", "array-key"]),
+        ["semantic"] = CommandSchema.Compare.With([], ["ignore"]),
+        ["mcp"] = new([], ["root"]),
+    };
+
     internal sealed class ParsedArgs
     {
         private static readonly Dictionary<string, string> Aliases = new(StringComparer.OrdinalIgnoreCase)
@@ -23,68 +66,69 @@ internal static partial class Program
             ["ignoreeol"] = "ignore-eol",
         };
 
-        private static readonly HashSet<string> ValueOptions = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "algorithm",
-            "ignore-whitespace",
-            "context",
-            "output",
-            "left-label",
-            "base-label",
-            "right-label",
-            "method",
-            "include",
-            "exclude",
-            "only",
-            "line-filter",
-            "substitute",
-            "cp",
-            "report",
-            "report-format",
-            "out-dir",
-            "filter-file",
-            "rev",
-            "count",
-            "dir",
-            "fuzz",
-            "profile",
-            "bytes-per-line",
-            "similarity",
-            "unpacker",
-            "prediffer",
-            "format",
-            "array-key",
-            "ignore",
-            "root",
-        };
-
-        private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, string?> _options = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<string?>> _options = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<LineFilter> _lineFilters = [];
         private readonly List<SubstitutionFilter> _substitutions = [];
 
         /// <summary>The positional command arguments.</summary>
         public List<string> Positionals { get; } = [];
 
-        /// <summary>Parses command arguments and expands option aliases.</summary>
+        /// <summary>Returns whether <paramref name="command"/> is a command with an option schema.</summary>
+        public static bool IsCommand(string command) => Commands.ContainsKey(command);
+
+        /// <summary>
+        /// Parses the arguments of the command named by <c>args[0]</c>, from <paramref name="start"/>. Options are
+        /// <c>--name</c>, <c>-n</c> and, on Windows only, <c>/name</c> when no such file exists; values follow as
+        /// <c>=value</c>, <c>:value</c> or the next argument. <c>--</c> ends the options.
+        /// </summary>
+        /// <exception cref="UsageException">An option is unknown for the command, misses its value, or a switch has one.</exception>
         public static ParsedArgs Parse(string[] args, int start)
         {
+            var command = args[0];
+            if (!Commands.TryGetValue(command, out var schema))
+            {
+                throw new UsageException($"Unknown command '{command}'. Run 'diffrapid --help'.");
+            }
+
             var parsed = new ParsedArgs();
+            var optionsEnded = false;
             for (var i = start; i < args.Length; i++)
             {
                 var argument = args[i];
-                var (name, inlineValue) = ParseOptionToken(argument);
+                if (!optionsEnded && argument == "--")
+                {
+                    optionsEnded = true;
+                    continue;
+                }
+
+                var (name, inlineValue) = optionsEnded ? (null, null) : ParseOptionToken(argument);
                 if (name is null)
                 {
                     parsed.Positionals.Add(argument);
                     continue;
                 }
 
-                // For apply, --ignore-whitespace is a switch rather than the compare option that takes a mode.
-                var isApplySwitch = args[0].Equals("apply", StringComparison.OrdinalIgnoreCase) && name == "ignore-whitespace";
-                if (ValueOptions.Contains(name) && inlineValue is null && !isApplySwitch)
+                if (schema.Refused?.TryGetValue(name, out var refusal) == true)
                 {
-                    if (i + 1 >= args.Length)
+                    throw new UsageException(refusal);
+                }
+
+                var isValue = schema.Values.Contains(name, StringComparer.OrdinalIgnoreCase);
+                if (!isValue && !schema.Switches.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new UsageException($"Unknown option '{argument}' for {command.ToLowerInvariant()}. Run 'diffrapid --help'.");
+                }
+
+                if (!isValue && inlineValue is not null)
+                {
+                    throw new UsageException($"Option '{argument}' is a switch and does not take a value.");
+                }
+
+                // A separate value may not look like another long option, so "--label --store x" is an error
+                // rather than a label of "--store"; write "--label=--text" for such a value.
+                if (isValue && inlineValue is null)
+                {
+                    if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
                     {
                         throw new UsageException($"Option '{argument}' needs a value.");
                     }
@@ -106,7 +150,7 @@ internal static partial class Program
             {
                 name = argument[2..];
             }
-            else if (argument.Length > 1 && (argument[0] == '-' || (argument[0] == '/' && !File.Exists(argument) && !Directory.Exists(argument))))
+            else if (argument.Length > 1 && (argument[0] == '-' || IsWindowsSlashOption(argument)))
             {
                 name = argument[1..];
             }
@@ -138,43 +182,44 @@ internal static partial class Program
             return (name, inlineValue);
         }
 
-        private void AddOption(string name, string? inlineValue)
-        {
-            _options[name] = inlineValue;
-            if ((name is "include" or "exclude" or "root") && inlineValue is not null)
-            {
-                if (!_repeated.TryGetValue(name, out var masks))
-                {
-                    masks = [];
-                    _repeated[name] = masks;
-                }
+        // WinMerge-style /o and /dl options exist for Windows tools; elsewhere "/..." is always a path.
+        private static bool IsWindowsSlashOption(string argument) =>
+            OperatingSystem.IsWindows() && argument[0] == '/' && !File.Exists(argument) && !Directory.Exists(argument);
 
-                masks.Add(inlineValue);
-            }
-            else if (name.Equals("line-filter", StringComparison.OrdinalIgnoreCase))
+        private void AddOption(string name, string? value)
+        {
+            if (!_options.TryGetValue(name, out var values))
             {
-                _lineFilters.Add(new LineFilter(inlineValue!));
+                values = [];
+                _options[name] = values;
+            }
+
+            values.Add(value);
+            if (name.Equals("line-filter", StringComparison.OrdinalIgnoreCase))
+            {
+                _lineFilters.Add(new LineFilter(value!));
             }
             else if (name.Equals("substitute", StringComparison.OrdinalIgnoreCase))
             {
-                var equals = inlineValue!.IndexOf('=');
+                var equals = value!.IndexOf('=');
                 if (equals < 0)
                 {
                     throw new UsageException("--substitute needs <find>=<replace>.");
                 }
 
-                _substitutions.Add(new SubstitutionFilter(inlineValue[..equals], inlineValue[(equals + 1)..], true, true, false));
+                _substitutions.Add(new SubstitutionFilter(value[..equals], value[(equals + 1)..], true, true, false));
             }
         }
 
-        /// <summary>Returns all values supplied for a repeated option.</summary>
-        public IReadOnlyList<string> Values(string name) => _repeated.TryGetValue(name, out var values) ? values : Array.Empty<string>();
+        /// <summary>Returns every value supplied for an option, in order.</summary>
+        public IReadOnlyList<string> Values(string name) =>
+            _options.TryGetValue(name, out var values) ? values.OfType<string>().ToList() : Array.Empty<string>();
 
         /// <summary>Returns whether an option was supplied.</summary>
         public bool Has(string name) => _options.ContainsKey(name);
 
-        /// <summary>Returns an option value, or null when absent.</summary>
-        public string? Value(string name) => _options.TryGetValue(name, out var value) ? value : null;
+        /// <summary>Returns the last value of an option, or null when absent.</summary>
+        public string? Value(string name) => _options.TryGetValue(name, out var values) ? values[^1] : null;
 
         /// <summary>Reads a nonnegative integer option or its fallback.</summary>
         public int IntValue(string name, int fallback)
@@ -226,7 +271,6 @@ internal static partial class Program
                 IgnoreNumbers = Has("ignore-numbers"),
                 IgnoreMissingTrailingLineEnding = Has("ignore-missing-trailing-eol"),
             };
-
         }
     }
 }

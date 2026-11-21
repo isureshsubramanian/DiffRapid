@@ -79,5 +79,5 @@ internal static partial class Program
         return ExitError;
     }
 
-    private sealed class UsageException(string message) : Exception(message);
+    internal sealed class UsageException(string message) : Exception(message);
 }

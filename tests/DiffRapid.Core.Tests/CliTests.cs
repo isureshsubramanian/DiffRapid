@@ -76,8 +76,8 @@ public sealed class CliTests
     public void ParsesGitMergeArguments(string outputOption)
     {
         var args = Program.ParsedArgs.Parse(
-            ["merge", "base file", "local file", "remote file", outputOption, "merged file",
-                "/dl", "Local label", "/dm", "Base label", "/dr", "Remote label"], 1);
+            ["merge", "base file", "local file", "remote file", Native(outputOption), "merged file",
+                Native("/dl"), "Local label", Native("/dm"), "Base label", Native("/dr"), "Remote label"], 1);
 
         Assert.Equal(["base file", "local file", "remote file"], args.Positionals);
         Assert.Equal("merged file", args.Value("output"));
@@ -91,6 +91,63 @@ public sealed class CliTests
     {
         var args = Program.ParsedArgs.Parse(["diff", "local file", "remote file"], 1);
         Assert.Equal(["local file", "remote file"], args.Positionals);
+    }
+
+    /// <summary>WinMerge-style "/o" options are Windows only; elsewhere the same token is the dash form's path.</summary>
+    internal static string Native(string option) => OperatingSystem.IsWindows() || !option.StartsWith('/') ? option : "-" + option[1..];
+
+    [Fact]
+    public void SlashArgumentsArePathsOutsideWindows()
+    {
+        var args = Program.ParsedArgs.Parse(["diff", "/tmp/left", "/o"], 1);
+        Assert.Equal(OperatingSystem.IsWindows() ? ["/tmp/left"] : ["/tmp/left", "/o"], args.Positionals);
+    }
+
+    [Theory]
+    [InlineData("'--dryrun'", "sync", "a", "b", "--profile", "mirror-right", "--yes", "--dryrun")]
+    [InlineData("'--report-format'", "diff", "a", "b", "--report-format", "html")]
+    [InlineData("'-x'", "table", "a", "b", "-x")]
+    [InlineData("'--temperature=1'", "explain", "a", "b", "--temperature=1")]
+    [InlineData("'--lable'", "history", "list", "a", "--lable", "x")]
+    [InlineData("'--fuzz'", "image", "a", "b", "--fuzz", "1")]
+    [InlineData("does not take a value", "diff", "a", "b", "--quiet=yes")]
+    [InlineData("'--left-label' needs a value", "diff", "a", "b", "--left-label", "--quiet")]
+    [InlineData("--api-key-env", "explain", "a", "b", "--api-key=secret")]
+    public void UnknownOptionsSwitchValuesAndMissingValuesAreUsageErrors(string expected, params string[] arguments)
+    {
+        var error = Assert.Throws<Program.UsageException>(() => Program.ParsedArgs.Parse(arguments, 1));
+        Assert.Contains(expected, error.Message);
+        Assert.DoesNotContain("secret", error.Message);
+    }
+
+    [Fact]
+    public async Task UnknownSyncOptionFailsBeforeAnyChange()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(Path.Combine(directory, "left"));
+        Directory.CreateDirectory(Path.Combine(directory, "right"));
+        File.WriteAllText(Path.Combine(directory, "right", "keep.txt"), "keep");
+        try
+        {
+            Assert.Equal(2, await Program.Main(["sync", Path.Combine(directory, "left"), Path.Combine(directory, "right"),
+                "--profile", "mirror-right", "--yes", "--dryrun"]));
+            Assert.True(File.Exists(Path.Combine(directory, "right", "keep.txt")));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DoubleDashEndsOptions()
+    {
+        var args = Program.ParsedArgs.Parse(["diff", "--quiet", "--", "--left", "-o"], 1);
+        Assert.True(args.Has("quiet"));
+        Assert.Equal(["--left", "-o"], args.Positionals);
+        var table = Program.ParsedArgs.Parse(["table", "--key=id", "--key", "name", "--", "-a.csv", "b.csv"], 1);
+        Assert.Equal(["id", "name"], table.Values("key"));
+        Assert.Equal(["-a.csv", "b.csv"], table.Positionals);
     }
 
     [Theory]
@@ -110,10 +167,10 @@ public sealed class CliTests
             File.WriteAllText(basePath, "original\n");
             File.WriteAllText(localPath, "local\n");
             File.WriteAllText(remotePath, conflict ? "remote\n" : "original\n");
-            string[] args = ["merge", basePath, localPath, remotePath, outputOption, mergedPath, "--diff3"];
+            string[] args = ["merge", basePath, localPath, remotePath, Native(outputOption), mergedPath, "--diff3"];
             if (customLabels)
             {
-                args = [.. args, "/dl", "LOCAL", "/dm", "BASE", "/dr", "REMOTE"];
+                args = [.. args, Native("/dl"), "LOCAL", Native("/dm"), "BASE", Native("/dr"), "REMOTE"];
             }
 
             Assert.Equal(conflict ? 1 : 0, await Program.Main(args));
