@@ -175,6 +175,15 @@ internal static class Diagnostics
 
     private static readonly object LogFileLock = new();
 
+    // Every Visual Studio instance of the user writes the same log: the lock makes the size check, the rename and the
+    // append one step across this process's threads, the named mutex across processes. Created under LogFileLock.
+    private const string LogFileMutexName = @"Local\DiffRapid.Log";
+    private static System.Threading.Mutex? _logFileMutex;
+
+    // How long to wait for another instance's write (an estimate: one append takes milliseconds). Past it the entry is
+    // still appended, but the log is not renamed, so two instances never rename it at once.
+    private static readonly TimeSpan LogFileMutexTimeout = TimeSpan.FromSeconds(1);
+
     private static void AppendToLogFile(string text)
     {
         try
@@ -182,21 +191,61 @@ internal static class Diagnostics
             // Warnings come from background threads too.
             lock (LogFileLock)
             {
-                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LogFilePath)!);
-                var log = new System.IO.FileInfo(LogFilePath);
-                if (log.Exists && log.Length > MaxLogFileSize)
+                var mutex = LogFileMutex();
+                var owned = mutex is not null && Acquire(mutex);
+                try
                 {
-                    var previous = System.IO.Path.ChangeExtension(LogFilePath, ".1.log");
-                    System.IO.File.Delete(previous);
-                    System.IO.File.Move(LogFilePath, previous);
-                }
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(LogFilePath)!);
 
-                System.IO.File.AppendAllText(LogFilePath, text + Environment.NewLine + Environment.NewLine);
+                    // Read only now, so a log another instance has just renamed is not renamed again.
+                    var log = new System.IO.FileInfo(LogFilePath);
+                    if ((owned || mutex is null) && log.Exists && log.Length > MaxLogFileSize)
+                    {
+                        var previous = System.IO.Path.ChangeExtension(LogFilePath, ".1.log");
+                        System.IO.File.Delete(previous);
+                        System.IO.File.Move(LogFilePath, previous);
+                    }
+
+                    System.IO.File.AppendAllText(LogFilePath, text + Environment.NewLine + Environment.NewLine);
+                }
+                finally
+                {
+                    if (owned)
+                    {
+                        mutex!.ReleaseMutex();
+                    }
+                }
             }
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
         {
             // Logging must never turn into a second failure.
+        }
+    }
+
+    // Null when the mutex cannot be created or opened; the log is then written as before, without it.
+    private static System.Threading.Mutex? LogFileMutex()
+    {
+        try
+        {
+            return _logFileMutex ??= new System.Threading.Mutex(initiallyOwned: false, LogFileMutexName);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.IO.IOException or System.Threading.WaitHandleCannotBeOpenedException)
+        {
+            return null;
+        }
+    }
+
+    private static bool Acquire(System.Threading.Mutex mutex)
+    {
+        try
+        {
+            return mutex.WaitOne(LogFileMutexTimeout);
+        }
+        catch (System.Threading.AbandonedMutexException)
+        {
+            // An instance ended while holding it; this thread owns it now.
+            return true;
         }
     }
 
