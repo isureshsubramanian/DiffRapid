@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -10,10 +11,16 @@ public static class ComparisonServer
     private static readonly IReadOnlyList<Tool> Tools = CreateTools();
     private static readonly JsonSerializerOptions ReportOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    /// <summary>The build's informational version without the "+commit" source suffix.</summary>
+    internal static string ServerVersion { get; } =
+        typeof(ComparisonServer).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0]
+        ?? typeof(ComparisonServer).Assembly.GetName().Version?.ToString(3)
+        ?? "0.0.0";
+
     /// <summary>Creates the protocol handlers, also usable with an in-memory stream transport.</summary>
     public static McpServerOptions CreateOptions() => new()
     {
-        ServerInfo = new Implementation { Name = "diffrapid-mcp", Version = "1.0.0" },
+        ServerInfo = new Implementation { Name = "diffrapid-mcp", Version = ServerVersion },
         ServerInstructions = "Read-only comparisons. Paths are local to the server. Line numbers are one-based. Check truncated before treating output as complete.",
         Capabilities = new ServerCapabilities { Tools = new ToolsCapability() },
         Handlers = new McpServerHandlers

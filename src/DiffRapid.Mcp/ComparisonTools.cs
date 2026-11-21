@@ -217,8 +217,8 @@ internal static class ComparisonTools
 
     private static object CompareApi(JsonElement arguments, CancellationToken cancellationToken)
     {
-        var left = FilePath(Required(arguments, "left"));
-        var right = FilePath(Required(arguments, "right"));
+        var left = AssemblyPath(Required(arguments, "left"));
+        var right = AssemblyPath(Required(arguments, "right"));
         var leftExtension = Path.GetExtension(left).ToLowerInvariant();
         var rightExtension = Path.GetExtension(right).ToLowerInvariant();
         var budget = new ReportBudget(cancellationToken);
@@ -247,6 +247,10 @@ internal static class ComparisonTools
 
         return ApiReport(AssemblyComparer.Compare(ApiReader.Read(left, cancellationToken), ApiReader.Read(right, cancellationToken)), budget);
     }
+
+    // The readers open the file themselves; a length of 0 is an empty file or a special file that must not be opened.
+    private static string AssemblyPath(string path) =>
+        FilePath(path) == 0 ? throw new ArgumentException($"'{path}' is empty or not a regular file.") : path;
 
     private static object ApiReport(ApiComparison result, ReportBudget budget)
     {
@@ -331,67 +335,46 @@ internal static class ComparisonTools
 
     private static object CreatePatch(JsonElement arguments, CancellationToken cancellationToken)
     {
-        var left = Required(arguments, "left");
-        var right = Required(arguments, "right");
+        var left = LocalPath(Required(arguments, "left"));
+        var right = LocalPath(Required(arguments, "right"));
         RenderedText patch;
         if (Directory.Exists(left) || Directory.Exists(right))
         {
             left = DirectoryPath(arguments, "left");
             right = DirectoryPath(arguments, "right");
-            var result = FolderComparer.Compare(left, right, cancellationToken: cancellationToken);
+
+            // A byte comparison stops at the first differing byte; only changed files are then read, once, by the
+            // patch writer, which stops when the output limit is reached. Files whose bytes differ but whose text
+            // matches get a bare "diff --git" line, which Patch.Parse skips.
+            var options = new FolderCompareOptions { Method = FolderCompareMethod.BinaryContents };
+            var result = FolderComparer.Compare(left, right, options, cancellationToken: cancellationToken);
             EnsureFolderReadable(result);
-            patch = Render(writer => WriteFolderPatch(writer, result, cancellationToken), cancellationToken);
+            EnsurePatchSizes(result);
+            patch = Render(writer => FolderPatchWriter.Write(writer, result, CompareOptions.Default), cancellationToken);
         }
         else
         {
             var result = TextComparer.Compare(ParseText(ReadText(left, false, cancellationToken)), ParseText(ReadText(right, false, cancellationToken)), cancellationToken: cancellationToken);
+
+            // Both labels name the left file on purpose: apply then patches that file in place. Different names
+            // would make the patch rename the left file to the right file's name.
             patch = Render(writer => UnifiedDiffWriter.Write(writer, result, "a/" + Path.GetFileName(left), "b/" + Path.GetFileName(left)), cancellationToken);
         }
 
         return new { patch = patch.Text, truncated = patch.Truncated };
     }
 
-    private static void WriteFolderPatch(TextWriter writer, FolderCompareResult result, CancellationToken cancellationToken)
+    // The patch writer reads each changed file whole, so the per-file limit applies to folder entries too.
+    private static void EnsurePatchSizes(FolderCompareResult result)
     {
         foreach (var item in result.Items)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (item.Status is FolderCompareStatus.Error or FolderCompareStatus.TypeConflict)
+            var changed = item.Status is FolderCompareStatus.Different or FolderCompareStatus.LeftOnly or FolderCompareStatus.RightOnly;
+            if (item.Kind == FolderItemKind.File && changed
+                && Math.Max(item.Left.Exists ? item.Left.Size : 0, item.Right.Exists ? item.Right.Size : 0) > MaxFileBytes)
             {
-                throw new IOException($"Cannot generate patch for '{item.RelativePath}': {item.Status}.");
+                throw new ArgumentException($"'{Slashes(item.RelativePath)}' exceeds the 64 MiB per-file limit.");
             }
-
-            if (item.Kind != FolderItemKind.File || item.Status is not (FolderCompareStatus.Different or FolderCompareStatus.LeftOnly or FolderCompareStatus.RightOnly))
-            {
-                continue;
-            }
-
-            WritePatchEntry(writer, result, item, cancellationToken);
-        }
-    }
-
-    private static void WritePatchEntry(TextWriter writer, FolderCompareResult result, FolderCompareItem item, CancellationToken cancellationToken)
-    {
-        var path = Slashes(item.RelativePath);
-        var left = item.Left.Exists ? ReadDecoded(Path.Combine(result.LeftRoot, path), cancellationToken) : null;
-        var right = item.Right.Exists ? ReadDecoded(Path.Combine(result.RightRoot, path), cancellationToken) : null;
-        writer.Write($"diff --git a/{path} b/{path}\n");
-        if (left?.IsBinary == true || right?.IsBinary == true)
-        {
-            writer.Write($"Binary files a/{path} and b/{path} differ\n");
-            return;
-        }
-
-        var difference = TextComparer.Compare(ParseText(left?.Text ?? ""), ParseText(right?.Text ?? ""), cancellationToken: cancellationToken);
-        var leftLabel = left is null ? "/dev/null" : "a/" + path;
-        var rightLabel = right is null ? "/dev/null" : "b/" + path;
-        if (difference.AreEqual && (left is null || right is null))
-        {
-            writer.Write($"--- {leftLabel}\n+++ {rightLabel}\n");
-        }
-        else
-        {
-            UnifiedDiffWriter.Write(writer, difference, leftLabel, rightLabel);
         }
     }
 
@@ -417,9 +400,9 @@ internal static class ComparisonTools
 
     private static string ReadText(string path, bool extractDocuments, CancellationToken cancellationToken)
     {
-        FilePath(path);
+        var length = FilePath(path);
         cancellationToken.ThrowIfCancellationRequested();
-        if (extractDocuments)
+        if (extractDocuments && length > 0)
         {
             var documentText = Path.GetExtension(path).ToLowerInvariant() switch
             {
@@ -446,10 +429,31 @@ internal static class ComparisonTools
 
     private static DecodedText ReadDecoded(string path, CancellationToken cancellationToken)
     {
-        FilePath(path);
-        var bytes = File.ReadAllBytesAsync(path, cancellationToken).GetAwaiter().GetResult();
-        cancellationToken.ThrowIfCancellationRequested();
-        return TextFileReader.Decode(bytes);
+        var length = FilePath(path);
+
+        // Devices, pipes and sockets report a length of 0. They are never opened, so a read cannot block, run
+        // without end, or consume another stream (such as this server's own standard input).
+        if (length == 0)
+        {
+            return TextFileReader.Decode([]);
+        }
+
+        // Read at most one byte past the limit, so a file that grew after the length check is still refused.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
+        using var content = new MemoryStream((int)Math.Min(length, MaxFileBytes));
+        var buffer = new byte[81920]; // the default Stream.CopyTo buffer size
+        int read;
+        while ((read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, MaxFileBytes + 1 - content.Length))) > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            content.Write(buffer, 0, read);
+            if (content.Length > MaxFileBytes)
+            {
+                throw new ArgumentException($"'{path}' exceeds the 64 MiB per-file limit.");
+            }
+        }
+
+        return TextFileReader.Decode(content.ToArray());
     }
 
     private static TextDocument ParseText(string text)
@@ -462,16 +466,49 @@ internal static class ComparisonTools
         return TextDocument.Parse(text);
     }
 
-    private static string FilePath(string path)
+    /// <summary>
+    /// Checks that <paramref name="path"/> names an existing file within the size limit and returns its length.
+    /// A length of 0 also covers devices, pipes and sockets, which callers must not open.
+    /// </summary>
+    private static long FilePath(string path)
     {
-        if (!File.Exists(path))
+        LocalPath(path);
+        var file = new FileInfo(path);
+        if (!file.Exists)
         {
             throw new FileNotFoundException($"File does not exist: '{path}'.");
         }
 
-        if (new FileInfo(path).Length > MaxFileBytes)
+        // Device nodes are also refused by name, for a clear error. File attributes do not mark devices on
+        // macOS or Linux, so the zero-length rule is what keeps other special files from being opened.
+        var target = file.LinkTarget is null ? file.FullName : file.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? file.FullName;
+        if (!OperatingSystem.IsWindows() && (file.FullName.StartsWith("/dev/", StringComparison.Ordinal) || target.StartsWith("/dev/", StringComparison.Ordinal)))
+        {
+            throw new ArgumentException($"'{path}' is a device, not a regular file.");
+        }
+
+        if (file.Length > MaxFileBytes)
         {
             throw new ArgumentException($"'{path}' exceeds the 64 MiB per-file limit.");
+        }
+
+        return file.Length;
+    }
+
+    /// <summary>
+    /// Refuses network and device paths before any file-system call: the \\server\share, //server/share, \\?\ and
+    /// \\.\ prefixes, and on Windows device names such as NUL, which resolve to \\.\NUL.
+    /// </summary>
+    private static string LocalPath(string path)
+    {
+        if (string.IsNullOrEmpty(path) || (path.Length >= 2 && path[0] is '\\' or '/' && path[1] is '\\' or '/'))
+        {
+            throw new ArgumentException($"'{path}' is not a local path; network and device paths are not supported.");
+        }
+
+        if (OperatingSystem.IsWindows() && Path.GetFullPath(path).StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"'{path}' is a device or network path, not a local file.");
         }
 
         return path;
@@ -479,7 +516,7 @@ internal static class ComparisonTools
 
     private static string DirectoryPath(JsonElement arguments, string name)
     {
-        var path = Required(arguments, name);
+        var path = LocalPath(Required(arguments, name));
         if (!Directory.Exists(path))
         {
             throw new DirectoryNotFoundException($"Directory does not exist: '{path}'.");
@@ -585,7 +622,16 @@ internal static class ComparisonTools
 
         public override Encoding Encoding => Encoding.UTF8;
 
-        public override void Write(char value) => Write(value.ToString());
+        public override void Write(char value)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_text.Length >= 64 * 1024)
+            {
+                throw new OutputLimitException();
+            }
+
+            _text.Append(value);
+        }
 
         public override void Write(string? value)
         {

@@ -39,6 +39,8 @@ public sealed class McpServerTests : IDisposable
         {
             var initialized = await Request(1, "initialize", new { protocolVersion = "2025-11-25", capabilities = new { }, clientInfo = new { name = "tests", version = "1" } });
             Assert.Equal("diffrapid-mcp", initialized.GetProperty("serverInfo").GetProperty("name").GetString());
+            var informational = typeof(ComparisonServer).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false).Cast<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+            Assert.Equal(informational.Split('+')[0], initialized.GetProperty("serverInfo").GetProperty("version").GetString());
             Assert.True(initialized.GetProperty("capabilities").TryGetProperty("tools", out _));
             await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}".AsMemory(), cancellation.Token);
 
@@ -440,6 +442,97 @@ public sealed class McpServerTests : IDisposable
         Assert.True(ComparisonServer.CallTool("compare_api", JsonSerializer.SerializeToElement(new { left = binary, right = binary })).IsError);
         var nul = File("binary.txt", "\0\0\0\0");
         Assert.True(ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = nul, right = nul })).IsError);
+    }
+
+    [Theory]
+    [InlineData("//server/share/file.txt")]
+    [InlineData(@"\\server\share\file.txt")]
+    [InlineData(@"\\?\C:\file.txt")]
+    [InlineData(@"\\.\pipe\name")]
+    [InlineData("")]
+    public void NetworkAndDevicePathsAreRefusedBeforeAnyFileAccess(string path)
+    {
+        foreach (var name in new[] { "compare_files", "compare_folders", "create_patch", "compare_api" })
+        {
+            var result = ComparisonServer.CallTool(name, JsonSerializer.SerializeToElement(new { left = path, right = path }));
+            Assert.True(result.IsError);
+            Assert.Contains("not a local path", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
+        }
+    }
+
+    [Fact]
+    public void DeviceFilesAreRefused()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var empty = File("empty.txt", "");
+        foreach (var device in new[] { "/dev/zero", "/dev/stdin", "/dev/random" })
+        {
+            var result = ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = device, right = empty }));
+            Assert.True(result.IsError);
+            Assert.Contains("not a regular file", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
+        }
+    }
+
+    [Fact]
+    public async Task PipesAreNeverOpened()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var pipe = Path.Combine(_root, "pipe.txt");
+        using (var mkfifo = Process.Start("mkfifo", [pipe]))
+        {
+            await mkfifo.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, mkfifo.ExitCode);
+        }
+
+        // Opening a pipe with no writer blocks, so a read that opens it would time out here.
+        var empty = File("empty.txt", "");
+        var call = Task.Run(() => Call("compare_files", new { left = pipe, right = empty }), TestContext.Current.CancellationToken);
+        var result = await call.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Assert.True(result.GetProperty("identical").GetBoolean());
+        Assert.True(ComparisonServer.CallTool("compare_api", JsonSerializer.SerializeToElement(new { left = pipe, right = pipe })).IsError);
+    }
+
+    [Fact]
+    public void FilesOverTheLimitAreRefusedInFolderPatches()
+    {
+        var left = DirectoryPath("left");
+        var right = DirectoryPath("right");
+        File("left/big.txt", "small\n");
+        using (var big = System.IO.File.Create(Path.Combine(right, "big.txt")))
+        {
+            big.SetLength(64L * 1024 * 1024 + 1);
+        }
+
+        var result = ComparisonServer.CallTool("create_patch", JsonSerializer.SerializeToElement(new { left, right }));
+        Assert.True(result.IsError);
+        Assert.Contains("64 MiB", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
+        result = ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = Path.Combine(left, "big.txt"), right = Path.Combine(right, "big.txt") }));
+        Assert.True(result.IsError);
+    }
+
+    [Fact]
+    public void FolderPatchStopsAtTheOutputLimit()
+    {
+        var left = DirectoryPath("left");
+        var right = DirectoryPath("right");
+        for (var index = 0; index < 40; index++)
+        {
+            File($"left/{index:D2}.txt", new string('a', 4000) + "\n");
+            File($"right/{index:D2}.txt", new string('b', 4000) + "\n");
+        }
+
+        var result = Call("create_patch", new { left, right });
+        Assert.True(result.GetProperty("truncated").GetBoolean());
+        Assert.Equal(65_536, result.GetProperty("patch").GetString()!.Length);
+        Assert.DoesNotContain("39.txt", result.GetProperty("patch").GetString());
     }
 
     [Fact]

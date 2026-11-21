@@ -121,3 +121,12 @@ Missing paths, unsupported inputs, malformed documents and invalid options retur
 comparison engines; existing synchronous readers and renderers observe it at
 operation boundaries. There is no network transport or path allowlist: tools can
 read files accessible to the server process.
+
+Paths must be local: network and device prefixes (`\\server\share`, `//server/share`,
+`\\?\`, `\\.\`) and, on Windows, device names such as `NUL` are refused before any
+file is touched. On macOS and Linux, paths under `/dev` (including links to them,
+such as `/dev/stdin`) are refused. Other special files, such as named pipes, report
+a length of 0 and are read as empty without being opened. Reads stop one byte past
+the 64 MiB limit, so a file that grows during a call is still refused. Folder
+patches compare bytes first, read only changed files, and stop writing once the
+65,536-character limit is reached; changed files over 64 MiB are refused.
