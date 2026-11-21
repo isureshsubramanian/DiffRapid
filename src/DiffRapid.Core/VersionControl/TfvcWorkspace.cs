@@ -55,12 +55,21 @@ public sealed class TfvcWorkspace : IVersionControl
 
     private static string LocateWithVisualStudioInstaller(string installer, IProcessRunner runner)
     {
-        // Prefer the first tf.exe from the latest installation that includes Team Explorer.
-        var result = runner.RunAsync(installer, Environment.CurrentDirectory,
-            new[] { "-latest", "-requires", "Microsoft.VisualStudio.TeamExplorer", "-find", "**\\tf.exe" },
-            CancellationToken.None).GetAwaiter().GetResult();
-        var candidates = result.Text.Trim().Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-        return result.ExitCode == 0 && candidates.Length > 0 ? candidates[0] : "tf";
+        // Prefer the first tf.exe from the latest installation that includes Team Explorer. The same 10-second limit
+        // as the workfold query below keeps a hung installer from blocking discovery; PATH is the fallback.
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var result = runner.RunAsync(installer, Environment.CurrentDirectory,
+                new[] { "-latest", "-requires", "Microsoft.VisualStudio.TeamExplorer", "-find", "**\\tf.exe" },
+                timeout.Token).GetAwaiter().GetResult();
+            var candidates = result.Text.Trim().Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return result.ExitCode == 0 && candidates.Length > 0 ? candidates[0] : "tf";
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException)
+        {
+            return "tf";
+        }
     }
 
     /// <summary>Finds workspace metadata or queries local workfold mappings.</summary>

@@ -262,6 +262,21 @@ public sealed class PluginTests
         Assert.Contains("did not finish", timeout.Message);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
 
+        // A stopped program has exited before its temporary file is removed.
+        var fileSleeper = OperatingSystem.IsWindows()
+            ? new ExternalCommandPlugin("Sleep", "ping.exe", ["-n", "30", "127.0.0.1", ExternalCommandPlugin.FilePlaceholder])
+            : new ExternalCommandPlugin("Sleep", "/bin/sh", ["-c", "sleep 30", ExternalCommandPlugin.FilePlaceholder]);
+        Assert.Throws<PluginException>(() =>
+            fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
+        Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+        {
+            Assert.ThrowsAny<OperationCanceledException>(() =>
+                fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromSeconds(30), cancellation.Token)));
+        }
+
+        Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
+
         var failing = OperatingSystem.IsWindows()
             ? new ExternalCommandPlugin("Find", "findstr.exe", ["no-such-text", ExternalCommandPlugin.FilePlaceholder])
             : new ExternalCommandPlugin("Find", "grep", ["no-such-text", ExternalCommandPlugin.FilePlaceholder]);

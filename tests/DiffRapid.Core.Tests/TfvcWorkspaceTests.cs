@@ -30,6 +30,10 @@ public sealed class TfvcWorkspaceTests
             Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
             runner.Handler = _ => new ProcessResult(1, Encoding.UTF8.GetBytes("ignored tf.exe"), "failed");
             Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
+            runner.Handler = _ => throw new OperationCanceledException();
+            Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
+            runner.Handler = _ => throw new IOException("cannot start");
+            Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
         }
         finally
         {
@@ -195,6 +199,32 @@ public sealed class TfvcWorkspaceTests
         Assert.Contains("--follow", runner.Arguments!);
         Assert.Contains("core.quotepath=false", runner.Arguments!);
         Assert.Contains("log.showSignature=false", runner.Arguments!);
+    }
+
+    /// <summary>Verifies the output cap, the time limit and closed standard input.</summary>
+    [Fact]
+    public async Task ProcessRunnerCapsOutputStopsAtTheTimeLimitAndClosesInput()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var flood = await Assert.ThrowsAsync<IOException>(() =>
+            ProcessRunner.RunAsync("/bin/sh", null, ["-c", "while :; do echo xxxxxxxxxxxxxxxx; done"], null, 4096, TimeSpan.FromSeconds(30), default));
+        Assert.Contains("output passed", flood.Message);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            ProcessRunner.RunAsync("/bin/sleep", null, ["30"], null, 4096, TimeSpan.FromMilliseconds(200), default));
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
+
+        // cat ends at once because its standard input is closed rather than inherited.
+        var echo = await ProcessRunner.RunAsync("/bin/cat", null, [], "fed"u8.ToArray(), 4096, TimeSpan.FromSeconds(30), default);
+        Assert.Equal("fed", echo.Text);
+        var empty = await new ProcessRunner().RunAsync("/bin/cat", Path.GetTempPath(), [], default);
+        Assert.Equal(0, empty.ExitCode);
+        Assert.Empty(empty.Output);
     }
 
     /// <summary>Verifies cancellation terminates a running process.</summary>
