@@ -25,6 +25,9 @@ internal sealed class DiffOverviewBar : FrameworkElement
     private DiffModel? _model;
     private double _viewportTopRow;
     private double _viewportRows;
+    private DrawingGroup? _marks;
+    private DiffModel? _marksModel;
+    private Size _marksSize;
 
     public event EventHandler<int>? RowRequested;
 
@@ -58,6 +61,12 @@ internal sealed class DiffOverviewBar : FrameworkElement
 
     public void SetViewport(double topRow, double rows)
     {
+        // Every layout of either editor reports the viewport, mostly unchanged.
+        if (topRow == _viewportTopRow && rows == _viewportRows)
+        {
+            return;
+        }
+
         _viewportTopRow = topRow;
         _viewportRows = rows;
         InvalidateVisual();
@@ -83,6 +92,34 @@ internal sealed class DiffOverviewBar : FrameworkElement
         dc.DrawRoundedRectangle(LensBrush, null, new Rect(1, lensTop, Math.Max(ActualWidth - 2, 1), lensHeight), 3, 3);
         dc.Pop();
 
+        dc.DrawDrawing(Marks(model, scale));
+    }
+
+    // The difference marks depend only on the model and the size, so scrolling (which moves only the lens) reuses
+    // them instead of scanning every row again.
+    private Drawing Marks(DiffModel model, double scale)
+    {
+        var size = RenderSize;
+        if (_marks is not null && ReferenceEquals(_marksModel, model) && _marksSize == size)
+        {
+            return _marks;
+        }
+
+        var marks = new DrawingGroup();
+        using (var dc = marks.Open())
+        {
+            DrawMarks(dc, model, scale);
+        }
+
+        marks.Freeze();
+        _marks = marks;
+        _marksModel = model;
+        _marksSize = size;
+        return marks;
+    }
+
+    private void DrawMarks(DrawingContext dc, DiffModel model, double scale)
+    {
         var width = ActualWidth - (2 * Inset);
         var half = width / 2;
         var r = 0;

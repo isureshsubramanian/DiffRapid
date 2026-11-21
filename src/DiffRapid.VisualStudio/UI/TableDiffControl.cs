@@ -21,6 +21,8 @@ using Microsoft.VisualStudio.Imaging.Interop;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.Win32;
+using static DiffRapid.VisualStudio.UI.DiffTheme;
+using static DiffRapid.VisualStudio.UI.UiText;
 using TableColumn = DiffRapid.Core.Table.TableColumn;
 using Task = System.Threading.Tasks.Task;
 
@@ -325,16 +327,6 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
                 ApplyListStyles();
             }
         }).FileAndForget("DiffRapid/TableTheme");
-    }
-
-    private static CrispImage Icon(ImageMoniker moniker) => new() { Moniker = moniker, Width = 16, Height = 16 };
-
-    private static StackPanel IconLabel(ImageMoniker moniker, string text)
-    {
-        var panel = new StackPanel { Orientation = Orientation.Horizontal };
-        panel.Children.Add(Icon(moniker));
-        panel.Children.Add(new TextBlock { Text = text, Margin = new Thickness(5, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-        return panel;
     }
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
@@ -990,8 +982,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         var dialog = new SaveFileDialog
         {
             Title = "Export table comparison report",
-            FileName = string.Concat((Path.GetFileNameWithoutExtension(_leftPath) + " vs " + Path.GetFileNameWithoutExtension(_rightPath) + " report")
-                .Select(c => Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            FileName = UiText.SafeFileName(Path.GetFileNameWithoutExtension(_leftPath) + " vs " + Path.GetFileNameWithoutExtension(_rightPath) + " report"),
             Filter = "HTML report (*.html)|*.html|Markdown report (*.md)|*.md",
             AddExtension = true,
             OverwritePrompt = true,
@@ -1005,7 +996,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         var options = new TableReportOptions { Title = leftName + " ↔ " + rightName, LeftLabel = _leftPath, RightLabel = _rightPath };
         try
         {
-            using (var writer = new StreamWriter(dialog.FileName, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            UiText.WriteText(dialog.FileName, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), writer =>
             {
                 if (html)
                 {
@@ -1015,7 +1006,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
                 {
                     TableReportWriter.WriteMarkdown(_outcome.Result, options, writer);
                 }
-            }
+            });
 
             _position.Text = $"Saved the report to {dialog.FileName}";
             if (html)
@@ -1028,8 +1019,6 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
             _position.Text = $"Could not save the report: {ex.Message}";
         }
     }
-
-    private static string Plural(int count, string singular) => $"{count:N0} {(count == 1 ? singular : singular + "s")}";
 
     /// <summary>The two tables as read with one set of read options, kept so option changes skip re-reading.</summary>
     private sealed class LoadedTables

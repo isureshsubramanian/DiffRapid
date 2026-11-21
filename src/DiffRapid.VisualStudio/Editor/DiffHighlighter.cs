@@ -50,14 +50,32 @@ internal sealed class DiffHighlighter
         _formatMap = formatMap;
         _layer = view.GetAdornmentLayer(DiffHighlighterProvider.LayerName);
 
-        _view.LayoutChanged += (_, _) => Redraw();
-        _view.ViewportWidthChanged += (_, _) => Redraw();
-        _formatMap.FormatMappingChanged += (_, _) =>
-        {
-            _brushes.Clear();
-            Redraw();
-        };
-        _view.Closed += (_, _) => _layer.RemoveAllAdornments();
+        _view.LayoutChanged += OnLayoutChanged;
+        _view.ViewportWidthChanged += OnViewportWidthChanged;
+
+        // The format map is shared by every view of the same appearance category and outlives this view,
+        // so the handler is removed when the view closes; otherwise each closed comparison stays in memory.
+        _formatMap.FormatMappingChanged += OnFormatMappingChanged;
+        _view.Closed += OnClosed;
+    }
+
+    private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e) => Redraw();
+
+    private void OnViewportWidthChanged(object sender, System.EventArgs e) => Redraw();
+
+    private void OnFormatMappingChanged(object sender, FormatItemsEventArgs e)
+    {
+        _brushes.Clear();
+        Redraw();
+    }
+
+    private void OnClosed(object sender, System.EventArgs e)
+    {
+        _view.LayoutChanged -= OnLayoutChanged;
+        _view.ViewportWidthChanged -= OnViewportWidthChanged;
+        _formatMap.FormatMappingChanged -= OnFormatMappingChanged;
+        _view.Closed -= OnClosed;
+        _layer.RemoveAllAdornments();
     }
 
     private void Redraw()

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -12,6 +13,7 @@ using DiffRapid.VisualStudio.UI;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using static DiffRapid.VisualStudio.UI.UiText;
 using Task = System.Threading.Tasks.Task;
 
 namespace DiffRapid.VisualStudio;
@@ -36,6 +38,19 @@ public sealed class DiffRapidPackage : AsyncPackage
         await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         await CompareCommands.InitializeAsync(this);
         await LocalHistoryRecorder.StartAsync(this);
+
+        // Temporary copies left by comparisons of earlier sessions (closed by a crash, or still locked then).
+        _ = Task.Run(() => TemporaryFiles.Sweep(DisposalToken), DisposalToken);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && ThreadHelper.CheckAccess())
+        {
+            LocalHistoryRecorder.Stop();
+        }
+
+        base.Dispose(disposing);
     }
 
     /// <summary>
@@ -57,21 +72,35 @@ public sealed class DiffRapidPackage : AsyncPackage
                 "Loading the table comparison",
                 () => Task.FromResult<FrameworkElement>(new TableDiffControl(this, leftPath, rightPath)),
                 Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-                hostsEditors: false);
+                hostsEditors: false,
+                files: new[] { leftPath, rightPath });
             return;
         }
 
-        if (await Task.Run(() => IsHexFile(leftPath) || IsHexFile(rightPath)))
+        // An assembly's API is read once here, to tell it from a native binary, and reused by the text comparison.
+        var (hex, leftApi, rightApi) = await Task.Run(() =>
+        {
+            var left = BinaryApiText(leftPath, out var leftHex);
+            if (leftHex)
+            {
+                return (true, null, null);
+            }
+
+            var right = BinaryApiText(rightPath, out var rightHex);
+            return (rightHex, left, right);
+        });
+        if (hex)
         {
             await OpenDocumentAsync(
                 "Loading the hex comparison",
                 () => Task.FromResult<FrameworkElement>(new HexDiffControl(this, leftPath, rightPath)),
                 Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-                hostsEditors: false);
+                hostsEditors: false,
+                files: new[] { leftPath, rightPath });
             return;
         }
 
-        await OpenTextComparisonAsync(leftPath, rightPath);
+        await OpenTextComparisonAsync(leftPath, rightPath, leftApi, rightApi);
     }
 
     private static bool IsTableFile(string path)
@@ -80,20 +109,32 @@ public sealed class DiffRapidPackage : AsyncPackage
         return extension.Equals(".csv", StringComparison.OrdinalIgnoreCase) || extension.Equals(".tsv", StringComparison.OrdinalIgnoreCase);
     }
 
-    // A binary file that has no text form: not a document or a .NET assembly or package.
-    private static bool IsHexFile(string path) => IsBinaryFile(path) && AssemblyApiText(path) is null;
+    // For a binary file: the API text of a .NET assembly or package, or null with hex set when it has no text form
+    // (not a document or an assembly). Null without hex for other files.
+    private static string? BinaryApiText(string path, out bool hex)
+    {
+        var binary = IsBinaryFile(path);
+        var api = binary ? AssemblyApiText(path) : null;
+        hex = binary && api is null;
+        return api;
+    }
 
     /// <summary>
     /// Opens a new text comparison document tab for two files and returns its window. Word, Excel and PowerPoint
     /// files are compared as their text, through temporary copies shown read-only.
     /// </summary>
     public Task<IVsWindowFrame> OpenTextComparisonAsync(string leftPath, string rightPath) =>
+        OpenTextComparisonAsync(leftPath, rightPath, null, null);
+
+    /// <param name="leftApi">The left file's API text when already read; null reads it when the file is an assembly.</param>
+    /// <param name="rightApi">The right file's API text; see <paramref name="leftApi"/>.</param>
+    private Task<IVsWindowFrame> OpenTextComparisonAsync(string leftPath, string rightPath, string? leftApi, string? rightApi) =>
         OpenDocumentAsync(
             "Loading the comparison",
             async () =>
             {
-                var left = await Task.Run(() => AsComparableText(leftPath));
-                var right = await Task.Run(() => AsComparableText(rightPath));
+                var left = await Task.Run(() => AsComparableText(leftPath, leftApi));
+                var right = await Task.Run(() => AsComparableText(rightPath, rightApi));
                 var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
                 control.LeftLabel = SourceLabel(leftPath, left);
                 control.RightLabel = SourceLabel(rightPath, right);
@@ -101,7 +142,8 @@ public sealed class DiffRapidPackage : AsyncPackage
                 return control;
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-            hostsEditors: true);
+            hostsEditors: true,
+            files: new[] { leftPath, rightPath });
 
     /// <summary>
     /// Runs an unpacker and prediffer pipeline on two files' content and opens the resulting texts side by side,
@@ -133,7 +175,8 @@ public sealed class DiffRapidPackage : AsyncPackage
                 return control;
             },
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath) + " (" + steps + ")",
-            hostsEditors: true);
+            hostsEditors: true,
+            files: new[] { left.Path, right.Path });
     }
 
     /// <summary>
@@ -217,10 +260,7 @@ public sealed class DiffRapidPackage : AsyncPackage
             return false;
         }
 
-        var utf16Or32Little = read >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE;
-        var utf16Big = read >= 2 && buffer[0] == 0xFE && buffer[1] == 0xFF;
-        var utf32Big = read >= 4 && buffer[0] == 0x00 && buffer[1] == 0x00 && buffer[2] == 0xFE && buffer[3] == 0xFF;
-        return !utf16Or32Little && !utf16Big && !utf32Big && Array.IndexOf(buffer, (byte)0, 0, read) >= 0;
+        return LooksBinary(buffer, read);
     }
 
     /// <summary>Opens the picture comparison for two image files; decoding and comparing run in the background.</summary>
@@ -229,20 +269,21 @@ public sealed class DiffRapidPackage : AsyncPackage
             "Loading the image comparison",
             () => Task.FromResult<FrameworkElement>(new ImageDiffControl(this, leftPath, rightPath)),
             Path.GetFileName(leftPath) + " ↔ " + Path.GetFileName(rightPath),
-            hostsEditors: false);
+            hostsEditors: false,
+            files: new[] { leftPath, rightPath });
 
     /// <summary>True for the image formats the image comparison decodes (WebP only where Windows has the codec).</summary>
     private static bool IsImageFile(string path) =>
         Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" or ".ico" or ".webp";
 
-    private static string AsComparableText(string path)
+    private static string AsComparableText(string path, string? knownApi)
     {
         if (!File.Exists(path))
         {
             return path;
         }
 
-        if (AssemblyApiText(path) is { } api)
+        if ((knownApi ?? AssemblyApiText(path)) is { } api)
         {
             return EditorSelection.WriteTemporary(api, Path.GetFileName(path) + " (public API)", ".cs");
         }
@@ -334,18 +375,12 @@ public sealed class DiffRapidPackage : AsyncPackage
             Path.GetFileName(patchPath) + " → " + FolderName(targetPath),
             hostsEditors: false);
 
-    private static string FolderName(string path)
-    {
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var name = Path.GetFileName(trimmed);
-        return string.IsNullOrEmpty(name) ? trimmed : name;
-    }
-
     /// <param name="hostsEditors">
     /// True when the view is made of text editors: the window then uses the DiffRapid key binding scope,
     /// which inherits the text editor's bindings so arrows, Enter, Backspace and the rest reach them.
     /// </param>
-    private async Task<IVsWindowFrame> OpenDocumentAsync(string loadStep, Func<Task<FrameworkElement>> createView, string caption, bool hostsEditors)
+    /// <param name="files">The compared files; those that are temporary copies are removed when the tab closes.</param>
+    private async Task<IVsWindowFrame> OpenDocumentAsync(string loadStep, Func<Task<FrameworkElement>> createView, string caption, bool hostsEditors, IReadOnlyList<string>? files = null)
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
 
@@ -362,7 +397,7 @@ public sealed class DiffRapidPackage : AsyncPackage
             throw new StepFailedException(loadStep, ex);
         }
 
-        var document = new DiffDocumentPane(view);
+        var document = new DiffDocumentPane(view, files ?? Array.Empty<string>());
         try
         {
             var frame = Diagnostics.Step("Creating the comparison window", () => CreateDocumentWindow(shell, document, caption, hostsEditors));
