@@ -337,8 +337,14 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
             {
                 (plan, suggestion) = await Task.Run(() => BuildPlan(target, options), cancellation.Token);
             }
-            catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {
+                // A newer plan has taken over the view.
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Any failure (also ArgumentException, NotSupportedException from odd paths) must end the busy state.
                 problem = ex.Message;
             }
 
@@ -464,14 +470,28 @@ internal sealed class ApplyPatchControl : DockPanel, IComparisonView
         SetBusy(true, $"Applying {chosen.Count} files…");
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
-            var results = await Task.Run(() => FolderPatchApplier.Apply(plan, chosen.Contains));
+            string outcome;
+            try
+            {
+                outcome = Outcome(await Task.Run(() => FolderPatchApplier.Apply(plan, chosen.Contains), _package.DisposalToken));
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                outcome = "Applying stopped: " + ex.Message;
+            }
+
             await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (_disposed)
             {
                 return;
             }
 
-            StartPlan(Outcome(results));
+            // Read the files again either way: some may have been written before a failure.
+            StartPlan(outcome);
         }).FileAndForget("DiffRapid/ApplyPatch");
     }
 
