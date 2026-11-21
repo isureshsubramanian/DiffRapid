@@ -386,9 +386,6 @@ public static class FolderPatchApplier
         return true;
     }
 
-    private static bool SameFolder(string source, string target) =>
-        string.Equals(Path.GetDirectoryName(source), Path.GetDirectoryName(target), StringComparison.Ordinal);
-
     private static string? FirstFailure(FilePatch patch, PatchApplyResult result, PatchApplyOptions options)
     {
         for (var i = 0; i < result.Outcomes.Count; i++)
@@ -489,9 +486,10 @@ public static class FolderPatchApplier
             stream.Write(preamble, 0, preamble.Length);
             stream.Write(content, 0, content.Length);
         });
-        if (caseOnly && SameFolder(file.SourcePath!, file.TargetPath))
+        if (caseOnly && !string.Equals(Path.GetFileName(file.SourcePath), Path.GetFileName(file.TargetPath), StringComparison.Ordinal))
         {
-            RenameCase(file.SourcePath!, file.TargetPath);
+            // Only the file name is renamed; the folders keep their spelling (see above).
+            RenameCase(file.SourcePath!, Path.Combine(Path.GetDirectoryName(file.SourcePath)!, Path.GetFileName(file.TargetPath)));
         }
         else if (file.Action == FilePatchAction.Rename && !caseOnly)
         {
