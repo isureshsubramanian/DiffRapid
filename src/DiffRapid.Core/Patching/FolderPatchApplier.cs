@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Patching;
@@ -103,11 +104,12 @@ public static class FolderPatchApplier
     /// <summary>
     /// Plans every file of <paramref name="patch"/> relative to <paramref name="root"/> without writing anything.
     /// </summary>
-    public static FolderPatchPlan Plan(Patch patch, string root, PatchApplyOptions? options = null)
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static FolderPatchPlan Plan(Patch patch, string root, PatchApplyOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new PatchApplyOptions();
         var fullRoot = Path.GetFullPath(root);
-        var files = patch.Files.Select(file => PlanUnderRoot(file, fullRoot, options)).ToList();
+        var files = patch.Files.Select(file => PlanUnderRoot(file, fullRoot, options, cancellationToken)).ToList();
         return new FolderPatchPlan(fullRoot, options, files.AsReadOnly());
     }
 
@@ -171,14 +173,15 @@ public static class FolderPatchApplier
     /// Plans one file patch against <paramref name="filePath"/>, ignoring the paths in the patch
     /// (applying a patch to a file chosen by the user).
     /// </summary>
-    public static FilePatchPlan PlanFile(FilePatch patch, string filePath, PatchApplyOptions? options = null)
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static FilePatchPlan PlanFile(FilePatch patch, string filePath, PatchApplyOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new PatchApplyOptions();
         var fullPath = Path.GetFullPath(filePath);
         var deletes = (options.Reverse ? patch.OldPath : patch.NewPath) is null;
         var target = deletes ? null : fullPath;
         var action = deletes ? FilePatchAction.Delete : FilePatchAction.Modify;
-        return PlanContent(patch, Path.GetFileName(fullPath), fullPath, target, action, options);
+        return PlanContent(patch, Path.GetFileName(fullPath), fullPath, target, action, options, cancellationToken);
     }
 
     /// <summary>
@@ -226,7 +229,7 @@ public static class FolderPatchApplier
         }
     }
 
-    private static FilePatchPlan PlanUnderRoot(FilePatch patch, string root, PatchApplyOptions options)
+    private static FilePatchPlan PlanUnderRoot(FilePatch patch, string root, PatchApplyOptions options, CancellationToken cancellationToken)
     {
         var sourceName = options.Reverse ? patch.NewPath : patch.OldPath;
         var targetName = options.Reverse ? patch.OldPath : patch.NewPath;
@@ -257,16 +260,17 @@ public static class FolderPatchApplier
             : target is null ? FilePatchAction.Delete
             : string.Equals(source, target, PathComparison) ? FilePatchAction.Modify
             : FilePatchAction.Rename;
-        return PlanContent(patch, display, source, target, action, options);
+        return PlanContent(patch, display, source, target, action, options, cancellationToken);
     }
 
     /// <summary>Reads the source, applies the hunks in memory and decides whether the result can be written.</summary>
-    private static FilePatchPlan PlanContent(FilePatch patch, string display, string? source, string? target, FilePatchAction action, PatchApplyOptions options)
+    private static FilePatchPlan PlanContent(FilePatch patch, string display, string? source, string? target, FilePatchAction action, PatchApplyOptions options, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // A rename whose old file is gone and whose new file already holds the result has been applied.
         if (action == FilePatchAction.Rename && !File.Exists(source) && File.Exists(target))
         {
-            var atTarget = PlanContent(patch, display, target, target, FilePatchAction.Modify, options);
+            var atTarget = PlanContent(patch, display, target, target, FilePatchAction.Modify, options, cancellationToken);
             var applied = atTarget.Status == FilePatchStatus.AlreadyApplied || (patch.Hunks.Count == 0 && atTarget.Status == FilePatchStatus.Ready);
             if (applied)
             {
@@ -282,7 +286,7 @@ public static class FolderPatchApplier
             return Rejected(patch, display, FilePatchStatus.Binary, "Binary changes cannot be applied from a text patch.") with { SourcePath = source, TargetPath = target, Action = action };
         }
 
-        var result = PatchApplier.Apply(decoded.Text, patch, options);
+        var result = PatchApplier.Apply(decoded.Text, patch, options, cancellationToken);
         var allAlreadyApplied = result.Outcomes.Count > 0 && result.Outcomes.All(o => o.Status == HunkStatus.AlreadyApplied);
         var problem = FileStateProblem(action, exists, decoded.Text, result, allAlreadyApplied);
         problem ??= FirstFailure(patch, result, options);

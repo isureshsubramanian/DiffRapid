@@ -85,4 +85,26 @@ public sealed class PatchApplierTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => PatchApplier.Apply("", Change, new PatchApplyOptions { Fuzz = fuzz }));
     }
+
+    [Fact]
+    public void HugeHunkStartSearchesOnlyTheFileAndDoesNotOverflow()
+    {
+        var file = Patch.Parse("--- a/x\n+++ b/x\n@@ -2000000000,3 +2000000000,3 @@\n top\n-old\n+new\n end\n"
+            + "@@ -2147483647 +2147483647 @@\n-missing\n+other\n").Files[0];
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var result = PatchApplier.Apply("top\nold\nend\n", file);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+        Assert.Equal("top\nnew\nend\n", result.Text);
+        Assert.Equal(new HunkOutcome(HunkStatus.AppliedWithOffset, -1999999999), result.Outcomes[0]);
+        Assert.Equal(HunkStatus.Failed, result.Outcomes[1].Status);
+    }
+
+    [Fact]
+    public void CancelledApplyThrows()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => PatchApplier.Apply("top\nold\nend\n", Change, null, cancellation.Token));
+        Assert.Throws<OperationCanceledException>(() => FolderPatchApplier.Plan(Patch.Parse("--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n top\n-old\n+new\n end\n"), Path.GetTempPath(), null, cancellation.Token));
+    }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Text.RegularExpressions;
 using DiffRapid.Core.Text;
 
@@ -55,8 +56,15 @@ public sealed record PatchApplyResult(string Text, IReadOnlyList<HunkOutcome> Ou
 /// <summary>Applies unified hunks while preserving existing line terminators.</summary>
 public static class PatchApplier
 {
-    /// <summary>Applies a file patch, searching nearest positions before relaxing edge context.</summary>
-    public static PatchApplyResult Apply(string original, FilePatch patch, PatchApplyOptions? options = null)
+    /// <summary>
+    /// Applies a file patch, searching nearest positions before relaxing edge context. Hunk positions come from the
+    /// patch, so the search is limited to the lines of <paramref name="original"/>: the work grows with the file and
+    /// the hunks, never with the line numbers the patch claims.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The fuzz option is outside zero to two.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
+    public static PatchApplyResult Apply(string original, FilePatch patch, PatchApplyOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
         options ??= new PatchApplyOptions();
         if (options.Fuzz < 0 || options.Fuzz > 2)
@@ -74,32 +82,35 @@ public static class PatchApplier
         }
 
         var outcomes = new List<HunkOutcome>();
-        var shift = 0;
+        // Long arithmetic: hunk starts are untrusted and may be near int.MaxValue, so the expected position and the
+        // accumulated shift can leave the int range without any line ever matching there.
+        long shift = 0;
         var boundary = 0;
         foreach (var hunk in patch.Hunks)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var body = hunk.Lines.Select(l => options.Reverse
                 ? l with { Kind = l.Kind == '+' ? '-' : l.Kind == '-' ? '+' : ' ' } : l).ToArray();
             var count = options.Reverse ? hunk.NewCount : hunk.OldCount;
             var start = options.Reverse ? hunk.NewStart : hunk.OldStart;
-            var expected = (count == 0 ? start : start - 1) + shift;
+            var expected = (count == 0 ? start : start - 1L) + shift;
             var delta = body.Count(l => l.Kind == '+') - body.Count(l => l.Kind == '-');
             if (count == 0 && body.Any(l => l.Kind == '+') && Matches(lines, body, expected, 0, 0, true, options))
             {
                 outcomes.Add(new HunkOutcome(HunkStatus.AlreadyApplied));
                 shift += delta;
-                boundary = expected + delta;
+                boundary = (int)(expected + delta);
                 continue;
             }
 
-            var location = LocateHunk(lines, body, expected, boundary, count == 0, options);
+            var location = LocateHunk(lines, body, expected, boundary, count == 0, options, cancellationToken);
             if (location is { } match)
             {
                 boundary = EditHunk(lines, body, match.Position, ending);
                 shift += match.Position - expected + delta;
                 var status = match.Fuzz > 0 ? HunkStatus.AppliedWithFuzz
                     : match.Position == expected ? HunkStatus.Applied : HunkStatus.AppliedWithOffset;
-                outcomes.Add(new HunkOutcome(status, match.Position - expected));
+                outcomes.Add(new HunkOutcome(status, ClampOffset(match.Position - expected)));
                 continue;
             }
 
@@ -116,8 +127,10 @@ public static class PatchApplier
         return new PatchApplyResult(new TextDocument(lines).ToString(), outcomes.AsReadOnly());
     }
 
+    private static int ClampOffset(long offset) => (int)Math.Max(int.MinValue, Math.Min(int.MaxValue, offset));
+
     private static (int Position, int Fuzz)? LocateHunk(List<TextLine> lines, PatchLine[] body,
-        int expected, int boundary, bool insertion, PatchApplyOptions options)
+        long expected, int boundary, bool insertion, PatchApplyOptions options, CancellationToken cancellationToken)
     {
         for (var fuzz = 0; fuzz <= options.Fuzz; fuzz++)
         {
@@ -125,7 +138,7 @@ public static class PatchApplier
             var trailing = Math.Min(fuzz, Enumerable.Reverse(body).TakeWhile(l => l.Kind == ' ').Count());
             if (expected >= boundary && Matches(lines, body, expected, leading, trailing, false, options))
             {
-                return (expected, fuzz);
+                return ((int)expected, fuzz);
             }
 
             if (insertion)
@@ -133,7 +146,7 @@ public static class PatchApplier
                 continue;
             }
 
-            var position = LocateOffset(lines, body, expected, boundary, leading, trailing, options);
+            var position = LocateOffset(lines, body, expected, boundary, leading, trailing, options, cancellationToken);
             if (position.HasValue)
             {
                 return (position.Value, fuzz);
@@ -143,23 +156,24 @@ public static class PatchApplier
         return null;
     }
 
-    private static int? LocateOffset(List<TextLine> lines, PatchLine[] body, int expected,
-        int boundary, int leading, int trailing, PatchApplyOptions options)
+    /// <summary>
+    /// Tries every position in [<paramref name="boundary"/>, lines.Count] other than <paramref name="expected"/>,
+    /// nearest first (the lower one on a tie), so at most lines.Count + 1 candidates are tested wherever the
+    /// patch says the hunk starts.
+    /// </summary>
+    private static int? LocateOffset(List<TextLine> lines, PatchLine[] body, long expected,
+        int boundary, int leading, int trailing, PatchApplyOptions options, CancellationToken cancellationToken)
     {
-        for (var distance = 1; distance <= lines.Count + Math.Abs(expected); distance++)
+        var low = Math.Min(expected - 1, lines.Count);
+        var high = Math.Max(expected + 1, boundary);
+        while (low >= boundary || high <= lines.Count)
         {
-            var candidates = new[] { expected - distance, expected + distance };
-            foreach (var position in candidates)
+            cancellationToken.ThrowIfCancellationRequested();
+            var takeLow = low >= boundary && (high > lines.Count || expected - low <= high - expected);
+            var position = (int)(takeLow ? low-- : high++);
+            if (Matches(lines, body, position, leading, trailing, false, options))
             {
-                if (position < boundary)
-                {
-                    continue;
-                }
-
-                if (Matches(lines, body, position, leading, trailing, false, options))
-                {
-                    return position;
-                }
+                return position;
             }
         }
 
@@ -202,7 +216,7 @@ public static class PatchApplier
         return cursor;
     }
 
-    private static bool Matches(List<TextLine> lines, PatchLine[] body, int position,
+    private static bool Matches(List<TextLine> lines, PatchLine[] body, long position,
         int leading, int trailing, bool newSide, PatchApplyOptions options)
     {
         var source = body.Where(l => l.Kind != (newSide ? '-' : '+')).ToArray();
@@ -218,7 +232,7 @@ public static class PatchApplier
                 continue;
             }
 
-            var actual = lines[position + index];
+            var actual = lines[(int)position + index];
             var wanted = source[index];
             if (Normalize(actual.Content, options) != Normalize(wanted.Text, options)
                 || (actual.Ending == LineEnding.None) != wanted.NoNewline)
