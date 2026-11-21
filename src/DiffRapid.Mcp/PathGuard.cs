@@ -70,13 +70,40 @@ public sealed class PathGuard
     /// Walks <paramref name="full"/> from its root down without following links. A link is followed one hop at a
     /// time: its target is checked as a string (local, inside a root) before anything at that target is touched.
     /// </summary>
+    /// <remarks>
+    /// On macOS and Linux the kernel applies a ".." in link text after following the links before it, so
+    /// <c>a -&gt; d/up/../x</c> with <c>d/up -&gt; ..</c> leaves the root although the text normalises to
+    /// <c>x</c>. Link text is therefore never normalised there: its components join the walk, and ".." steps up from
+    /// the real folder reached so far, which has no links left on it. Windows resolves ".." in link targets as text,
+    /// so there the target is normalised as the system does.
+    /// </remarks>
     private void ResolveLinks(string full)
     {
-        var (current, pending) = Match(full);
+        var (current, below) = Match(full);
+        var pending = new Stack<string>();
+        Push(pending, below);
         var hops = 0;
         while (pending.Count > 0)
         {
-            current = Path.Combine(current, pending.Dequeue());
+            var name = pending.Pop();
+            if (name == ".")
+            {
+                continue;
+            }
+
+            if (name == "..")
+            {
+                current = Path.GetDirectoryName(current) ?? throw new UnauthorizedAccessException(OutsideMessage);
+                if (!Inside(current))
+                {
+                    throw new UnauthorizedAccessException(OutsideMessage);
+                }
+
+                continue;
+            }
+
+            var folder = current;
+            current = Path.Combine(current, name);
             var link = new FileInfo(current).LinkTarget;
             if (link is null)
             {
@@ -88,29 +115,56 @@ public sealed class PathGuard
                 throw new UnauthorizedAccessException(OutsideMessage);
             }
 
-            var target = Path.GetFullPath(link, Path.GetDirectoryName(current) ?? current);
-            if (OperatingSystem.IsWindows() && IsNetworkOrDevice(target))
+            if (OperatingSystem.IsWindows())
             {
-                throw new UnauthorizedAccessException(OutsideMessage);
+                var target = Path.GetFullPath(link, folder);
+                if (IsNetworkOrDevice(target))
+                {
+                    throw new UnauthorizedAccessException(OutsideMessage);
+                }
+
+                (current, below) = Match(target);
+                Push(pending, below);
+                continue;
             }
 
-            var (next, rest) = Match(target);
-            while (pending.Count > 0)
+            var components = link.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (Path.IsPathRooted(link))
             {
-                rest.Enqueue(pending.Dequeue());
-            }
+                // An absolute target is matched to a root as text, which is exact only without "..".
+                if (components.Contains(".."))
+                {
+                    throw new UnauthorizedAccessException(OutsideMessage);
+                }
 
-            (current, pending) = (next, rest);
+                (current, below) = Match(Path.GetFullPath(link));
+                Push(pending, below);
+            }
+            else
+            {
+                current = folder;
+                Push(pending, components);
+            }
         }
     }
 
+    // Pushes components so that the first is popped first, ahead of what was pending.
+    private static void Push(Stack<string> pending, IReadOnlyList<string> components)
+    {
+        for (var index = components.Count - 1; index >= 0; index--)
+        {
+            pending.Push(components[index]);
+        }
+    }
+
+    private bool Inside(string full) => _roots.Any(root => root.Given.Contains(full) || root.Real.Contains(full));
+
     /// <summary>The root spelling that <paramref name="full"/> lies in, and the components below it.</summary>
-    private (string Base, Queue<string> Below) Match(string full)
+    private (string Base, string[] Below) Match(string full)
     {
         var root = _roots.SelectMany(candidate => new[] { candidate.Given, candidate.Real }).FirstOrDefault(spelling => spelling.Contains(full))
             ?? throw new UnauthorizedAccessException(OutsideMessage);
-        var below = full[root.Path.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
-        return (root.Path, new Queue<string>(below));
+        return (root.Path, full[root.Path.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries));
     }
 
     private static Root CreateRoot(string path)

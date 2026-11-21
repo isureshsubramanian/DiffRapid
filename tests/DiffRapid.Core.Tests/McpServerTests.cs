@@ -566,6 +566,34 @@ public sealed class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void DotDotInLinkTextIsAppliedAfterTheLinksBeforeIt()
+    {
+        var app = DirectoryPath("app");
+        File("outside.txt", "OUTSIDE\n");
+        var real = File("app/d/inside.txt", "a\n");
+        var guard = new PathGuard([app]);
+
+        // d/up -> .. leads to the root's parent, so the kernel reads <root>/../outside.txt for d/up/../outside.txt,
+        // although the text normalises to <root>/d/outside.txt.
+        Directory.CreateSymbolicLink(Path.Combine(app, "d", "up"), "..");
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "a"), Path.Combine("d", "up", "..", "outside.txt"));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(PathGuard.OutsideMessage, Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "a"))).Message);
+            Assert.True(ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = Path.Combine(app, "a"), right = real }), guard).IsError);
+        }
+
+        // ".." that stays inside the root is allowed, and an absolute target with ".." is refused as text.
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "b"), Path.Combine("d", "up", "d", "inside.txt"));
+        Assert.Equal(Path.Combine(app, "b"), guard.Resolve(Path.Combine(app, "b")));
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "c"), Path.Combine(app, "d", "..", "d", "inside.txt"));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "c")));
+        }
+    }
+
+    [Fact]
     public void CaseVariantsOfADistinctFolderAreRefused()
     {
         var app = DirectoryPath("Distinct/proj");
