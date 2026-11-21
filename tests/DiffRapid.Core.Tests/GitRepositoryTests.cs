@@ -132,6 +132,7 @@ public sealed class GitRepositoryTests
             await Git("config", "user.name", "Test Author");
             await Git("config", "user.email", "test@example.invalid");
             await Git("config", "commit.gpgsign", "false");
+            await Git("config", "tag.gpgsign", "false");
         }
 
         internal Task<ProcessResult> Commit(string subject) => Git("-c", "user.name=Test Author", "commit", "-m", subject, "--date=2020-01-02T03:04:05Z");
