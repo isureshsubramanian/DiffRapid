@@ -665,6 +665,42 @@ public sealed class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task PipesInFoldersAreNeverOpened()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var left = DirectoryPath("pipes/left");
+        var right = DirectoryPath("pipes/right");
+        File("pipes/left/changed.txt", "a\n");
+        File("pipes/right/changed.txt", "b\n");
+        File("pipes/right/fifo-vs-file", "text\n");
+        foreach (var pipe in new[] { Path.Combine(left, "fifo"), Path.Combine(right, "fifo"), Path.Combine(left, "fifo-vs-file") })
+        {
+            using var mkfifo = Process.Start("mkfifo", [pipe]);
+            await mkfifo.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, mkfifo.ExitCode);
+        }
+
+        // Opening a pipe with no writer blocks, so a comparison that opens one would time out here.
+        foreach (var method in new[] { "full", "binary", "hash" })
+        {
+            var folders = Task.Run(() => Call("compare_folders", new { left, right, method, include_identical = true }), TestContext.Current.CancellationToken);
+            var items = (await folders.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).GetProperty("items").EnumerateArray()
+                .ToDictionary(item => item.GetProperty("path").GetString()!, item => item.GetProperty("status").GetString());
+            Assert.Equal("identical", items["fifo"]);
+            Assert.Equal("different", items["fifo-vs-file"]);
+        }
+
+        var patch = Task.Run(() => Call("create_patch", new { left, right }), TestContext.Current.CancellationToken);
+        var text = (await patch.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).GetProperty("patch").GetString();
+        Assert.Contains("+text", text);
+        Assert.Contains("+b", text);
+    }
+
+    [Fact]
     public void FilesOverTheLimitAreRefusedInFolderPatches()
     {
         var left = DirectoryPath("left");
