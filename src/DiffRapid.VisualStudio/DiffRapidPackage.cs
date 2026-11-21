@@ -76,7 +76,19 @@ public sealed class DiffRapidPackage : AsyncPackage
             return;
         }
 
-        if (await Task.Run(() => IsHexFile(leftPath) || IsHexFile(rightPath)))
+        // An assembly's API is read once here, to tell it from a native binary, and reused by the text comparison.
+        var (hex, leftApi, rightApi) = await Task.Run(() =>
+        {
+            var left = BinaryApiText(leftPath, out var leftHex);
+            if (leftHex)
+            {
+                return (true, null, null);
+            }
+
+            var right = BinaryApiText(rightPath, out var rightHex);
+            return (rightHex, left, right);
+        });
+        if (hex)
         {
             await OpenDocumentAsync(
                 "Loading the hex comparison",
@@ -87,7 +99,7 @@ public sealed class DiffRapidPackage : AsyncPackage
             return;
         }
 
-        await OpenTextComparisonAsync(leftPath, rightPath);
+        await OpenTextComparisonAsync(leftPath, rightPath, leftApi, rightApi);
     }
 
     private static bool IsTableFile(string path)
@@ -96,20 +108,32 @@ public sealed class DiffRapidPackage : AsyncPackage
         return extension.Equals(".csv", StringComparison.OrdinalIgnoreCase) || extension.Equals(".tsv", StringComparison.OrdinalIgnoreCase);
     }
 
-    // A binary file that has no text form: not a document or a .NET assembly or package.
-    private static bool IsHexFile(string path) => IsBinaryFile(path) && AssemblyApiText(path) is null;
+    // For a binary file: the API text of a .NET assembly or package, or null with hex set when it has no text form
+    // (not a document or an assembly). Null without hex for other files.
+    private static string? BinaryApiText(string path, out bool hex)
+    {
+        var binary = IsBinaryFile(path);
+        var api = binary ? AssemblyApiText(path) : null;
+        hex = binary && api is null;
+        return api;
+    }
 
     /// <summary>
     /// Opens a new text comparison document tab for two files and returns its window. Word, Excel and PowerPoint
     /// files are compared as their text, through temporary copies shown read-only.
     /// </summary>
     public Task<IVsWindowFrame> OpenTextComparisonAsync(string leftPath, string rightPath) =>
+        OpenTextComparisonAsync(leftPath, rightPath, null, null);
+
+    /// <param name="leftApi">The left file's API text when already read; null reads it when the file is an assembly.</param>
+    /// <param name="rightApi">The right file's API text; see <paramref name="leftApi"/>.</param>
+    private Task<IVsWindowFrame> OpenTextComparisonAsync(string leftPath, string rightPath, string? leftApi, string? rightApi) =>
         OpenDocumentAsync(
             "Loading the comparison",
             async () =>
             {
-                var left = await Task.Run(() => AsComparableText(leftPath));
-                var right = await Task.Run(() => AsComparableText(rightPath));
+                var left = await Task.Run(() => AsComparableText(leftPath, leftApi));
+                var right = await Task.Run(() => AsComparableText(rightPath, rightApi));
                 var control = await TextDiffControl.CreateAsync(this, left, right, (await DiffRapidSettings.ReadAsync(this)).Compare);
                 control.LeftLabel = SourceLabel(leftPath, left);
                 control.RightLabel = SourceLabel(rightPath, right);
@@ -254,14 +278,14 @@ public sealed class DiffRapidPackage : AsyncPackage
     private static bool IsImageFile(string path) =>
         Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" or ".ico" or ".webp";
 
-    private static string AsComparableText(string path)
+    private static string AsComparableText(string path, string? knownApi)
     {
         if (!File.Exists(path))
         {
             return path;
         }
 
-        if (AssemblyApiText(path) is { } api)
+        if ((knownApi ?? AssemblyApiText(path)) is { } api)
         {
             return EditorSelection.WriteTemporary(api, Path.GetFileName(path) + " (public API)", ".cs");
         }

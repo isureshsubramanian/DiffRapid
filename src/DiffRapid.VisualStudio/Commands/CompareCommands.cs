@@ -161,7 +161,9 @@ internal static class CompareCommands
             return;
         }
 
-        var saved = EditorSelection.WriteTemporary(System.IO.File.ReadAllBytes(path), System.IO.Path.GetFileNameWithoutExtension(path) + " (saved)", System.IO.Path.GetExtension(path));
+        var saved = await Task.Run(
+            () => EditorSelection.WriteTemporary(System.IO.File.ReadAllBytes(path), System.IO.Path.GetFileNameWithoutExtension(path) + " (saved)", System.IO.Path.GetExtension(path)),
+            package.DisposalToken);
         await package.OpenComparisonAsync(saved, path);
     }
 
