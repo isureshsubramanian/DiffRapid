@@ -28,7 +28,9 @@ public sealed class PatchCliTests : IDisposable
         CreateFolders();
         CopyFolder("left", "copy");
         var original = Snapshot(At("copy"));
-        Assert.Equal(0, await Program.Main(["patch", At("left"), At("right"), "-o", At("patch")]));
+        Assert.Equal(1, await Program.Main(["patch", At("left"), At("right"), "-o", At("patch")]));
+        Assert.Equal(0, await Program.Main(["patch", At("left"), At("left"), "-o", At("same.patch")]));
+        Assert.Equal("", File.ReadAllText(At("same.patch")));
         Assert.Equal(0, await Program.Main(["apply", At("patch"), "--dir", At("copy"), "--dry-run"]));
         AssertSnapshot(original, At("copy"));
         Assert.Equal(0, await Program.Main(["apply", At("patch"), "--dir", At("copy")]));

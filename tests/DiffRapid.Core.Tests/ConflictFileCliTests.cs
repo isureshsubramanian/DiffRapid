@@ -23,7 +23,7 @@ public sealed class ConflictFileCliTests
             File.WriteAllText(input, text, encoding);
             var output = outDirectory ? Path.Combine(directory, "output") : directory;
             string[] args = outDirectory ? ["split-conflicts", input, "--out-dir", output] : ["split-conflicts", input];
-            Assert.Equal(0, await Program.Main(args));
+            Assert.Equal(1, await Program.Main(args));
             Check("left", "head\r\nété\r\ntail");
             Check("right", "head\r\nright\ntail");
             if (includeBase) Check("base", "head\r\nold\ntail");
@@ -47,7 +47,7 @@ public sealed class ConflictFileCliTests
         {
             var input = Path.Combine(directory, "file.txt");
             File.WriteAllText(input, "plain");
-            Assert.Equal(1, await Program.Main(["split-conflicts", input]));
+            Assert.Equal(0, await Program.Main(["split-conflicts", input]));
             File.WriteAllText(input, "=======\n");
             Assert.Equal(2, await Program.Main(["split-conflicts", input]));
             Assert.Equal(2, await Program.Main(["split-conflicts"]));

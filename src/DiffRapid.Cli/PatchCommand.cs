@@ -48,7 +48,8 @@ internal static partial class Program
             Console.Out.Write(buffer.ToString());
         }
 
-        return ExitSame;
+        // Like diff: 0 when the inputs match (empty patch), 1 when the patch holds changes.
+        return buffer.GetStringBuilder().Length == 0 ? ExitSame : ExitDifferent;
     }
 
     private static int RunApply(ParsedArgs args)

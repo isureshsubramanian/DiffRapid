@@ -24,6 +24,7 @@ internal static partial class Program
         Usage:
           diffrapid info <file>
           diffrapid patch <left> <right> [-o <file>] [-u <n>] [compare options]
+                         Exit code 1 when the patch is not empty, 0 when the inputs match.
           diffrapid explain <left> <right> --endpoint <URL> --model <name>
           diffrapid explain --conflicts <file-with-markers> --endpoint <URL> --model <name>
                          [--api-key-env <VAR>] [--azure-deployment <name> --api-version <version>] [--no-redact]
@@ -58,6 +59,7 @@ internal static partial class Program
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
+                         Exit code 1 when conflicts were split, 0 when there are none.
           diffrapid sync <left> <right> --profile mirror-right|mirror-left|update|update-both
                          [--dry-run] [--yes] [--include <glob>] [--exclude <glob>] [--filter-file <path>]
                          Prints the plan; --yes carries it out.

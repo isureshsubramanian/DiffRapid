@@ -156,7 +156,8 @@ Double-click it to install, or open `DiffRapid.slnx`, set `DiffRapid.VisualStudi
 ## Command line
 
 `diffrapid` exposes the engine for scripts, CI and Git. Exit codes: `0` identical or merged cleanly,
-`1` different or conflicts remain, `2` error.
+`1` different or conflicts remain, `2` error. `patch` returns `1` when the patch is not empty, and `split-conflicts`
+returns `1` when it split conflicts and `0` when the file has none.
 
 ```powershell
 diffrapid diff left.cs right.cs --ignore-whitespace change     # unified diff
