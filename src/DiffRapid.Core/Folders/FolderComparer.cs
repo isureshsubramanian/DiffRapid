@@ -20,7 +20,6 @@ public static class FolderComparer
 {
     private const int MaxDepth = 128;
     private const int BufferSize = 64 * 1024;
-    private const int TextProbeSize = 8000;
 
     // Estimate: with links followed, one folder can be reached many times (a link to a parent, or several links to
     // one folder). Two million entries is far beyond the trees compared in practice and keeps the item list near
@@ -607,15 +606,11 @@ public static class FolderComparer
             return count;
         }
 
-        // Same heuristic as the editor: a NUL byte near the start means binary, unless a UTF-16/32 byte order mark says otherwise.
         private bool LooksLikeText(Stream stream)
         {
             stream.Position = 0;
-            var probe = new byte[TextProbeSize];
-            var count = Fill(stream, probe);
-            var hasUnicodeBom = (count >= 2 && ((probe[0] == 0xFF && probe[1] == 0xFE) || (probe[0] == 0xFE && probe[1] == 0xFF)))
-                || (count >= 4 && probe[0] == 0 && probe[1] == 0 && probe[2] == 0xFE && probe[3] == 0xFF);
-            return hasUnicodeBom || Array.IndexOf(probe, (byte)0, 0, count) < 0;
+            var probe = new byte[TextProbe.Size];
+            return TextProbe.LooksLikeText(probe, Fill(stream, probe));
         }
 
         private byte[] ReadAll(Stream stream)
