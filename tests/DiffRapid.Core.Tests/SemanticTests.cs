@@ -236,6 +236,26 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void ExplicitImplementationsOfDifferentGenericInterfacesKeepTheirOwnIdentity()
+    {
+        var text = "class C : IFoo<int>, IFoo<string> { void IFoo<int>.Bar() { } void IFoo<string>.Bar() { } }\n";
+
+        var members = MemberMatcher.ListMembers(text).SelectMany(member => member.Children).ToList();
+
+        Assert.Equal(2, members.Count);
+        Assert.Equal(2, members.Select(member => member.Key).Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData("class C { void IFoo<int.Bar() {} }\n")]
+    [InlineData("class C { void Bar<T() {} }\n")]
+    public void MalformedGenericNamesDoNotThrow(string text)
+    {
+        Assert.NotEmpty(MemberMatcher.ListMembers(text));
+        Assert.True(MemberMatcher.Compare(text, text).AreEqual);
+    }
+
+    [Fact]
     public void DifferentUsingsAreImportant()
     {
         var left = "using System;\nusing System.IO;\n\nclass C { }\n";
