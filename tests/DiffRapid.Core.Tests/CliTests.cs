@@ -237,7 +237,7 @@ public sealed class CliTests
         }
     }
 
-    [Fact(Skip = "Needs the AtomicFile change that keeps the Unix file mode; remove this Skip once it is merged.")]
+    [Fact]
     public async Task MergeOutputKeepsTheFileMode()
     {
         if (OperatingSystem.IsWindows())
