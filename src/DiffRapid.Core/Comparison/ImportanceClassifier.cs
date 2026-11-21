@@ -186,6 +186,11 @@ public static class ImportanceClassifier
         private readonly CompareOptions _strictInline;
         private readonly CompareOptions _relaxedInline;
         private readonly LineNormalizer _normalizer;
+        private readonly CancellationToken _cancellationToken;
+
+        // The current hunk's lines after comment and pattern removal and normalization, by side, line and the
+        // removal rules applied, so trying each rule set does not run the regular expressions again.
+        private readonly Dictionary<(bool Left, int Line, UnimportantReasons Removed), string> _removed = new();
 
         public Classification(TextDiffResult result, TextDocument left, TextDocument right, ImportanceRules rules, CancellationToken cancellationToken)
         {
@@ -200,6 +205,7 @@ public static class ImportanceClassifier
                 _rightComments = CommentScanner.Scan(right, rules.Comments, cancellationToken);
             }
 
+            _cancellationToken = cancellationToken;
             _enabled = EnabledRules(rules, _patterns.Length > 0);
             _normalizer = new LineNormalizer(result.Options);
             _strictInline = new CompareOptions { InlineGranularity = result.Options.InlineGranularity };
@@ -213,6 +219,7 @@ public static class ImportanceClassifier
         public HunkImportance ClassifyHunk(int index)
         {
             var hunk = _result.Hunks[index];
+            _removed.Clear();
             var lines = ClassifyLines(hunk);
             if (hunk.Significance == DiffSignificance.Ignored)
             {
@@ -283,33 +290,21 @@ public static class ImportanceClassifier
                 return false;
             }
 
-            var left = Canonical(_left, _leftComments, hunk.LeftStart, hunk.LeftEnd, rules);
-            var right = Canonical(_right, _rightComments, hunk.RightStart, hunk.RightEnd, rules);
+            var left = Canonical(true, hunk.LeftStart, hunk.LeftEnd, rules);
+            var right = Canonical(false, hunk.RightStart, hunk.RightEnd, rules);
             return left.SequenceEqual(right, StringComparer.Ordinal);
         }
 
         // The hunk's lines with everything the rules call unimportant removed.
-        private List<string> Canonical(TextDocument document, TextSpan[][]? comments, int start, int end, UnimportantReasons rules)
+        private List<string> Canonical(bool leftSide, int start, int end, UnimportantReasons rules)
         {
+            var document = leftSide ? _left : _right;
             var lines = new List<string>(end - start);
             for (var i = start; i < end; i++)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 var original = document[i].Content;
-                var content = original;
-
-                // Comments first: their ranges were found on the original line.
-                if ((rules & UnimportantReasons.Comment) != 0 && comments is not null)
-                {
-                    content = RemoveSpans(content, comments[i]).TrimEnd();
-                }
-
-                if ((rules & UnimportantReasons.Pattern) != 0)
-                {
-                    content = RemovePatterns(content);
-                }
-
-                // What the comparison itself already ignores (case, whitespace, substitutions) stays ignored.
-                content = _normalizer.NormalizeContent(content);
+                var content = Removed(leftSide, i, rules & (UnimportantReasons.Comment | UnimportantReasons.Pattern));
                 if ((rules & UnimportantReasons.Case) != 0)
                 {
                     content = content.ToUpperInvariant();
@@ -338,6 +333,34 @@ public static class ImportanceClassifier
             }
 
             return lines;
+        }
+
+        private string Removed(bool leftSide, int line, UnimportantReasons removed)
+        {
+            var key = (leftSide, line, removed);
+            if (_removed.TryGetValue(key, out var content))
+            {
+                return content;
+            }
+
+            content = (leftSide ? _left : _right)[line].Content;
+            var comments = leftSide ? _leftComments : _rightComments;
+
+            // Comments first: their ranges were found on the original line.
+            if ((removed & UnimportantReasons.Comment) != 0 && comments is not null)
+            {
+                content = RemoveSpans(content, comments[line]).TrimEnd();
+            }
+
+            if ((removed & UnimportantReasons.Pattern) != 0)
+            {
+                content = RemovePatterns(content);
+            }
+
+            // What the comparison itself already ignores (case, whitespace, substitutions) stays ignored.
+            content = _normalizer.NormalizeContent(content);
+            _removed.Add(key, content);
+            return content;
         }
 
         private string RemovePatterns(string content)
@@ -406,9 +429,9 @@ public static class ImportanceClassifier
         {
             var leftText = _left[leftLine].Content;
             var rightText = _right[rightLine].Content;
-            var strict = InlineDiffer.Compare(leftText, rightText, _strictInline);
+            var strict = InlineDiffer.Compare(leftText, rightText, _strictInline, _cancellationToken);
             var relaxed = _rules.WhitespaceIsUnimportant || _rules.CaseIsUnimportant
-                ? InlineDiffer.Compare(leftText, rightText, _relaxedInline)
+                ? InlineDiffer.Compare(leftText, rightText, _relaxedInline, _cancellationToken)
                 : strict;
             return new LineImportance(
                 leftLine,
