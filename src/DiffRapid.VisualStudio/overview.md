@@ -6,7 +6,7 @@ DiffRapid shows differences in the real Visual Studio editor, so syntax highligh
 Go To Definition keep working while you compare. It re-compares as you type and handles large files and
 folders quickly: a 10 MB file pair in under half a second, 200,000 files in about a second.
 
-> **Preview.** DiffRapid is in active development. Please report problems and ideas on
+> Please report problems and ideas on
 > [GitHub](https://github.com/isureshsubramanian/DiffRapid/issues).
 
 ## Compare anything

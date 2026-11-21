@@ -11,7 +11,6 @@
 ![.NET](https://img.shields.io/badge/.NET-10%20%7C%20Standard%202.0-512BD4)
 ![Visual Studio](https://img.shields.io/badge/Visual%20Studio-2026-5C2D91)
 ![Tests](https://img.shields.io/badge/tests-946%20passing-brightgreen)
-![Status](https://img.shields.io/badge/status-preview-orange)
 
 **[Install from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=SureshSubramanian.DiffRapid)**
 
@@ -33,7 +32,7 @@ keep working while you compare. The same engine powers the `diffrapid` command l
 agents can call.
 
 > [!NOTE]
-> **Preview.** DiffRapid is under active development. Install it from the
+> Install DiffRapid from the
 > [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=SureshSubramanian.DiffRapid)
 > and please report problems and ideas in [Issues](https://github.com/isureshsubramanian/DiffRapid/issues).
 
