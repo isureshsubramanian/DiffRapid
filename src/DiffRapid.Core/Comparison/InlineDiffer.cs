@@ -26,7 +26,8 @@ public static class InlineDiffer
 
     /// <summary>
     /// Highlights a line pair with cancellation. Inputs over 10,000 characters use whole-line spans
-    /// to bound tokenization and search cost.
+    /// to bound tokenization and search cost. Substitution filters are not applied: they match whole lines,
+    /// not single tokens, so highlights show the literal differences (the line comparison still honours them).
     /// </summary>
     public static InlineDiff Compare(string left, string right, CompareOptions? options, CancellationToken cancellationToken)
     {
@@ -45,7 +46,7 @@ public static class InlineDiffer
         var leftTokens = Tokenize(left, options.InlineGranularity);
         var rightTokens = Tokenize(right, options.InlineGranularity);
 
-        var normalizer = new LineNormalizer(options with { IgnoreNumbers = false });
+        var normalizer = new LineNormalizer(options with { IgnoreNumbers = false, Substitutions = Array.Empty<SubstitutionFilter>() });
         var interned = new Dictionary<string, int>(System.StringComparer.Ordinal);
         var ignoreWhitespace = options.Whitespace != WhitespaceMode.Compare;
 

@@ -138,4 +138,22 @@ public sealed class FilterTests
         Assert.Contains(SlowPattern, error.Message);
         Assert.DoesNotContain(SlowInput, error.Message);
     }
+
+    [Fact]
+    public void Inline_highlights_show_literal_text_whatever_the_substitutions()
+    {
+        var options = new CompareOptions
+        {
+            Substitutions =
+            [
+                new("Foo", "Bar", IsRegex: false, CaseSensitive: true, WholeWord: true),
+                new(@"v\d+\.\d+", "v", IsRegex: true, CaseSensitive: true, WholeWord: false),
+            ],
+        };
+
+        Assert.True(TextComparer.Compare(Doc("Foo uses v1.2"), Doc("Bar uses v1.3"), options).AreEqual);
+        var inline = InlineDiffer.Compare("Foo uses v1.2", "Bar uses v1.3", options);
+        Assert.Equal([new TextSpan(0, 3), new TextSpan(12, 1)], inline.Left);
+        Assert.Equal([new TextSpan(0, 3), new TextSpan(12, 1)], inline.Right);
+    }
 }
