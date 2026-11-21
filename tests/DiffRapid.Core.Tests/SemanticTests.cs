@@ -136,6 +136,19 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MovesAcrossTypesHonourTheSimilarityPairLimit()
+    {
+        var left = "class A { int M(int x) { var y = x * 2; y += 3; y -= 1; return y; } }\nclass B { }\n";
+        var identical = "class A { }\nclass B { int M(int x) { var y = x * 2; y += 3; y -= 1; return y; } }\n";
+        var similar = "class A { }\nclass B { int M(int x) { var y = x * 2; y += 3; y -= 2; return y; } }\n";
+        var unscored = new MemberMatchOptions { MaxSimilarityPairs = 0 };
+
+        Assert.Contains(MemberMatcher.Compare(left, similar).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+        Assert.DoesNotContain(MemberMatcher.Compare(left, similar, unscored).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+        Assert.Contains(MemberMatcher.Compare(left, identical, unscored).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+    }
+
+    [Fact]
     public void DetectsMemberReorderedWithinType()
     {
         var area = "\n        public int Area(int scale)\n        {\n            var total = Width * Width;\n            return total * scale;\n        }\n";
