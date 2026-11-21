@@ -53,4 +53,22 @@ public sealed class FolderReportWriterTests
         try { CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE"); Assert.Equal(baseline, Render()); }
         finally { CultureInfo.CurrentCulture = original; }
     }
+
+    [Theory]
+    [InlineData("=HYPERLINK(\"x\")", "\"'=HYPERLINK(\"\"x\"\")\"")]
+    [InlineData("+1", "\"'+1\"")]
+    [InlineData("-1", "\"'-1\"")]
+    [InlineData("@SUM(A1)", "\"'@SUM(A1)\"")]
+    [InlineData("\tx", "\"'\tx\"")]
+    [InlineData("\rx", "\"'\rx\"")]
+    [InlineData("a=b", "\"a=b\"")]
+    public void CsvCellsThatLookLikeFormulasAreWrittenAsText(string path, string expected)
+    {
+        var meta = new FileMeta(1, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), 0, true);
+        var item = new FolderCompareItem(path, FolderItemKind.File, FolderCompareStatus.LeftOnly, meta, meta, null, null, Array.Empty<FolderCompareItem>());
+        var result = new FolderCompareResult(item, new[] { item }, new Dictionary<FolderCompareStatus, int>());
+        using var writer = new StringWriter();
+        FolderReportWriter.WriteCsv(result, new FolderReportOptions(), writer);
+        Assert.Contains("\r\n" + expected + ",", writer.ToString());
+    }
 }
