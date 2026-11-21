@@ -145,6 +145,12 @@ public sealed class MergeResult
 /// </summary>
 public static class ThreeWayMerger
 {
+    /// <summary>
+    /// Merges <paramref name="left"/> and <paramref name="right"/> against <paramref name="base"/>.
+    /// Only <see cref="CompareOptions.Algorithm"/> is used from <paramref name="options"/>: lines are matched
+    /// exactly, because each chunk's text is copied from one side, and matching under an ignore option
+    /// (whitespace, case, numbers, line endings, substitutions) would silently drop the other side's real edits.
+    /// </summary>
     public static MergeResult Merge(
         TextDocument @base,
         TextDocument left,
@@ -152,12 +158,27 @@ public static class ThreeWayMerger
         CompareOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        if (@base is null)
+        {
+            throw new ArgumentNullException(nameof(@base));
+        }
+
+        if (left is null)
+        {
+            throw new ArgumentNullException(nameof(left));
+        }
+
+        if (right is null)
+        {
+            throw new ArgumentNullException(nameof(right));
+        }
+
         options ??= CompareOptions.Default;
 
-        var normalizer = new LineNormalizer(options);
-        var baseKeys = normalizer.ToKeys(@base);
-        var leftKeys = normalizer.ToKeys(left);
-        var rightKeys = normalizer.ToKeys(right);
+        var normalizer = new LineNormalizer(CompareOptions.Default);
+        var baseKeys = normalizer.ToKeys(@base, cancellationToken);
+        var leftKeys = normalizer.ToKeys(left, cancellationToken);
+        var rightKeys = normalizer.ToKeys(right, cancellationToken);
 
         var leftHunks = TextComparer.ComputeHunks(baseKeys, leftKeys, options.Algorithm, cancellationToken);
         var rightHunks = TextComparer.ComputeHunks(baseKeys, rightKeys, options.Algorithm, cancellationToken);

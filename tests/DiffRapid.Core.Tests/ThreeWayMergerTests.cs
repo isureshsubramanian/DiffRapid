@@ -1,3 +1,4 @@
+using DiffRapid.Core.Comparison;
 using DiffRapid.Core.Merge;
 using static DiffRapid.Core.Tests.TextComparerTests;
 
@@ -66,6 +67,50 @@ public class ThreeWayMergerTests
 
         Assert.False(result.HasConflicts);
         Assert.Equal("x\n", result.ToText());
+    }
+
+    [Theory]
+    [InlineData(WhitespaceMode.IgnoreAll, false, false)]
+    [InlineData(WhitespaceMode.IgnoreChange, false, false)]
+    [InlineData(WhitespaceMode.Compare, true, false)]
+    [InlineData(WhitespaceMode.Compare, false, true)]
+    public void Ignore_options_do_not_drop_one_sides_edits(WhitespaceMode whitespace, bool ignoreNumbers, bool ignoreCase)
+    {
+        var options = new CompareOptions { Whitespace = whitespace, IgnoreNumbers = ignoreNumbers, IgnoreCase = ignoreCase };
+        var edited = whitespace == WhitespaceMode.Compare ? (ignoreNumbers ? "t = 2;" : "T = 1;") : "t  =  1;";
+
+        var leftEdit = ThreeWayMerger.Merge(Doc("a", "t = 1;", "z"), Doc("a", edited, "z"), Doc("a", "t = 1;", "z"), options);
+        var rightEdit = ThreeWayMerger.Merge(Doc("a", "t = 1;", "z"), Doc("a", "t = 1;", "z"), Doc("a", edited, "z"), options);
+
+        Assert.Equal($"a\n{edited}\nz\n", leftEdit.ToText());
+        Assert.Equal($"a\n{edited}\nz\n", rightEdit.ToText());
+    }
+
+    [Fact]
+    public void Both_sides_edits_that_only_look_alike_under_ignore_options_conflict()
+    {
+        var options = new CompareOptions { IgnoreNumbers = true };
+
+        var result = ThreeWayMerger.Merge(Doc("t = 1;"), Doc("t = 2;"), Doc("t = 3;"), options);
+
+        Assert.Equal(1, result.ConflictCount);
+    }
+
+    [Fact]
+    public void Null_documents_are_rejected()
+    {
+        Assert.Throws<ArgumentNullException>("base", () => ThreeWayMerger.Merge(null!, Doc(), Doc()));
+        Assert.Throws<ArgumentNullException>("left", () => ThreeWayMerger.Merge(Doc(), null!, Doc()));
+        Assert.Throws<ArgumentNullException>("right", () => ThreeWayMerger.Merge(Doc(), Doc(), null!));
+    }
+
+    [Fact]
+    public void Cancellation_is_observed_while_keying_lines()
+    {
+        using var source = new CancellationTokenSource();
+        source.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => ThreeWayMerger.Merge(Doc("a"), Doc("b"), Doc("c"), cancellationToken: source.Token));
     }
 
     [Fact]
