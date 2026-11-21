@@ -490,6 +490,7 @@ public sealed class McpServerTests : IDisposable
         var guard = new PathGuard([app]);
         Assert.Equal(inside, guard.Resolve(inside));
         Assert.Equal(inside, guard.Resolve("a.txt"));
+        Assert.Equal(inside, guard.Resolve(_root + "/work/app/a.txt"));
         Assert.Equal(inside, guard.Resolve(Path.Combine(app, "sub", "..", "a.txt")));
         Assert.Equal(app, guard.Resolve(app));
         Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(outside));
@@ -524,10 +525,10 @@ public sealed class McpServerTests : IDisposable
         var secret = File("secret/key.txt", "secret\n");
         File("app/real.txt", "a\n");
         var guard = new PathGuard([app]);
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "file-out"), secret);
-        Directory.CreateSymbolicLink(Path.Combine(app, "folder-out"), Path.GetDirectoryName(secret)!);
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "file-in"), Path.Combine(app, "real.txt"));
-        Directory.CreateSymbolicLink(Path.Combine(app, "folder-in"), app);
+        FileLink(Path.Combine(app, "file-out"), secret);
+        FolderLink(Path.Combine(app, "folder-out"), Path.GetDirectoryName(secret)!);
+        FileLink(Path.Combine(app, "file-in"), Path.Combine(app, "real.txt"));
+        FolderLink(Path.Combine(app, "folder-in"), app);
         Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "file-out")));
         Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "folder-out", "key.txt")));
         Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "folder-out")));
@@ -544,22 +545,22 @@ public sealed class McpServerTests : IDisposable
         var guard = new PathGuard([app]);
 
         // A self-loop outside the root: following it fails with an error that names the path.
-        System.IO.File.CreateSymbolicLink(Path.Combine(outside, "loop"), Path.Combine(outside, "loop"));
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "loop"), Path.Combine(outside, "loop"));
+        FileLink(Path.Combine(outside, "loop"), Path.Combine(outside, "loop"));
+        FileLink(Path.Combine(app, "loop"), Path.Combine(outside, "loop"));
         Assert.Equal(PathGuard.OutsideMessage, Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "loop"))).Message);
         var refused = ErrorText(ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = Path.Combine(app, "loop"), right = Path.Combine(app, "loop") }), guard));
         Assert.Equal("compare_files: " + PathGuard.OutsideMessage, refused);
 
         // A network target is refused from the link text, so no share is contacted.
         var share = OperatingSystem.IsWindows() ? @"\\host\share\x" : "//host/share/x";
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "share"), share);
+        FileLink(Path.Combine(app, "share"), share);
         Assert.Equal(PathGuard.OutsideMessage, Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "share", "file.txt"))).Message);
 
         // A chain of links, relative and absolute, that stays inside the root is allowed.
         var real = File("app/sub/real.txt", "a\n");
-        Directory.CreateSymbolicLink(Path.Combine(app, "second"), "sub");
-        Directory.CreateSymbolicLink(Path.Combine(app, "first"), Path.Combine(app, "second"));
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "file"), Path.Combine("first", "real.txt"));
+        FolderLink(Path.Combine(app, "second"), "sub");
+        FolderLink(Path.Combine(app, "first"), Path.Combine(app, "second"));
+        FileLink(Path.Combine(app, "file"), Path.Combine("first", "real.txt"));
         Assert.Equal(Path.Combine(app, "first", "real.txt"), guard.Resolve(Path.Combine(app, "first", "real.txt")));
         Assert.Equal(Path.Combine(app, "file"), guard.Resolve(Path.Combine(app, "file")));
         Assert.True(Call("compare_files", new { left = Path.Combine(app, "file"), right = real }).GetProperty("identical").GetBoolean());
@@ -572,10 +573,10 @@ public sealed class McpServerTests : IDisposable
         var sub = DirectoryPath("outside/sub");
         File("outside/z.txt", "OUTSIDE\n");
         var linkRoot = Path.Combine(work, "linkroot");
-        Directory.CreateSymbolicLink(linkRoot, sub);
-        System.IO.File.CreateSymbolicLink(Path.Combine(sub, "y"), Path.Combine("..", "z.txt"));
-        Directory.CreateSymbolicLink(Path.Combine(work, "p"), linkRoot);
-        System.IO.File.CreateSymbolicLink(Path.Combine(work, "x"), Path.Combine("p", "..", "z.txt"));
+        FolderLink(linkRoot, sub);
+        FileLink(Path.Combine(sub, "y"), Path.Combine("..", "z.txt"));
+        FolderLink(Path.Combine(work, "p"), linkRoot);
+        FileLink(Path.Combine(work, "x"), Path.Combine("p", "..", "z.txt"));
 
         // The root given through a link is listed first, so its own spelling is matched before "work".
         foreach (var guard in new[] { new PathGuard([linkRoot, work]), new PathGuard([work, linkRoot]) })
@@ -598,8 +599,8 @@ public sealed class McpServerTests : IDisposable
 
         // d/up -> .. leads to the root's parent, so the kernel reads <root>/../outside.txt for d/up/../outside.txt,
         // although the text normalises to <root>/d/outside.txt.
-        Directory.CreateSymbolicLink(Path.Combine(app, "d", "up"), "..");
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "a"), Path.Combine("d", "up", "..", "outside.txt"));
+        FolderLink(Path.Combine(app, "d", "up"), "..");
+        FileLink(Path.Combine(app, "a"), Path.Combine("d", "up", "..", "outside.txt"));
         if (!OperatingSystem.IsWindows())
         {
             Assert.Equal(PathGuard.OutsideMessage, Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "a"))).Message);
@@ -607,9 +608,9 @@ public sealed class McpServerTests : IDisposable
         }
 
         // ".." that stays inside the root is allowed, and an absolute target with ".." is refused as text.
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "b"), Path.Combine("d", "up", "d", "inside.txt"));
+        FileLink(Path.Combine(app, "b"), Path.Combine("d", "up", "d", "inside.txt"));
         Assert.Equal(Path.Combine(app, "b"), guard.Resolve(Path.Combine(app, "b")));
-        System.IO.File.CreateSymbolicLink(Path.Combine(app, "c"), Path.Combine(app, "d", "..", "d", "inside.txt"));
+        FileLink(Path.Combine(app, "c"), Path.Combine(app, "d", "..", "d", "inside.txt"));
         if (!OperatingSystem.IsWindows())
         {
             Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "c")));
@@ -847,9 +848,10 @@ public sealed class McpServerTests : IDisposable
         return document.RootElement.Clone();
     }
 
+    // Relative paths use '/', so the full path gives each platform its own separators, as the guard returns them.
     private string File(string relativePath, string text)
     {
-        var path = Path.Combine(_root, relativePath);
+        var path = Path.GetFullPath(Path.Combine(_root, relativePath));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         System.IO.File.WriteAllText(path, text, new UTF8Encoding(false));
         return path;
@@ -857,9 +859,29 @@ public sealed class McpServerTests : IDisposable
 
     private string DirectoryPath(string relativePath)
     {
-        var path = Path.Combine(_root, relativePath);
+        var path = Path.GetFullPath(Path.Combine(_root, relativePath));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    // Windows lets only administrators or Developer Mode create links; skip there rather than fail. Any other error
+    // fails the test, so a broken setup cannot hide the link checks.
+    private const int ErrorPrivilegeNotHeld = unchecked((int)0x80070522);
+
+    private static void FileLink(string path, string target) => Link(() => System.IO.File.CreateSymbolicLink(path, target));
+
+    private static void FolderLink(string path, string target) => Link(() => Directory.CreateSymbolicLink(path, target));
+
+    private static void Link(Action create)
+    {
+        try
+        {
+            create();
+        }
+        catch (IOException ex) when (OperatingSystem.IsWindows() && ex.HResult == ErrorPrivilegeNotHeld)
+        {
+            Assert.Skip("Symbolic links cannot be created here.");
+        }
     }
 
     private string Package(string name, string assembly)

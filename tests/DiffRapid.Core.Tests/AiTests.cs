@@ -254,18 +254,23 @@ public sealed class AiTests
         Assert.Equal(2, thinking);
     }
 
-    [Fact]
-    public async Task StreamingTimeoutLimitsSilenceNotTheWholeAnswer()
+    // Measures real gaps between events, so it runs alone: with the full suite in parallel, thread-pool starvation
+    // on Windows stretched 150 ms gaps past the 1.5 s timeout.
+    [Collection(SerialCollection.Name)]
+    public sealed class StreamingTiming
     {
-        // Thirteen events 150 ms apart (1.95 s) outlast the 1.5 s timeout, while each gap stays a tenth of it,
-        // which leaves room for thread-pool delays when the full suite loads the machine.
-        var chunks = Enumerable.Range(0, 12)
-            .Select(i => $"data: {{\"choices\":[{{\"delta\":{{\"reasoning\":\"step {i}\"}}}}]}}\n\n")
-            .Append("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
-        using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(150));
-        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(1500) }, new FakeHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
-        Assert.Equal("ok", await client.StreamAsync(Prompt, _ => { }));
+        [Fact]
+        public async Task StreamingTimeoutLimitsSilenceNotTheWholeAnswer()
+        {
+            // Thirteen events 150 ms apart (1.95 s) outlast the 1.5 s timeout, while each gap stays a tenth of it.
+            var chunks = Enumerable.Range(0, 12)
+                .Select(i => $"data: {{\"choices\":[{{\"delta\":{{\"reasoning\":\"step {i}\"}}}}]}}\n\n")
+                .Append("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
+            using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(150));
+            using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(1500) }, new FakeHandler((_, _) =>
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
+            Assert.Equal("ok", await client.StreamAsync(Prompt, _ => { }));
+        }
     }
 
     // Returns one chunk per read, each after a delay, like a server streaming a slow model.

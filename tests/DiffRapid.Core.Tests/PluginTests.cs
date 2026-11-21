@@ -252,42 +252,49 @@ public sealed class PluginTests
         Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c16tmp"));
     }
 
-    [Fact]
-    public void ExternalCommandReportsTimeoutsFailuresAndMissingPrograms()
+    // Measures how soon a stopped program returns, so it runs alone: with the full suite in parallel, thread-pool
+    // starvation on Windows held the 300 ms timeout back past the 15 s bound.
+    [Collection(SerialCollection.Name)]
+    public sealed class ExternalCommandTiming
     {
-        var sleeper = OperatingSystem.IsWindows()
-            ? new ExternalCommandPlugin("Sleep", "ping.exe", ["-n", "30", "127.0.0.1"])
-            : new ExternalCommandPlugin("Sleep", "sleep", ["30"]);
-        var stopwatch = Stopwatch.StartNew();
-        var timeout = Assert.Throws<PluginException>(() =>
-            sleeper.Transform("x", new PluginContext("x.txt", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
-        Assert.Contains("did not finish", timeout.Message);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
-
-        // A stopped program has exited before its temporary file is removed.
-        var fileSleeper = OperatingSystem.IsWindows()
-            ? new ExternalCommandPlugin("Sleep", "ping.exe", ["-n", "30", "127.0.0.1", ExternalCommandPlugin.FilePlaceholder])
-            : new ExternalCommandPlugin("Sleep", "/bin/sh", ["-c", "sleep 30", ExternalCommandPlugin.FilePlaceholder]);
-        Assert.Throws<PluginException>(() =>
-            fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
-        Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
-        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+        [Fact]
+        public void ExternalCommandReportsTimeoutsFailuresAndMissingPrograms()
         {
-            Assert.ThrowsAny<OperationCanceledException>(() =>
-                fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromSeconds(30), cancellation.Token)));
+            var sleeper = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Sleep", "ping.exe", ["-n", "30", "127.0.0.1"])
+                : new ExternalCommandPlugin("Sleep", "sleep", ["30"]);
+            var stopwatch = Stopwatch.StartNew();
+            var timeout = Assert.Throws<PluginException>(() =>
+                sleeper.Transform("x", new PluginContext("x.txt", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
+            Assert.Contains("did not finish", timeout.Message);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
+
+            // A stopped program has exited before its temporary file is removed. ping.exe rejects the extra file
+            // argument and exits at once, so Windows sleeps in PowerShell, where the file path lands in a comment.
+            var fileSleeper = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Sleep", "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep 30 #", ExternalCommandPlugin.FilePlaceholder])
+                : new ExternalCommandPlugin("Sleep", "/bin/sh", ["-c", "sleep 30", ExternalCommandPlugin.FilePlaceholder]);
+            Assert.Throws<PluginException>(() =>
+                fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromMilliseconds(300), CancellationToken.None)));
+            Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
+            using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(300)))
+            {
+                Assert.ThrowsAny<OperationCanceledException>(() =>
+                    fileSleeper.Transform("x", new PluginContext("x.c18tmp", [], TimeSpan.FromSeconds(30), cancellation.Token)));
+            }
+
+            Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
+
+            var failing = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Find", "findstr.exe", ["no-such-text", ExternalCommandPlugin.FilePlaceholder])
+                : new ExternalCommandPlugin("Find", "grep", ["no-such-text", ExternalCommandPlugin.FilePlaceholder]);
+            var failure = Assert.Throws<PluginException>(() => failing.Transform("abc\n", PluginContext.ForArguments()));
+            Assert.Contains("exited with code 1", failure.Message);
+
+            var missing = new ExternalCommandPlugin("Missing", "diffrapid-no-such-program-" + Guid.NewGuid().ToString("N"));
+            Assert.Throws<PluginException>(() => missing.Transform("x", PluginContext.ForArguments()));
+            Assert.Throws<ArgumentException>(() => PluginPipeline.ApplyPrediffers("x", "x.txt", new PluginOptions { Prediffer = "Exec" }));
         }
-
-        Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "diffrapid-*.c18tmp"));
-
-        var failing = OperatingSystem.IsWindows()
-            ? new ExternalCommandPlugin("Find", "findstr.exe", ["no-such-text", ExternalCommandPlugin.FilePlaceholder])
-            : new ExternalCommandPlugin("Find", "grep", ["no-such-text", ExternalCommandPlugin.FilePlaceholder]);
-        var failure = Assert.Throws<PluginException>(() => failing.Transform("abc\n", PluginContext.ForArguments()));
-        Assert.Contains("exited with code 1", failure.Message);
-
-        var missing = new ExternalCommandPlugin("Missing", "diffrapid-no-such-program-" + Guid.NewGuid().ToString("N"));
-        Assert.Throws<PluginException>(() => missing.Transform("x", PluginContext.ForArguments()));
-        Assert.Throws<ArgumentException>(() => PluginPipeline.ApplyPrediffers("x", "x.txt", new PluginOptions { Prediffer = "Exec" }));
     }
 
     [Fact]
