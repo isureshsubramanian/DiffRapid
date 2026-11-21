@@ -1328,15 +1328,29 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         // Deletions on a side without a Recycle Bin are permanent, so they need a second yes.
         var deletes = plan.Operations.Where(o => o.Action == SyncAction.Delete).ToList();
+        var permanentRoots = new List<string>();
         foreach (var root in new[] { (Direction: SyncDirection.RightToLeft, Root: _leftRoot), (Direction: SyncDirection.LeftToRight, Root: _rightRoot) })
         {
-            if (deletes.Any(o => o.Direction == root.Direction) && !RecycleBin.CanRecycle(root.Root) && !ConfirmPermanentDelete(root.Root))
+            if (deletes.Any(o => o.Direction == root.Direction) && !RecycleBin.CanRecycle(root.Root))
             {
-                return;
+                if (!ConfirmPermanentDelete(root.Root))
+                {
+                    return;
+                }
+
+                permanentRoots.Add(Path.GetFullPath(root.Root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar);
             }
         }
 
-        var options = new SyncExecuteOptions { Delete = RecycleBin.Delete };
+        // Only a side the user agreed to delete permanently on skips the Recycle Bin; anything else goes there.
+        var owner = RecycleBin.OwnerWindow();
+        var options = new SyncExecuteOptions
+        {
+            Delete = (path, _) => RecycleBin.Delete(
+                path,
+                owner,
+                permanent: permanentRoots.Any(root => Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase))),
+        };
         RunFileOperation(
             "Synchronizing…",
             cancellation => SyncExecutor.Execute(plan, null, options, cancellation)
@@ -1455,21 +1469,22 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             return;
         }
 
+        var owner = RecycleBin.OwnerWindow();
         RunFileOperation(
             $"Deleting {what} on the {side}…",
-            token => plan.Run(root, token),
+            token => plan.Run(root, owner, permanent: !recycle, token),
             "Delete",
             errors => errors == 0
                 ? recycle ? $"Moved {what} on the {side} to the Recycle Bin." : $"Deleted {what} on the {side} permanently."
                 : $"Deleted on the {side} with {errors:N0} {(errors == 1 ? "failure" : "failures")}");
     }
 
-    // A second question for a drive without a Recycle Bin (a network share, a removable drive), where the first
-    // question's "Recycle Bin" would not be true: there the delete cannot be undone.
+    // A second question for a drive without a Recycle Bin (a network share, a removable drive, or a link that may
+    // lead to one), where the first question's "Recycle Bin" would not be true: there the delete cannot be undone.
     private bool ConfirmPermanentDelete(string root) =>
         VsShellUtilities.ShowMessageBox(
             _package,
-            "This folder is on a network share or a drive without a Recycle Bin, so the items cannot be moved there."
+            "This folder is on a network share, a drive without a Recycle Bin or behind a link to another location, so the items cannot be moved there."
                 + Environment.NewLine + Environment.NewLine
                 + "Delete them permanently? This cannot be undone."
                 + Environment.NewLine + Environment.NewLine

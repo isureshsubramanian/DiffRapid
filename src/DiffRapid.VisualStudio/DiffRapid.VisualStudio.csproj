@@ -39,8 +39,6 @@
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Design" />
     <Reference Include="System.Net.Http" />
-    <!-- FileSystem.DeleteFile/DeleteDirectory: move to the Recycle Bin. -->
-    <Reference Include="Microsoft.VisualBasic" />
   </ItemGroup>
 
   <ItemGroup>
