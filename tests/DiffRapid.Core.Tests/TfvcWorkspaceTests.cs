@@ -81,8 +81,8 @@ public sealed class TfvcWorkspaceTests
         var newest = new string('a', 40);
         var oldest = new string('b', 40);
         var status = renamed ? "\nR100\0old.txt\0new.txt" : "\nM\0new.txt";
-        var output = $"\0{newest}\0aaaaaaa\0Alice\02020-01-02T03:04:05Z\0Newest\0{status}\0" +
-            $"\0{oldest}\0bbbbbbb\0Bob\02020-01-01T03:04:05Z\0Oldest\0\nA\0old.txt\0";
+        var output = $"\x01{newest}\0aaaaaaa\0Alice\02020-01-02T03:04:05Z\0Newest\0{status}\0" +
+            $"\x01{oldest}\0bbbbbbb\0Bob\02020-01-01T03:04:05Z\0Oldest\0\nA\0old.txt\0";
         var runner = new FakeRunner
         {
             Handler = _ => new ProcessResult(0, Encoding.UTF8.GetBytes(output), "")
@@ -95,6 +95,26 @@ public sealed class TfvcWorkspaceTests
         Assert.Equal("new.txt", history[0].PathAtVersion);
         Assert.Equal(renamed ? "old.txt" : "new.txt", history[1].PathAtVersion);
         Assert.Equal("Bob", history[1].Author);
+    }
+
+    /// <summary>Verifies that paths are never read as commits and that malformed output is a Git error.</summary>
+    [Fact]
+    public void GitHistoryReadsFieldsByPositionAndRejectsMalformedOutput()
+    {
+        var sha = new string('c', 40);
+        var hexName = new string('d', 40);
+        var history = GitRepository.ParseHistory(
+            $"\x01{sha}\0ccccccc\0Alice\02020-01-02T03:04:05Z\0Subject\0\nR100\0{hexName}\0\x01odd\0" +
+            $"\x01{new string('e', 64)}\0eeeeeee\0Bob\02020-01-01T03:04:05Z\0Older\0\nM\0{hexName}\0", "\x01odd");
+        Assert.Equal(2, history.Count);
+        Assert.Equal("\x01odd", history[0].PathAtCommit);
+        Assert.Equal(hexName, history[1].PathAtCommit);
+        Assert.Equal(new string('e', 64), history[1].Sha);
+
+        foreach (var malformed in new[] { $"{sha}\0x\0y\02020-01-02T03:04:05Z\0s\0", $"\x01{sha}\0x\0y\0not a date\0s\0", $"\x01{sha}\0x", $"\x01{sha}\0x\0y\02020-01-02T03:04:05Z\0s\0\nR100\0only-one" })
+        {
+            Assert.Throws<GitException>(() => GitRepository.ParseHistory(malformed, "file"));
+        }
     }
 
     /// <summary>Verifies detailed history and the most specific workspace mapping.</summary>

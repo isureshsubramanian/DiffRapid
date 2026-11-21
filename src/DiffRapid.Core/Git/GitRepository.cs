@@ -112,7 +112,7 @@ public sealed class GitRepository : IVersionControl
 
         var path = RelativePath(filePath);
         var result = await Run(cancellationToken,
-            "log", "--follow", "-z", "--name-status", "--format=%x00%H%x00%h%x00%an%x00%aI%x00%s",
+            "log", "--follow", "-z", "--name-status", "--format=" + RecordMarker + "%H%x00%h%x00%an%x00%aI%x00%s",
             "-n", maxCount.ToString(CultureInfo.InvariantCulture), "--", path).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
@@ -122,46 +122,71 @@ public sealed class GitRepository : IVersionControl
         return ParseHistory(result.Text, path);
     }
 
-    private static IReadOnlyList<GitCommit> ParseHistory(string output, string path)
+    // Each commit record starts with this byte. Fields are found by position, so a file whose name looks like a
+    // commit identifier (or starts with this byte) is never read as a commit.
+    private const string RecordMarker = "%x01";
+
+    /// <summary>
+    /// Parses "log -z --name-status" output: per commit, the marker and five NUL-separated fields, then status
+    /// entries, each a status followed by one path (two for renames and copies, old then new).
+    /// </summary>
+    /// <exception cref="GitException">The output does not have that shape.</exception>
+    internal static IReadOnlyList<GitCommit> ParseHistory(string output, string path)
     {
         var fields = output.Split('\0');
         var commits = new List<GitCommit>();
-        for (var i = 0; i < fields.Length; i++)
+        var i = 0;
+        while (i < fields.Length)
         {
-            if (!IsCommitIdentifier(fields[i]))
+            var field = fields[i];
+            if (field.Length == 0 && i == fields.Length - 1)
             {
-                continue;
+                break;
             }
 
-            var sha = fields[i];
-            var shortSha = fields[++i];
-            var author = fields[++i];
-            var date = DateTimeOffset.Parse(fields[++i], CultureInfo.InvariantCulture);
-            var subject = fields[++i];
-            commits.Add(new GitCommit(sha, shortSha, author, date, subject, path));
-            path = FindEarlierPath(fields, i + 1, path);
+            if (field.Length == 0 || field[0] != '\x01' || i + 4 >= fields.Length || !IsCommitIdentifier(field.Substring(1))
+                || !DateTimeOffset.TryParse(fields[i + 3], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            {
+                throw new GitException("unexpected log output.");
+            }
+
+            commits.Add(new GitCommit(field.Substring(1), fields[i + 1], fields[i + 2], date, fields[i + 4], path));
+            i += 5;
+            var earlier = path;
+            while (i < fields.Length && !(fields[i].Length > 0 && fields[i][0] == '\x01'))
+            {
+                var status = fields[i].TrimStart('\n', '\r');
+                if (status.Length == 0)
+                {
+                    i++;
+                    continue;
+                }
+
+                var paths = status[0] is 'R' or 'C' ? 2 : 1;
+                if (i + paths >= fields.Length)
+                {
+                    throw new GitException("unexpected log output.");
+                }
+
+                // Rename status is followed by the old and new paths; earlier commits use the old name.
+                if (status[0] == 'R')
+                {
+                    earlier = fields[i + 1];
+                }
+
+                i += paths + 1;
+            }
+
+            path = earlier;
         }
 
         return commits;
     }
 
-    private static string FindEarlierPath(string[] fields, int start, string path)
-    {
-        // Rename status is followed by the old and new paths; earlier commits use the old name.
-        for (var index = start; index < fields.Length && !IsCommitIdentifier(fields[index]); index++)
-        {
-            if (fields[index].TrimStart('\n', '\r').StartsWith("R", StringComparison.Ordinal) && index + 2 < fields.Length)
-            {
-                return fields[index + 1];
-            }
-        }
-
-        return path;
-    }
-
+    // SHA-1 (40) or SHA-256 (64) object names in hexadecimal.
     private static bool IsCommitIdentifier(string value)
     {
-        if (value.Length != 40)
+        if (value.Length != 40 && value.Length != 64)
         {
             return false;
         }
@@ -209,23 +234,18 @@ public sealed class GitRepository : IVersionControl
             revision = check.Text.Trim();
         }
 
+        // One read: a missing path is told apart by git's two messages for it, "path 'x' does not exist in 'rev'"
+        // (or "(neither on disk nor in the index)") and "path 'x' exists on disk, but not in 'rev'" (or "the index").
         var spec = (revision == ":0" ? ":0:" : revision + ":") + repoRelativePath;
-        var exists = await Run(cancellationToken, "cat-file", "-e", spec).ConfigureAwait(false);
-        if (exists.ExitCode != 0)
+        var result = await Run(cancellationToken, "cat-file", "blob", spec).ConfigureAwait(false);
+        if (result.ExitCode != 0)
         {
-            if (exists.Error.IndexOf("does not exist", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                exists.Error.IndexOf("not in the index", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                exists.Error.IndexOf("not in", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (result.Error.IndexOf("' does not exist", StringComparison.Ordinal) >= 0 ||
+                result.Error.IndexOf("' exists on disk, but not in ", StringComparison.Ordinal) >= 0)
             {
                 return null;
             }
 
-            throw new GitException(exists.Error);
-        }
-
-        var result = await Run(cancellationToken, "show", spec).ConfigureAwait(false);
-        if (result.ExitCode != 0)
-        {
             throw new GitException(result.Error);
         }
 
