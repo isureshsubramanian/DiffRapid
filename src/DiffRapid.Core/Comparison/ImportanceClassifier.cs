@@ -344,7 +344,14 @@ public static class ImportanceClassifier
         {
             foreach (var pattern in _patterns)
             {
-                content = pattern.Replace(content, string.Empty);
+                try
+                {
+                    content = pattern.Replace(content, string.Empty);
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    throw FilterRegex.MatchTimedOut(pattern.ToString());
+                }
             }
 
             return content;
@@ -458,12 +465,19 @@ public static class ImportanceClassifier
             var matches = new List<TextSpan>();
             foreach (var pattern in _patterns)
             {
-                foreach (Match match in pattern.Matches(text))
+                try
                 {
-                    if (match.Length > 0)
+                    foreach (Match match in pattern.Matches(text))
                     {
-                        matches.Add(new TextSpan(match.Index, match.Length));
+                        if (match.Length > 0)
+                        {
+                            matches.Add(new TextSpan(match.Index, match.Length));
+                        }
                     }
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    throw FilterRegex.MatchTimedOut(pattern.ToString());
                 }
             }
 

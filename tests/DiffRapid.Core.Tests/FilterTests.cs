@@ -99,4 +99,43 @@ public sealed class FilterTests
         Assert.Equal(new CompareOptions(), new CompareOptions { LineFilters = [], Substitutions = [] });
         Assert.NotEqual(options, options with { Substitutions = [] });
     }
+
+    // Backtracks exponentially on a run of 'a' without a final 'b', so it exceeds the one-second match timeout.
+    private const string SlowPattern = "^(a+)+b$";
+    private static readonly string SlowInput = new string('a', 40) + "!";
+
+    [Fact]
+    public void Line_filter_timeouts_name_the_pattern_but_not_the_text()
+    {
+        var options = new CompareOptions { LineFilters = [new(SlowPattern)] };
+
+        var error = Assert.Throws<ArgumentException>(() => TextComparer.Compare(Doc(SlowInput), Doc("other"), options));
+
+        Assert.Contains(SlowPattern, error.Message);
+        Assert.DoesNotContain(SlowInput, error.Message);
+        Assert.Null(error.InnerException);
+    }
+
+    [Fact]
+    public void Substitution_timeouts_name_the_pattern_but_not_the_text()
+    {
+        var options = new CompareOptions { Substitutions = [new(SlowPattern, "", IsRegex: true, CaseSensitive: true, WholeWord: false)] };
+
+        var error = Assert.Throws<ArgumentException>(() => TextComparer.Compare(Doc(SlowInput), Doc("other"), options));
+
+        Assert.Contains(SlowPattern, error.Message);
+        Assert.DoesNotContain(SlowInput, error.Message);
+    }
+
+    [Fact]
+    public void Importance_pattern_timeouts_name_the_pattern_but_not_the_text()
+    {
+        var diff = TextComparer.Compare(Doc(SlowInput), Doc("other"));
+        var rules = new ImportanceRules { UnimportantPatterns = [SlowPattern] };
+
+        var error = Assert.Throws<ArgumentException>(() => ImportanceClassifier.Classify(diff, rules));
+
+        Assert.Contains(SlowPattern, error.Message);
+        Assert.DoesNotContain(SlowInput, error.Message);
+    }
 }

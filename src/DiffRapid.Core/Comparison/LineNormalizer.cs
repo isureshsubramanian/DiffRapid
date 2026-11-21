@@ -15,7 +15,7 @@ public sealed class LineNormalizer
     private readonly CompareOptions _options;
     private readonly Dictionary<(string Content, LineEnding Ending), int> _keys = new();
     private readonly StringBuilder _buffer = new();
-    private readonly List<(Regex Pattern, string Replacement, bool Literal)> _substitutions = new();
+    private readonly List<(Regex Pattern, string Replacement, bool Literal, string Find)> _substitutions = new();
 
     public LineNormalizer(CompareOptions options)
     {
@@ -33,7 +33,7 @@ public sealed class LineNormalizer
                 pattern = @"(?<!\w)(?:" + pattern + @")(?!\w)";
             }
 
-            _substitutions.Add((FilterRegex.Create(pattern, filter.CaseSensitive, filter.Find), filter.Replace, !filter.IsRegex));
+            _substitutions.Add((FilterRegex.Create(pattern, filter.CaseSensitive, filter.Find), filter.Replace, !filter.IsRegex, filter.Find));
         }
     }
 
@@ -82,9 +82,16 @@ public sealed class LineNormalizer
     {
         foreach (var substitution in _substitutions)
         {
-            content = substitution.Literal
-                ? substitution.Pattern.Replace(content, _ => substitution.Replacement)
-                : substitution.Pattern.Replace(content, substitution.Replacement);
+            try
+            {
+                content = substitution.Literal
+                    ? substitution.Pattern.Replace(content, _ => substitution.Replacement)
+                    : substitution.Pattern.Replace(content, substitution.Replacement);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                throw FilterRegex.MatchTimedOut(substitution.Find);
+            }
         }
 
         if (_options.Whitespace == WhitespaceMode.Compare && !_options.IgnoreNumbers && !_options.IgnoreCase)

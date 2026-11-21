@@ -56,4 +56,13 @@ internal static class FilterRegex
             throw new ArgumentException($"Invalid filter pattern '{originalPattern ?? pattern}'.", nameof(pattern), ex);
         }
     }
+
+    /// <summary>
+    /// The error for a pattern that exceeded its match timeout. It names the pattern only: the timeout
+    /// exception is not attached because it carries the matched input text.
+    /// </summary>
+    public static ArgumentException MatchTimedOut(string pattern)
+    {
+        return new ArgumentException($"Filter pattern '{pattern}' took too long to match.", nameof(pattern));
+    }
 }
