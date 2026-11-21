@@ -14,29 +14,6 @@ namespace DiffRapid.Cli;
 
 internal static partial class Program
 {
-    private static int RunExplain(string[] rawArgs)
-    {
-        using var cancellation = new CancellationTokenSource();
-        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            cancellation.Cancel();
-        };
-        Console.CancelKeyPress += cancelHandler;
-        try
-        {
-            return RunExplainAsync(rawArgs, Console.Out, cancellationToken: cancellation.Token).GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            return Fail("AI request cancelled.");
-        }
-        finally
-        {
-            Console.CancelKeyPress -= cancelHandler;
-        }
-    }
-
     internal static async Task<int> RunExplainAsync(string[] rawArgs, TextWriter output,
         HttpMessageHandler? handler = null, CancellationToken cancellationToken = default)
     {

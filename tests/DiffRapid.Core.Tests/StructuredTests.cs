@@ -530,7 +530,7 @@ public sealed class StructuredTests
     }
 
     [Fact]
-    public void CommandReturnsExitCodesAndFormatsDifferences()
+    public async Task CommandReturnsExitCodesAndFormatsDifferences()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -545,12 +545,12 @@ public sealed class StructuredTests
             File.WriteAllText(same, """{"b": [{"v": 1, "id": "x"}], "a": 1}""");
             File.WriteAllText(broken, "a: 1\n\tb: 2");
 
-            Assert.Equal(0, Program.Main(["struct", left, same]));
-            Assert.Equal(1, Program.Main(["struct", left, right, "--array-key", "id"]));
-            Assert.Equal(2, Program.Main(["struct", broken, broken]));
-            Assert.Equal(2, Program.Main(["struct", left, right, "--format", "toml"]));
-            Assert.Equal(2, Program.Main(["struct", left]));
-            Assert.Equal(2, Program.Main(["struct", left, broken, "--format", "json"]));
+            Assert.Equal(0, await Program.Main(["struct", left, same]));
+            Assert.Equal(1, await Program.Main(["struct", left, right, "--array-key", "id"]));
+            Assert.Equal(2, await Program.Main(["struct", broken, broken]));
+            Assert.Equal(2, await Program.Main(["struct", left, right, "--format", "toml"]));
+            Assert.Equal(2, await Program.Main(["struct", left]));
+            Assert.Equal(2, await Program.Main(["struct", left, broken, "--format", "json"]));
         }
         finally
         {

@@ -23,23 +23,23 @@ public sealed class PatchCliTests : IDisposable
     private string At(string path) => Path.Combine(_root, path);
 
     [Fact]
-    public void FolderPatchReproducesRightAndReverses()
+    public async Task FolderPatchReproducesRightAndReverses()
     {
         CreateFolders();
         CopyFolder("left", "copy");
         var original = Snapshot(At("copy"));
-        Assert.Equal(0, Program.Main(["patch", At("left"), At("right"), "-o", At("patch")]));
-        Assert.Equal(0, Program.Main(["apply", At("patch"), "--dir", At("copy"), "--dry-run"]));
+        Assert.Equal(0, await Program.Main(["patch", At("left"), At("right"), "-o", At("patch")]));
+        Assert.Equal(0, await Program.Main(["apply", At("patch"), "--dir", At("copy"), "--dry-run"]));
         AssertSnapshot(original, At("copy"));
-        Assert.Equal(0, Program.Main(["apply", At("patch"), "--dir", At("copy")]));
+        Assert.Equal(0, await Program.Main(["apply", At("patch"), "--dir", At("copy")]));
         AssertSnapshot(Snapshot(At("right")), At("copy"));
-        Assert.Equal(0, Program.Main(["apply", At("patch"), "--dir", At("copy"), "--reverse"]));
+        Assert.Equal(0, await Program.Main(["apply", At("patch"), "--dir", At("copy"), "--reverse"]));
         AssertSnapshot(original, At("copy"));
         AssertSnapshot(original, At("left"));
     }
 
     [Fact]
-    public void FolderPatchReportsBinaryAndAppliesTextOverCopy()
+    public async Task FolderPatchReportsBinaryAndAppliesTextOverCopy()
     {
         CreateFolders();
         // The binary file sorts first: it is skipped and every text change after it still applies.
@@ -52,9 +52,9 @@ public sealed class PatchCliTests : IDisposable
         var patch = writer.ToString();
         Assert.Contains("Binary files a/aa-binary and b/aa-binary differ", patch);
         File.WriteAllText(At("patch"), patch);
-        Assert.Equal(1, Program.Main(["apply", At("patch"), "--dir", At("copy"), "--dry-run"]));
+        Assert.Equal(1, await Program.Main(["apply", At("patch"), "--dir", At("copy"), "--dry-run"]));
         AssertSnapshot(original, At("copy"));
-        Assert.Equal(1, Program.Main(["apply", At("patch"), "--dir", At("copy")]));
+        Assert.Equal(1, await Program.Main(["apply", At("patch"), "--dir", At("copy")]));
         var expected = Snapshot(At("right"));
         expected["aa-binary"] = original["aa-binary"];
         AssertSnapshot(expected, At("copy"));
@@ -62,12 +62,12 @@ public sealed class PatchCliTests : IDisposable
     }
 
     [Fact]
-    public void FailuresLeaveWholeFileUntouchedWhileOtherFilesApply()
+    public async Task FailuresLeaveWholeFileUntouchedWhileOtherFilesApply()
     {
         File.WriteAllText(At("x"), "a\nwrong\n");
         File.WriteAllText(At("y"), "old\n");
         File.WriteAllText(At("patch"), "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n@@ -2 +2 @@\n-c\n+d\n--- a/y\n+++ b/y\n@@ -1 +1 @@\n-old\n+new\n");
-        Assert.Equal(1, Program.Main(["apply", At("patch"), "--dir", _root, "--fuzz", "0"]));
+        Assert.Equal(1, await Program.Main(["apply", At("patch"), "--dir", _root, "--fuzz", "0"]));
         Assert.Equal("a\nwrong\n", File.ReadAllText(At("x")));
         Assert.Equal("new\n", File.ReadAllText(At("y")));
     }
@@ -77,21 +77,21 @@ public sealed class PatchCliTests : IDisposable
     [InlineData("nested/../../escape")]
     [InlineData("/rooted")]
     [InlineData("C:/rooted")]
-    public void UnsafePathsAreRejectedBeforeAnyWrites(string unsafePath)
+    public async Task UnsafePathsAreRejectedBeforeAnyWrites(string unsafePath)
     {
         File.WriteAllText(At("safe"), "old\n");
         File.WriteAllText(At("patch"), "--- a/safe\n+++ b/safe\n@@ -1 +1 @@\n-old\n+new\n"
             + $"--- /dev/null\n+++ {unsafePath}\n@@ -0,0 +1 @@\n+bad\n");
         var original = Snapshot(_root);
-        Assert.Equal(2, Program.Main(["apply", At("patch"), "--dir", _root]));
+        Assert.Equal(2, await Program.Main(["apply", At("patch"), "--dir", _root]));
         AssertSnapshot(original, _root);
     }
 
     [Fact]
-    public void ExcessiveFuzzIsAUsageError()
+    public async Task ExcessiveFuzzIsAUsageError()
     {
         File.WriteAllText(At("patch"), "");
-        Assert.Equal(2, Program.Main(["apply", At("patch"), "--fuzz", "3"]));
+        Assert.Equal(2, await Program.Main(["apply", At("patch"), "--fuzz", "3"]));
     }
 
     private void CreateFolders()

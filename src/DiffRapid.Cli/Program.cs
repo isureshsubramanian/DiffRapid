@@ -1,6 +1,9 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using DiffRapid.Hosting;
 
 namespace DiffRapid.Cli;
 
@@ -109,8 +112,15 @@ internal static partial class Program
         Exit codes: 0 identical/clean, 1 different/conflicts, 2 error.
         """;
 
-    /// <summary>Runs the requested command and returns its exit code.</summary>
-    public static int Main(string[] args)
+    /// <summary>Runs the requested command and returns its exit code; the first Ctrl+C cancels the command.</summary>
+    public static async Task<int> Main(string[] args)
+    {
+        using var cancellation = new ConsoleCancellation();
+        return await RunAsync(args, cancellation.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>Runs one command. Every failure becomes a one-line message on stderr and exit code 2.</summary>
+    internal static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
         try
         {
@@ -131,13 +141,13 @@ internal static partial class Program
             return command switch
             {
                 "patch" => RunPatch(parsed),
-                "explain" => RunExplain(args),
+                "explain" => await RunExplainAsync(args, Console.Out, cancellationToken: cancellationToken).ConfigureAwait(false),
                 "apply" => RunApply(parsed),
                 "dir" => RunDirectory(parsed),
                 "dir3" => RunDirectory3(parsed),
-                "diff" => RunDiff(parsed),
-                "log" => RunLog(parsed),
-                "history" => RunHistory(args),
+                "diff" => await RunDiffAsync(parsed, cancellationToken).ConfigureAwait(false),
+                "log" => await RunLogAsync(parsed, cancellationToken).ConfigureAwait(false),
+                "history" => RunHistory(args, cancellationToken),
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
@@ -153,26 +163,14 @@ internal static partial class Program
                 "mcp" => RunMcp(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
-
         }
-        catch (UsageException ex)
+        catch (OperationCanceledException)
         {
-            return Fail(ex.Message);
+            return Fail("Cancelled.");
         }
-        catch (ArgumentException ex)
+        catch (Exception ex)
         {
-            return Fail(ex.Message);
-        }
-        catch (FormatException ex)
-        {
-            return Fail(ex.Message);
-        }
-        catch (IOException ex)
-        {
-            return Fail(ex.Message);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
+            // Usage, file, format and data errors, and anything unexpected: the message only, never a stack trace.
             return Fail(ex.Message);
         }
     }

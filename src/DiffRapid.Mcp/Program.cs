@@ -1,4 +1,5 @@
 using System.Text;
+using DiffRapid.Hosting;
 using ModelContextProtocol.Server;
 
 namespace DiffRapid.Mcp;
@@ -8,13 +9,7 @@ internal static class Program
     private static async Task<int> Main()
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        using var cancellation = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, arguments) =>
-        {
-            arguments.Cancel = true;
-            cancellation.Cancel();
-        };
-
+        using var cancellation = new ConsoleCancellation();
         try
         {
             var options = ComparisonServer.CreateOptions();
@@ -22,7 +17,7 @@ internal static class Program
             await server.RunAsync(cancellation.Token);
             return 0;
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellation.Token.IsCancellationRequested)
         {
             return 0;
         }

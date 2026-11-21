@@ -240,7 +240,7 @@ public sealed class ImageComparerTests
     }
 
     [Fact]
-    public void CommandLineComparesImagesAndWritesTheHighlight()
+    public async Task CommandLineComparesImagesAndWritesTheHighlight()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -257,19 +257,19 @@ public sealed class ImageComparerTests
             changed.SetPixel(3, 4, PixelColor.FromRgb(104, 100, 100));
             ImageFile.SavePng(changed, right);
 
-            Assert.Equal(0, Program.Main(["image", left, copy]));
-            Assert.Equal(1, Program.Main(["image", left, right, "--diff-out", diff]));
+            Assert.Equal(0, await Program.Main(["image", left, copy]));
+            Assert.Equal(1, await Program.Main(["image", left, right, "--diff-out", diff]));
             Assert.Equal(ImageOverlay.DefaultHighlightColor, ImageFile.Load(diff).GetPixel(3, 4));
-            Assert.Equal(0, Program.Main(["image", left, right, "--tolerance", "4"]));
-            Assert.Equal(0, Program.Main(["image", left, right, "--tolerance=4", "--max-offset", "1", "--ignore-alpha"]));
+            Assert.Equal(0, await Program.Main(["image", left, right, "--tolerance", "4"]));
+            Assert.Equal(0, await Program.Main(["image", left, right, "--tolerance=4", "--max-offset", "1", "--ignore-alpha"]));
 
             var text = Path.Combine(directory, "notes.txt");
             File.WriteAllText(text, "not an image");
-            Assert.Equal(2, Program.Main(["image", left, text]));
-            Assert.Equal(2, Program.Main(["image", left, Path.Combine(directory, "missing.png")]));
-            Assert.Equal(2, Program.Main(["image", left]));
-            Assert.Equal(2, Program.Main(["image", left, right, "--tolerance"]));
-            Assert.Equal(2, Program.Main(["image", left, right, "--tolerance", "300"]));
+            Assert.Equal(2, await Program.Main(["image", left, text]));
+            Assert.Equal(2, await Program.Main(["image", left, Path.Combine(directory, "missing.png")]));
+            Assert.Equal(2, await Program.Main(["image", left]));
+            Assert.Equal(2, await Program.Main(["image", left, right, "--tolerance"]));
+            Assert.Equal(2, await Program.Main(["image", left, right, "--tolerance", "300"]));
         }
         finally
         {

@@ -514,9 +514,9 @@ public sealed class AiTests
     [InlineData("explain", "--endpoint")]
     [InlineData("explain", "--endpoint=https://example.test", "--model")]
     [InlineData("explain", "--api-key=never-print-this")]
-    public void CliReturnsExitTwoForMissingConfigurationOrInvalidOptions(params string[] arguments)
+    public async Task CliReturnsExitTwoForMissingConfigurationOrInvalidOptions(params string[] arguments)
     {
-        Assert.Equal(2, Program.Main(arguments));
+        Assert.Equal(2, await Program.Main(arguments));
     }
 
     [Fact]

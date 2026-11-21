@@ -34,27 +34,16 @@ internal static partial class Program
             throw new UsageException("--tolerance must be between 0 and 255.");
         }
 
-        try
+        var left = ImageFile.Load(args.Positionals[0]);
+        var right = ImageFile.Load(args.Positionals[1]);
+        var result = ImageComparer.Compare(left, right, options);
+        WriteImageSummary(args.Positionals[0], args.Positionals[1], result);
+        if (args.Value("diff-out") is { } diffOut)
         {
-            var left = ImageFile.Load(args.Positionals[0]);
-            var right = ImageFile.Load(args.Positionals[1]);
-            var result = ImageComparer.Compare(left, right, options);
-            WriteImageSummary(args.Positionals[0], args.Positionals[1], result);
-            if (args.Value("diff-out") is { } diffOut)
-            {
-                ImageFile.SavePng(ImageOverlay.Highlight(left, right, result), diffOut);
-            }
+            ImageFile.SavePng(ImageOverlay.Highlight(left, right, result), diffOut);
+        }
 
-            return result.AreIdentical ? ExitSame : ExitDifferent;
-        }
-        catch (NotSupportedException ex)
-        {
-            return Fail(ex.Message);
-        }
-        catch (InvalidDataException ex)
-        {
-            return Fail(ex.Message);
-        }
+        return result.AreIdentical ? ExitSame : ExitDifferent;
     }
 
     /// <summary>Turns "--tolerance 5" into "--tolerance=5" so the shared parser keeps the value with its option.</summary>

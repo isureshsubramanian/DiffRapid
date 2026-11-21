@@ -693,11 +693,11 @@ public sealed class LocalHistoryTests : IDisposable
     }
 
     [Fact]
-    public void CliReportsCorruptBlobsAsAnError()
+    public async Task CliReportsCorruptBlobsAsAnError()
     {
         var entry = Capture(OpenStore(), "saved");
         File.WriteAllBytes(BlobPath(entry), [1, 2, 3, 4]);
-        Assert.Equal(2, Program.Main(["history", "show", SourcePath, "1", "--store", StoreFolder]));
+        Assert.Equal(2, await Program.Main(["history", "show", SourcePath, "1", "--store", StoreFolder]));
     }
 
     [Fact]
@@ -728,10 +728,10 @@ public sealed class LocalHistoryTests : IDisposable
     [InlineData("show", "2")]
     [InlineData("show", "invalid")]
     [InlineData("diff", "999999999999999")]
-    public void CliRejectsInvalidSnapshotNumbers(string action, string number)
+    public async Task CliRejectsInvalidSnapshotNumbers(string action, string number)
     {
         Capture(OpenStore(), "saved");
-        Assert.Equal(2, Program.Main(["history", action, SourcePath, number, "--store", StoreFolder]));
+        Assert.Equal(2, await Program.Main(["history", action, SourcePath, number, "--store", StoreFolder]));
     }
 
     [Theory]
@@ -740,20 +740,20 @@ public sealed class LocalHistoryTests : IDisposable
     [InlineData("show")]
     [InlineData("diff")]
     [InlineData("snapshot")]
-    public void CliRejectsUnknownOrIncompleteActions(string action)
+    public async Task CliRejectsUnknownOrIncompleteActions(string action)
     {
-        Assert.Equal(2, Program.Main(["history", action, "--store", StoreFolder]));
+        Assert.Equal(2, await Program.Main(["history", action, "--store", StoreFolder]));
     }
 
     [Fact]
-    public void CliRejectsMissingOptionValuesAndTooManyArguments()
+    public async Task CliRejectsMissingOptionValuesAndTooManyArguments()
     {
-        Assert.Equal(2, Program.Main(["history"]));
-        Assert.Equal(2, Program.Main(["history", "prune", "extra", "--store", StoreFolder]));
-        Assert.Equal(2, Program.Main(["history", "list", SourcePath, "--store"]));
-        Assert.Equal(2, Program.Main(["history", "snapshot", SourcePath, "--label", "--store", StoreFolder]));
-        Assert.Equal(2, Program.Main(["history", "snapshot", SourcePath, "--label=", "--store", StoreFolder]));
-        Assert.Equal(2, Program.Main(["history", "list", SourcePath, "--store="]));
+        Assert.Equal(2, await Program.Main(["history"]));
+        Assert.Equal(2, await Program.Main(["history", "prune", "extra", "--store", StoreFolder]));
+        Assert.Equal(2, await Program.Main(["history", "list", SourcePath, "--store"]));
+        Assert.Equal(2, await Program.Main(["history", "snapshot", SourcePath, "--label", "--store", StoreFolder]));
+        Assert.Equal(2, await Program.Main(["history", "snapshot", SourcePath, "--label=", "--store", StoreFolder]));
+        Assert.Equal(2, await Program.Main(["history", "list", SourcePath, "--store="]));
     }
 
     private LocalHistoryStore OpenStore(LocalHistoryOptions? options = null) => new(StoreFolder, options ?? new LocalHistoryOptions());

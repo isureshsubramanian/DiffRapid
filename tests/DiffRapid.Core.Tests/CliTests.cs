@@ -5,7 +5,7 @@ namespace DiffRapid.Core.Tests;
 public sealed class CliTests
 {
     [Fact]
-    public void DiffAppliesFiltersAndReportsInvalidArguments()
+    public async Task DiffAppliesFiltersAndReportsInvalidArguments()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -15,15 +15,43 @@ public sealed class CliTests
             var right = Path.Combine(directory, "right.txt");
             File.WriteAllText(left, "// old\nversion 1\n");
             File.WriteAllText(right, "// new\nversion 2\n");
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet"]));
-            Assert.Equal(0, Program.Main(["diff", left, right, "--quiet",
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet"]));
+            Assert.Equal(0, await Program.Main(["diff", left, right, "--quiet",
                 "--line-filter", "^//", "--substitute", @"version \d+=version"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--line-filter", "["]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--substitute", "missing-separator"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--line-filter"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--line-filter", "["]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--substitute", "missing-separator"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--line-filter"]));
         }
         finally
         {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnexpectedErrorsAndCancellationExitWithMessageOnly()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(directory);
+        var error = Console.Error;
+        using var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            var left = Path.Combine(directory, "left.txt");
+            File.WriteAllText(left, "a\n");
+
+            // An unknown code page throws NotSupportedException, which no command handles itself.
+            Assert.Equal(2, await Program.Main(["diff", left, left, "--cp", "12345"]));
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            Assert.Equal(2, await Program.RunAsync(["diff", left, left], cancellation.Token));
+            Assert.Contains("diffrapid: Cancelled.", captured.ToString());
+            Assert.DoesNotContain("   at ", captured.ToString());
+        }
+        finally
+        {
+            Console.SetError(error);
             Directory.Delete(directory, recursive: true);
         }
     }
@@ -69,7 +97,7 @@ public sealed class CliTests
     [InlineData(false, "-o", false)]
     [InlineData(true, "/o", false)]
     [InlineData(true, "-o", true)]
-    public void MergeWritesOutputAndReturnsConflictStatus(bool conflict, string outputOption, bool customLabels)
+    public async Task MergeWritesOutputAndReturnsConflictStatus(bool conflict, string outputOption, bool customLabels)
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -88,7 +116,7 @@ public sealed class CliTests
                 args = [.. args, "/dl", "LOCAL", "/dm", "BASE", "/dr", "REMOTE"];
             }
 
-            Assert.Equal(conflict ? 1 : 0, Program.Main(args));
+            Assert.Equal(conflict ? 1 : 0, await Program.Main(args));
             var text = File.ReadAllText(mergedPath);
             if (conflict)
             {
@@ -130,9 +158,9 @@ public sealed class CliTests
     }
 
     [Fact]
-    public void GitConfigurationRejectsUnexpectedArguments()
+    public async Task GitConfigurationRejectsUnexpectedArguments()
     {
-        Assert.Equal(2, Program.Main(["git-config", "--local"]));
-        Assert.Equal(2, Program.Main(["git-config", "--global", "extra"]));
+        Assert.Equal(2, await Program.Main(["git-config", "--local"]));
+        Assert.Equal(2, await Program.Main(["git-config", "--global", "extra"]));
     }
 }
