@@ -1,4 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -47,7 +52,7 @@ internal static class Diagnostics
 
     /// <summary>
     /// Logs the exception's type and message (and the types of the exceptions inside it), with the user's profile
-    /// folder written as %USERPROFILE%; stack traces are left out, as they add little and can name local paths.
+    /// folder written as %USERPROFILE% and other path segments that are the user name as %USERNAME%; stack traces are left out, as they add little and can name local paths.
     /// </summary>
     public static void LogError(Exception ex)
     {
@@ -68,7 +73,7 @@ internal static class Diagnostics
 
     private static string Describe(Exception ex)
     {
-        var text = new System.Text.StringBuilder(ex.GetType().FullName).Append(": ").Append(ex.Message);
+        var text = new StringBuilder(ex.GetType().FullName).Append(": ").Append(ex.Message);
         for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
         {
             text.Append(" ← ").Append(inner.GetType().FullName);
@@ -77,15 +82,79 @@ internal static class Diagnostics
         return text.ToString();
     }
 
-    private static readonly string UserProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\', '/');
+    // The profile folder as written (C:\Users\Jane.Doe) and in its 8.3 form (C:\Users\JANEDO~1), either slash
+    // separating the parts; and the user name as a whole path segment anywhere else (D:\Work\Jane.Doe\...).
+    private static readonly Regex? ProfilePattern = BuildProfilePattern();
+    private static readonly Regex? UserNamePattern = BuildUserNamePattern();
 
     // Paths under the profile folder carry the user name; the rest of the path still says which file it was.
-    private static string Redact(string text) =>
-        UserProfile.Length < 3 ? text : System.Text.RegularExpressions.Regex.Replace(
-            text,
-            System.Text.RegularExpressions.Regex.Escape(UserProfile),
-            "%USERPROFILE%",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static string Redact(string text)
+    {
+        if (ProfilePattern is not null)
+        {
+            text = ProfilePattern.Replace(text, "%USERPROFILE%");
+        }
+
+        return UserNamePattern is null ? text : UserNamePattern.Replace(text, "%USERNAME%");
+    }
+
+    private static Regex? BuildProfilePattern()
+    {
+        try
+        {
+            var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\', '/');
+            if (profile.Length < 3)
+            {
+                return null;
+            }
+
+            var forms = new List<string> { profile };
+            if (ShortPath(profile) is { } shortForm && !string.Equals(shortForm, profile, StringComparison.OrdinalIgnoreCase))
+            {
+                forms.Add(shortForm);
+            }
+
+            var alternatives = forms.Select(form => string.Join(@"[\\/]", form.Split('\\', '/').Select(Regex.Escape)));
+            return new Regex(string.Join("|", alternatives), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PlatformNotSupportedException or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    private static Regex? BuildUserNamePattern()
+    {
+        try
+        {
+            var name = Environment.UserName;
+            return string.IsNullOrWhiteSpace(name)
+                ? null
+                : new Regex(@"(?<=[\\/])" + Regex.Escape(name) + @"(?![\w.\-~$])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PlatformNotSupportedException or System.Security.SecurityException)
+        {
+            return null;
+        }
+    }
+
+    // The 8.3 form of a path, or null when the volume has none or it cannot be read.
+    private static string? ShortPath(string path)
+    {
+        var buffer = new StringBuilder(260); // MAX_PATH; a longer form is read again at its reported length.
+        var length = GetShortPathName(path, buffer, buffer.Capacity);
+        if (length > buffer.Capacity)
+        {
+            buffer = new StringBuilder(length);
+            length = GetShortPathName(path, buffer, buffer.Capacity);
+        }
+
+        return length > 0 && length <= buffer.Capacity ? buffer.ToString().TrimEnd('\\', '/') : null;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetShortPathNameW")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int GetShortPathName(string longPath, StringBuilder shortPath, int bufferLength);
 
     /// <summary>Logs a step on the UI thread that took long enough for the user to notice (over 200 ms).</summary>
     public static void LogIfSlow(string step, System.Diagnostics.Stopwatch elapsed)
