@@ -295,6 +295,24 @@ public sealed class PluginTests
             Assert.Throws<PluginException>(() => missing.Transform("x", PluginContext.ForArguments()));
             Assert.Throws<ArgumentException>(() => PluginPipeline.ApplyPrediffers("x", "x.txt", new PluginOptions { Prediffer = "Exec" }));
         }
+
+        [Fact]
+        public void ProgramThatExitsBeforeTheLimitIsNotATimeoutWhileItsOutputDrains()
+        {
+            // The program exits at once and succeeds, but a child it leaves running keeps its output open for about
+            // four seconds: the 3 s limit passes while the output drains, and that is not a timeout. The limit leaves
+            // PowerShell time to start on a loaded machine, and the child ends inside the runner's 5 s drain wait.
+            // (The runner quotes every argument, which cmd.exe /c misreads, so Windows starts the child from PowerShell.)
+            const string windowsScript =
+                "$i = New-Object Diagnostics.ProcessStartInfo 'ping.exe', '-n 5 127.0.0.1'; $i.UseShellExecute = $false; [void][Diagnostics.Process]::Start($i)";
+            var early = OperatingSystem.IsWindows()
+                ? new ExternalCommandPlugin("Early", "powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsScript])
+                : new ExternalCommandPlugin("Early", "/bin/sh", ["-c", "sleep 4 &"]);
+            var limit = TimeSpan.FromSeconds(3);
+            var stopwatch = Stopwatch.StartNew();
+            early.Transform("x", new PluginContext("x.txt", [], limit, CancellationToken.None));
+            Assert.True(stopwatch.Elapsed > limit, "The output closed before the limit, so the test proves nothing.");
+        }
     }
 
     [Fact]

@@ -137,9 +137,12 @@ internal sealed class ProcessRunner : IProcessRunner
 
         StartProcess(process, executable);
         var limitExceeded = false;
+        // Set only when the deadline stops a running program, and before it is stopped, so the exit it causes can
+        // never be read first: a deadline that passes after a normal exit, while the output drains, is no timeout.
+        var stoppedAtDeadline = false;
         using var deadline = new CancellationTokenSource(Bounded(timeout));
         using var cancelled = cancellationToken.Register(() => KillProcess(process));
-        using var timedOut = deadline.Token.Register(() => KillProcess(process));
+        using var timedOut = deadline.Token.Register(() => KillProcess(process, () => stoppedAtDeadline = true));
         _ = WriteInputAsync(process.StandardInput.BaseStream, standardInput ?? Array.Empty<byte>());
 
         // Drain both streams concurrently so neither pipe can block the child process.
@@ -153,13 +156,16 @@ internal sealed class ProcessRunner : IProcessRunner
         var streams = Task.WhenAll(output, error);
         var drained = await Task.WhenAny(streams, Task.Delay(DrainTimeout)).ConfigureAwait(false) == streams;
 
+        // Disposing waits for a deadline callback that is still running, so stoppedAtDeadline is final below.
+        timedOut.Dispose();
+
         cancellationToken.ThrowIfCancellationRequested();
         if (limitExceeded)
         {
             throw new IOException($"{executable}: the output passed {outputLimit / (1024 * 1024)} MB and the program was stopped.");
         }
 
-        if (deadline.IsCancellationRequested)
+        if (stoppedAtDeadline)
         {
             throw new TimeoutException($"{executable} did not finish within {timeout.TotalSeconds:0.###} seconds and was stopped.");
         }
@@ -190,13 +196,15 @@ internal sealed class ProcessRunner : IProcessRunner
         }
     }
 
-    private static void KillProcess(Process process)
+    /// <summary>Stops the program if it is still running, calling <paramref name="stopping"/> first.</summary>
+    private static void KillProcess(Process process, Action? stopping = null)
     {
         // Cancellation can race with normal process exit.
         try
         {
             if (!process.HasExited)
             {
+                stopping?.Invoke();
                 process.Kill();
             }
         }
