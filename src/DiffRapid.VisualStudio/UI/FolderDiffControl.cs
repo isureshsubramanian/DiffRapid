@@ -1069,13 +1069,15 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         groups.Add(open);
 
+        // The entries come from cheap checks of the selected rows only; building the full copy or delete plan walks
+        // every file in a selected folder, and that waits until an entry is picked.
         var copy = new List<MenuItem>();
-        if (ready && !FolderCopyPlan.Create(selected, toRight: true).IsEmpty)
+        if (ready && selected.Any(i => MightCopy(i, toRight: true)))
         {
             copy.Add(MenuEntry("Copy to right", KnownMonikers.Forwards, "Ctrl+F8", () => CopySelection(toRight: true)));
         }
 
-        if (ready && !FolderCopyPlan.Create(selected, toRight: false).IsEmpty)
+        if (ready && selected.Any(i => MightCopy(i, toRight: false)))
         {
             copy.Add(MenuEntry("Copy to left", KnownMonikers.Backwards, "Ctrl+Shift+F8", () => CopySelection(toRight: false)));
         }
@@ -1084,12 +1086,12 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         var delete = new List<MenuItem>();
         var onlySide = FolderDeletePlan.OnlySide(selected);
-        if (ready && !FolderDeletePlan.Create(selected, fromLeft: true).IsEmpty)
+        if (ready && selected.Any(i => i.RelativePath.Length > 0 && i.Left.Exists))
         {
             delete.Add(MenuEntry("Delete from left…", KnownMonikers.Delete, onlySide == true ? "Del" : null, () => DeleteSelection(fromLeft: true)));
         }
 
-        if (ready && !FolderDeletePlan.Create(selected, fromLeft: false).IsEmpty)
+        if (ready && selected.Any(i => i.RelativePath.Length > 0 && i.Right.Exists))
         {
             delete.Add(MenuEntry("Delete from right…", KnownMonikers.Delete, onlySide == false ? "Del" : null, () => DeleteSelection(fromLeft: false)));
         }
@@ -1125,6 +1127,15 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             e.Handled = true;
         }
     }
+
+    // Whether copying this entry could do something, the way FolderCopyPlan decides, without looking inside a folder:
+    // a folder whose files are all the same on both sides is reported when the entry is picked.
+    private static bool MightCopy(FolderCompareItem item, bool toRight) =>
+        (toRight ? item.Left : item.Right).Exists
+        && item.Status is not (FolderCompareStatus.Skipped or FolderCompareStatus.TypeConflict)
+        && (item.Kind == FolderItemKind.Folder
+            ? !(toRight ? item.Right : item.Left).Exists || item.Status != FolderCompareStatus.Identical
+            : item.Kind == FolderItemKind.File && item.Status is not (FolderCompareStatus.Identical or FolderCompareStatus.Error));
 
     private static MenuItem MenuEntry(string header, ImageMoniker icon, string? gesture, Action action)
     {
