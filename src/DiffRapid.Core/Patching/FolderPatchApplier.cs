@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using DiffRapid.Core.IO;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Patching;
@@ -75,6 +75,9 @@ public sealed record FilePatchPlan(
 
     /// <summary>True when the file can be written.</summary>
     public bool CanApply => Status == FilePatchStatus.Ready;
+
+    /// <summary>The folder the patch paths were resolved under, or null for a file chosen by the user.</summary>
+    internal string? Root { get; init; }
 }
 
 /// <summary>The preview of a whole patch applied under a root folder.</summary>
@@ -98,8 +101,7 @@ public static class FolderPatchApplier
 {
     private static readonly IReadOnlyList<HunkOutcome> NoOutcomes = Array.Empty<HunkOutcome>();
 
-    private static StringComparison PathComparison =>
-        RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+    private static StringComparison PathComparison => PathContainment.Comparison;
 
     /// <summary>
     /// Plans every file of <paramref name="patch"/> relative to <paramref name="root"/> without writing anything.
@@ -204,7 +206,10 @@ public static class FolderPatchApplier
         return results.AsReadOnly();
     }
 
-    /// <summary>Writes one planned file; see <see cref="Apply(FolderPatchPlan, Func{FilePatchPlan, bool}?)"/>.</summary>
+    /// <summary>
+    /// Writes one planned file; see <see cref="Apply(FolderPatchPlan, Func{FilePatchPlan, bool}?)"/>. The containment
+    /// and link checks of planning run again first, since a link may have been created after the preview.
+    /// </summary>
     public static FilePatchWriteResult ApplyFile(FilePatchPlan file)
     {
         if (!file.CanApply)
@@ -214,7 +219,9 @@ public static class FolderPatchApplier
 
         try
         {
-            var stale = StaleReason(file);
+            var stale = file.Root is null ? null
+                : UnsafeReason(file.Root, file.SourcePath, file.DisplayPath) ?? UnsafeReason(file.Root, file.TargetPath, file.DisplayPath);
+            stale ??= StaleReason(file);
             if (stale is not null)
             {
                 return new FilePatchWriteResult(file, false, stale);
@@ -260,7 +267,7 @@ public static class FolderPatchApplier
             : target is null ? FilePatchAction.Delete
             : string.Equals(source, target, PathComparison) ? FilePatchAction.Modify
             : FilePatchAction.Rename;
-        return PlanContent(patch, display, source, target, action, options, cancellationToken);
+        return PlanContent(patch, display, source, target, action, options, cancellationToken) with { Root = root };
     }
 
     /// <summary>Reads the source, applies the hunks in memory and decides whether the result can be written.</summary>
@@ -386,27 +393,25 @@ public static class FolderPatchApplier
         }
 
         var resolved = Path.GetFullPath(Path.Combine(root, path));
-        var trimmedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var rootPrefix = trimmedRoot + Path.DirectorySeparatorChar;
-        if (!resolved.StartsWith(rootPrefix, PathComparison))
+        var problem = UnsafeReason(root, resolved, path);
+        return problem is null ? resolved : throw new UnsafePathException(problem);
+    }
+
+    /// <summary>Why <paramref name="fullPath"/> may not be touched under <paramref name="root"/>, or null when it may.</summary>
+    private static string? UnsafeReason(string root, string? fullPath, string shown)
+    {
+        if (fullPath is null)
         {
-            throw new UnsafePathException("The patch path leaves the folder: " + path);
+            return null;
+        }
+
+        if (PathContainment.RelativeInside(root, fullPath) is null)
+        {
+            return "The patch path leaves the folder: " + shown;
         }
 
         // Existing links can redirect an otherwise safe path outside the root.
-        var current = resolved;
-        while (current is not null && current.Length > trimmedRoot.Length)
-        {
-            var entryExists = File.Exists(current) || Directory.Exists(current);
-            if (entryExists && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new UnsafePathException("The patch path goes through a link: " + path);
-            }
-
-            current = Path.GetDirectoryName(current);
-        }
-
-        return resolved;
+        return PathContainment.PassesThroughLink(root, fullPath) ? "The patch path goes through a link: " + shown : null;
     }
 
     /// <summary>Returns why the disk no longer matches the preview, or null when it still does.</summary>
@@ -439,44 +444,16 @@ public static class FolderPatchApplier
             return;
         }
 
-        WriteAtomically(file.TargetPath, file.PatchedText, file.Encoding, file.HasByteOrderMark);
+        var preamble = file.HasByteOrderMark ? file.Encoding.GetPreamble() : Array.Empty<byte>();
+        var content = file.Encoding.GetBytes(file.PatchedText);
+        AtomicFile.Write(file.TargetPath, stream =>
+        {
+            stream.Write(preamble, 0, preamble.Length);
+            stream.Write(content, 0, content.Length);
+        });
         if (file.Action == FilePatchAction.Rename)
         {
             File.Delete(file.SourcePath!);
-        }
-    }
-
-    /// <summary>Writes through a temporary file in the same folder so a failure never leaves a half-written file.</summary>
-    private static void WriteAtomically(string path, string text, Encoding encoding, bool byteOrderMark)
-    {
-        var folder = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(folder);
-        var temporary = Path.Combine(folder, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp");
-        try
-        {
-            var preamble = byteOrderMark ? encoding.GetPreamble() : Array.Empty<byte>();
-            var content = encoding.GetBytes(text);
-            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write))
-            {
-                stream.Write(preamble, 0, preamble.Length);
-                stream.Write(content, 0, content.Length);
-            }
-
-            if (File.Exists(path))
-            {
-                File.Replace(temporary, path, null);
-            }
-            else
-            {
-                File.Move(temporary, path);
-            }
-        }
-        finally
-        {
-            if (File.Exists(temporary))
-            {
-                File.Delete(temporary);
-            }
         }
     }
 
