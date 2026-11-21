@@ -85,9 +85,10 @@ internal sealed class LocalHistoryRecorder : IVsRunningDocTableEvents3
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         var path = FilePath(docCookie);
-        if (path is null || _hasHistory.ContainsKey(path))
+        // HasHistory only checks that the file's index exists: no lock, so it is safe on the UI thread.
+        if (path is null || _hasHistory.ContainsKey(path) || _store.HasHistory(path))
         {
-            // Later saves already have their previous version in the history.
+            // The previous version is already in the history.
             return VSConstants.S_OK;
         }
 
