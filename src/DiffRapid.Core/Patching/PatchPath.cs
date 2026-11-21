@@ -48,7 +48,7 @@ internal static class PatchPath
     /// <summary>
     /// Reads a quoted path starting at the opening quote of <paramref name="value"/>. Octal escapes are bytes of the
     /// UTF-8 name, as git writes them. Returns the path and the index after the closing quote, or null when the
-    /// quotes or an escape are invalid.
+    /// quotes or an escape are invalid, or the path holds a NUL character (no file system allows one in a name).
     /// </summary>
     internal static (string Path, int End)? Unquote(string value)
     {
@@ -66,7 +66,8 @@ internal static class PatchPath
             if (character == '"')
             {
                 Flush();
-                return (text.ToString(), index + 1);
+                var path = text.ToString();
+                return path.IndexOf('\0') >= 0 ? null : (path, index + 1);
             }
 
             if (character != '\\')
