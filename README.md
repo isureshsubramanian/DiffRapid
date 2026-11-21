@@ -175,7 +175,7 @@ diffrapid history list Program.cs
 | Command | Purpose |
 |---|---|
 | `diff`, `patch`, `apply` | Text compare, unified diffs, applying patches (reverse, fuzz, dry run) |
-| `merge`, `resolve`, `split-conflicts` | Three-way merge and conflict handling |
+| `merge`, `resolve`, `split-conflicts` | Three-way merge and conflict handling (`merge` compares lines exactly: it takes `--algorithm` and refuses the ignore and filter options) |
 | `dir`, `dir3`, `sync` | Two- and three-way folder compare, synchronization |
 | `hex`, `image`, `table`, `struct`, `semantic`, `api` | Specialized comparisons |
 | `log`, `diff --rev` | Compare with Git or TFVC revisions |

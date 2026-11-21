@@ -56,7 +56,7 @@ internal static partial class Program
           diffrapid history prune [--store <dir>]
                          Snapshot 1 is newest; diff without <m> compares against the current file.
                          Default store: %LOCALAPPDATA%\DiffRapid\History. Default label: Saved.
-          diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
+          diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [--algorithm <name>]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
                          Exit code 1 when conflicts were split, 0 when there are none.
@@ -108,6 +108,8 @@ internal static partial class Program
         merge options:
           -o, --output <file>                   write the merged result to a file (default: stdout)
           --diff3                               include base text in conflict markers
+          --algorithm <name>                    as for compare; lines are compared exactly, so other
+                                                compare options are refused
           /dl <text>, /dm <text>, /dr <text>     local, base, and remote conflict labels
 
         Options:

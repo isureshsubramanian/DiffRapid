@@ -310,6 +310,20 @@ public sealed class CliTests
         Assert.Single(captured.ToString().Split('\n'), line => line.TrimStart().StartsWith("diffrapid git-config", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("--ignore-case")]
+    [InlineData("--ignore-blank-lines")]
+    [InlineData("--ignore-whitespace=all")]
+    [InlineData("--line-filter=^//")]
+    [InlineData("--substitute=a=b")]
+    public void MergeRefusesCompareOptionsItIgnores(string option)
+    {
+        var name = option.Split('=')[0];
+        var error = Assert.Throws<Program.UsageException>(() => Program.ParsedArgs.Parse(["merge", "base", "left", "right", option], 1));
+        Assert.Equal($"merge compares lines exactly; {name} has no effect.", error.Message);
+        Assert.Equal("patience", Program.ParsedArgs.Parse(["merge", "base", "left", "right", "--algorithm", "patience"], 1).Value("algorithm"));
+    }
+
     [Fact]
     public void DoubleDashEndsOptions()
     {
