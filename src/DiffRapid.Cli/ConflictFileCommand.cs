@@ -42,16 +42,7 @@ internal static partial class Program
         void WriteVersion(string side, string text)
         {
             var output = Path.Combine(directory, Path.GetFileNameWithoutExtension(path) + "." + side + Path.GetExtension(path));
-            using (var stream = File.Create(output))
-            {
-                if (decoded.HasByteOrderMark)
-                {
-                    stream.Write(decoded.Encoding.GetPreamble());
-                }
-
-                stream.Write(decoded.Encoding.GetBytes(text));
-            }
-
+            WriteInOriginalEncoding(output, text, decoded);
             System.Console.Out.WriteLine(output);
         }
     }

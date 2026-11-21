@@ -103,28 +103,13 @@ internal static partial class Program
     private static void WriteTableReport(TableDiffResult result, string format, string? output, List<string> positionals)
     {
         var options = new TableReportOptions { LeftLabel = positionals[0], RightLabel = positionals[1] };
-        using var buffer = new StringWriter();
-        switch (format.ToLowerInvariant())
+        Action<TextWriter> write = format.ToLowerInvariant() switch
         {
-            case "md":
-            case "markdown":
-                TableReportWriter.WriteMarkdown(result, options, buffer);
-                break;
-            case "html":
-            case "htm":
-                TableReportWriter.WriteHtml(result, options, buffer);
-                break;
-            default:
-                throw new UsageException($"Unknown report format '{format}'; use md or html.");
-        }
-
-        if (output is null)
-        {
-            Console.Out.Write(buffer.ToString());
-            return;
-        }
-
-        File.WriteAllText(output, buffer.ToString(), new UTF8Encoding(false));
+            "md" or "markdown" => writer => TableReportWriter.WriteMarkdown(result, options, writer),
+            "html" or "htm" => writer => TableReportWriter.WriteHtml(result, options, writer),
+            _ => throw new UsageException($"Unknown report format '{format}'; use md or html."),
+        };
+        WriteText(output, write);
     }
 
     private static void WriteTableSummary(TableDiffResult result, TextWriter writer)

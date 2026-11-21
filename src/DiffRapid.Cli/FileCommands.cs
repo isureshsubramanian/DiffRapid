@@ -43,15 +43,7 @@ internal static partial class Program
             args.Value("base-label") ?? Path.GetFileName(args.Positionals[0]),
             args.Value("right-label") ?? Path.GetFileName(args.Positionals[2]));
         var text = result.ToText(labels, includeBase: args.Has("diff3"));
-        var output = args.Value("output");
-        if (output is null)
-        {
-            Console.Out.Write(text);
-        }
-        else
-        {
-            File.WriteAllText(output, text, new UTF8Encoding(false));
-        }
+        WriteText(args.Value("output"), writer => writer.Write(text));
 
         if (result.HasConflicts)
         {

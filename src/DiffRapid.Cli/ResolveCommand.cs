@@ -24,7 +24,7 @@ internal static partial class Program
         var resolution = ConflictResolver.ResolveConflictText(decoded.Text);
         if (args.Value("output") is { } output)
         {
-            WriteResolved(Path.GetFullPath(output), resolution.Text, decoded);
+            WriteInOriginalEncoding(output, resolution.Text, decoded);
         }
         else
         {
@@ -50,17 +50,5 @@ internal static partial class Program
             SimpleResolutionKind.RightWhitespaceOnly => "right changed only whitespace",
             _ => "the sides changed different lines",
         };
-    }
-
-    // Writes in the encoding the conflict file was read with, keeping its byte order mark.
-    private static void WriteResolved(string path, string text, DecodedText decoded)
-    {
-        using var stream = File.Create(path);
-        if (decoded.HasByteOrderMark)
-        {
-            stream.Write(decoded.Encoding.GetPreamble());
-        }
-
-        stream.Write(decoded.Encoding.GetBytes(text));
     }
 }

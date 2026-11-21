@@ -140,6 +140,40 @@ public sealed class CliTests
     }
 
     [Fact]
+    public async Task OutputFilesAreReplacedOnlyWhenComplete()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var output = Path.Combine(directory, "out.txt");
+            File.WriteAllText(output, "previous");
+            Assert.Throws<IOException>(() => Program.WriteText(output, writer =>
+            {
+                writer.Write(new string('x', 100_000));
+                throw new IOException("disk full");
+            }));
+            Assert.Equal("previous", File.ReadAllText(output));
+            Assert.Equal([output], Directory.GetFiles(directory));
+
+            // A patch and a merge result written with -o replace the file whole.
+            var left = Path.Combine(directory, "left.txt");
+            var right = Path.Combine(directory, "right.txt");
+            File.WriteAllText(left, "a\n");
+            File.WriteAllText(right, "b\n");
+            Assert.Equal(1, await Program.Main(["patch", left, right, "-o", output]));
+            Assert.Equal("--- a/left.txt\n+++ b/left.txt\n@@ -1 +1 @@\n-a\n+b\n", File.ReadAllText(output));
+            Assert.Equal(0, await Program.Main(["merge", left, left, right, "-o", output]));
+            Assert.Equal("b\n", File.ReadAllText(output));
+            Assert.Equal(3, Directory.GetFiles(directory).Length);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void DoubleDashEndsOptions()
     {
         var args = Program.ParsedArgs.Parse(["diff", "--quiet", "--", "--left", "-o"], 1);

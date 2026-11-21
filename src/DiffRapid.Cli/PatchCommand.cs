@@ -21,8 +21,9 @@ internal static partial class Program
 
         var left = args.Positionals[0];
         var right = args.Positionals[1];
-        using var buffer = new StringWriter();
         var context = args.IntValue("context", 3);
+        bool changed;
+        Action<TextWriter> write;
         if (Directory.Exists(left) && Directory.Exists(right))
         {
             var result = FolderComparer.Compare(left, right, new FolderCompareOptions { TextOptions = args.ToCompareOptions() });
@@ -31,25 +32,25 @@ internal static partial class Program
                 throw new IOException(result.Root.Error);
             }
 
-            FolderPatchWriter.Write(buffer, result, args.ToCompareOptions(), context);
+            // The patch writer emits an entry for exactly these items.
+            changed = result.Items.Any(item => item.Kind == FolderItemKind.File
+                && item.Status is FolderCompareStatus.Different or FolderCompareStatus.LeftOnly or FolderCompareStatus.RightOnly);
+            write = writer => FolderPatchWriter.Write(writer, result, args.ToCompareOptions(), context);
         }
         else
         {
-            UnifiedDiffWriter.Write(buffer, TextComparer.Compare(Load(left), Load(right), args.ToCompareOptions()),
-                "a/" + Path.GetFileName(left), "b/" + Path.GetFileName(left), context);
+            var result = TextComparer.Compare(Load(left), Load(right), args.ToCompareOptions());
+            changed = result.ImportantHunks.Any();
+
+            // Both labels name the left file on purpose: apply then patches that file in place. Different names
+            // would make the patch rename the left file to the right file's name.
+            write = writer => UnifiedDiffWriter.Write(writer, result, "a/" + Path.GetFileName(left), "b/" + Path.GetFileName(left), context);
         }
 
-        if (args.Value("output") is { } output)
-        {
-            File.WriteAllText(output, buffer.ToString(), new UTF8Encoding(false));
-        }
-        else
-        {
-            Console.Out.Write(buffer.ToString());
-        }
+        WriteText(args.Value("output"), write);
 
         // Like diff: 0 when the inputs match (empty patch), 1 when the patch holds changes.
-        return buffer.GetStringBuilder().Length == 0 ? ExitSame : ExitDifferent;
+        return changed ? ExitDifferent : ExitSame;
     }
 
     private static int RunApply(ParsedArgs args)
