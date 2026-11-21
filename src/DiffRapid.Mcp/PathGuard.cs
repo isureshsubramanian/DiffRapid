@@ -159,12 +159,25 @@ public sealed class PathGuard
 
     private bool Inside(string full) => _roots.Any(root => root.Given.Contains(full) || root.Real.Contains(full));
 
-    /// <summary>The root spelling that <paramref name="full"/> lies in, and the components below it.</summary>
+    /// <summary>
+    /// The real path of the root that <paramref name="full"/> lies in, and the components below it. The walk starts
+    /// from the real path, whose links are resolved, so a later ".." steps up where the kernel does even when the
+    /// root was given through a link.
+    /// </summary>
     private (string Base, string[] Below) Match(string full)
     {
-        var root = _roots.SelectMany(candidate => new[] { candidate.Given, candidate.Real }).FirstOrDefault(spelling => spelling.Contains(full))
-            ?? throw new UnauthorizedAccessException(OutsideMessage);
-        return (root.Path, full[root.Path.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries));
+        foreach (var root in _roots)
+        {
+            foreach (var spelling in new[] { root.Given, root.Real })
+            {
+                if (spelling.Contains(full))
+                {
+                    return (root.Real.Path, full[spelling.Path.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries));
+                }
+            }
+        }
+
+        throw new UnauthorizedAccessException(OutsideMessage);
     }
 
     private static Root CreateRoot(string path)

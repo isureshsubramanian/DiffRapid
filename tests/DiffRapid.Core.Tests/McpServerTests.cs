@@ -566,6 +566,29 @@ public sealed class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void DotDotStepsUpFromTheRealFolderOfALinkedRoot()
+    {
+        var work = DirectoryPath("work");
+        var sub = DirectoryPath("outside/sub");
+        File("outside/z.txt", "OUTSIDE\n");
+        var linkRoot = Path.Combine(work, "linkroot");
+        Directory.CreateSymbolicLink(linkRoot, sub);
+        System.IO.File.CreateSymbolicLink(Path.Combine(sub, "y"), Path.Combine("..", "z.txt"));
+        Directory.CreateSymbolicLink(Path.Combine(work, "p"), linkRoot);
+        System.IO.File.CreateSymbolicLink(Path.Combine(work, "x"), Path.Combine("p", "..", "z.txt"));
+
+        // The root given through a link is listed first, so its own spelling is matched before "work".
+        foreach (var guard in new[] { new PathGuard([linkRoot, work]), new PathGuard([work, linkRoot]) })
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(linkRoot, "y")));
+                Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(work, "x")));
+            }
+        }
+    }
+
+    [Fact]
     public void DotDotInLinkTextIsAppliedAfterTheLinksBeforeIt()
     {
         var app = DirectoryPath("app");
