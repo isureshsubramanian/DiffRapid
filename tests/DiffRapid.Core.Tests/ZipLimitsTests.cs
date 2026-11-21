@@ -53,6 +53,92 @@ public sealed class ZipLimitsTests
         Assert.Contains("entries", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AnOversizedNuspecIsRejectedWithoutInflatingItAll()
+    {
+        // Spaces compress about a thousand to one, so this 2 MB nuspec is a few kilobytes in the archive.
+        using var stream = Nupkg("<package><metadata><id>Example</id><version>1.0.0</version><description>"
+            + new string(' ', 2 * (int)NuGetPackageReader.MaxNuspecBytes) + "</description></metadata></package>");
+
+        var error = Assert.Throws<InvalidDataException>(() => NuGetPackageReader.Read(stream, TestContext.Current.CancellationToken));
+        Assert.Contains(".nuspec is larger", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DeeplyNestedNuspecIsRejectedWithoutOverflowing()
+    {
+        // XElement.Value recursed once per level and overflowed the stack on this.
+        var depth = 100_000;
+        using var stream = Nupkg("<package><metadata><id>"
+            + string.Concat(Enumerable.Repeat("<a>", depth)) + "Example" + string.Concat(Enumerable.Repeat("</a>", depth))
+            + "</id><version>1.0.0</version></metadata></package>");
+
+        var error = Assert.Throws<InvalidDataException>(() => NuGetPackageReader.Read(stream, TestContext.Current.CancellationToken));
+        Assert.Contains("levels deep", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ArchivesPastTheLengthCapAreNotOpened()
+    {
+        using var seekable = new LongStream();
+        Assert.Throws<InvalidDataException>(() => NuGetPackageReader.Read(seekable, TestContext.Current.CancellationToken));
+        var unpacker = PluginRegistry.Default.FindUnpacker("ZipEntries")!;
+        var context = new PluginContext("long.zip", [], TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Throws<PluginException>(() => unpacker.Unpack(seekable, context));
+
+        // A stream that cannot seek is copied only up to the cap, however long it runs.
+        Assert.Throws<PluginException>(() => unpacker.Unpack(new EndlessStream(), context));
+    }
+
+    private static MemoryStream Nupkg(string nuspec)
+    {
+        var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using var writer = new StreamWriter(archive.CreateEntry("Example.nuspec", CompressionLevel.SmallestSize).Open());
+            writer.Write(nuspec);
+        }
+
+        stream.Position = 0;
+        return stream;
+    }
+
+    /// <summary>An empty stream that reports a length past the archive cap.</summary>
+    private sealed class LongStream : MemoryStream
+    {
+        public override long Length => ZipReadBudget.MaxArchiveBytes + 1;
+    }
+
+    /// <summary>A stream of zeros that never ends and cannot seek.</summary>
+    private sealed class EndlessStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            Array.Clear(buffer, offset, count);
+            return count;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private static MemoryStream Zip(params (string Name, int Length)[] entries)
     {
         var stream = new MemoryStream();

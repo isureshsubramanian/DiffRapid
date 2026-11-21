@@ -119,8 +119,7 @@ internal static class MetadataNames
             return null;
         }
 
-        var value = attribute.Value.DecodeValue(TypeShapeProvider.Instance);
-        return value.FixedArguments.Length > 0 ? value.FixedArguments[0].Value as string : null;
+        return SingleArgument(reader, attribute.Value) as string;
     }
 
     /// <summary>Reads the flags of a NullableAttribute (one byte or a byte array), or null when absent.</summary>
@@ -132,16 +131,10 @@ internal static class MetadataNames
             return null;
         }
 
-        var value = attribute.Value.DecodeValue(TypeShapeProvider.Instance);
-        if (value.FixedArguments.Length != 1)
-        {
-            return null;
-        }
-
-        return value.FixedArguments[0].Value switch
+        return SingleArgument(reader, attribute.Value) switch
         {
             byte single => new[] { single },
-            ImmutableArray<CustomAttributeTypedArgument<TypeShape>> many => many.Select(item => item.Value is byte flag ? flag : (byte)0).ToArray(),
+            byte[] many => many,
             _ => null,
         };
     }
@@ -155,8 +148,59 @@ internal static class MetadataNames
             return null;
         }
 
-        var value = attribute.Value.DecodeValue(TypeShapeProvider.Instance);
-        return value.FixedArguments.Length == 1 && value.FixedArguments[0].Value is byte flag ? flag : null;
+        return SingleArgument(reader, attribute.Value) is byte flag ? flag : null;
+    }
+
+    /// <summary>
+    /// Reads the argument of an attribute whose constructor takes one byte, byte[] or string, or null for any other constructor.
+    /// System.Reflection.Metadata's attribute decoder is not used: it recurses once per nested object[] in the value blob,
+    /// so a crafted attribute can overflow the stack. Named arguments are not needed here and are not read.
+    /// </summary>
+    /// <exception cref="BadImageFormatException">The value blob is shorter than its constructor needs.</exception>
+    private static object? SingleArgument(MetadataReader reader, CustomAttribute attribute)
+    {
+        var constructor = attribute.Constructor.Kind switch
+        {
+            HandleKind.MethodDefinition => reader.GetMethodDefinition((MethodDefinitionHandle)attribute.Constructor).Signature,
+            HandleKind.MemberReference => reader.GetMemberReference((MemberReferenceHandle)attribute.Constructor).Signature,
+            _ => default,
+        };
+        if (constructor.IsNil)
+        {
+            return null;
+        }
+
+        // Signature: header, one parameter, void return, then the parameter type (ECMA-335 II.23.2.1).
+        var signature = reader.GetBlobReader(constructor);
+        if (signature.Length < 4 || signature.ReadSignatureHeader().Kind != SignatureKind.Method || signature.ReadCompressedInteger() != 1
+            || signature.ReadSignatureTypeCode() != SignatureTypeCode.Void)
+        {
+            return null;
+        }
+
+        var type = signature.ReadSignatureTypeCode();
+        var isByteArray = type == SignatureTypeCode.SZArray && signature.RemainingBytes > 0 && signature.ReadSignatureTypeCode() == SignatureTypeCode.Byte;
+
+        // Value: the 0x0001 prolog, then the fixed argument (ECMA-335 II.23.3).
+        var value = reader.GetBlobReader(attribute.Value);
+        if (value.ReadUInt16() != 1)
+        {
+            return null;
+        }
+
+        if (isByteArray)
+        {
+            // A count of -1 is a null array; any other count must fit in what is left of the blob.
+            var count = value.ReadInt32();
+            return count < 0 || count > value.RemainingBytes ? null : value.ReadBytes(count);
+        }
+
+        return type switch
+        {
+            SignatureTypeCode.Byte => value.ReadByte(),
+            SignatureTypeCode.String => value.ReadSerializedString(),
+            _ => null,
+        };
     }
 
     /// <summary>Writes a constant (a field value or parameter default) as a C# literal.</summary>

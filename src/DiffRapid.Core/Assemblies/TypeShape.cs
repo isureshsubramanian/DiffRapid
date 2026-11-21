@@ -124,8 +124,8 @@ internal sealed class GenericScope
     public GenericScope WithMethodParameters(IReadOnlyList<string> methodParameters) => new(TypeParameters, methodParameters);
 }
 
-/// <summary>Builds <see cref="TypeShape"/> trees from signatures and custom attribute blobs.</summary>
-internal sealed class TypeShapeProvider : ISignatureTypeProvider<TypeShape, GenericScope>, ICustomAttributeTypeProvider<TypeShape>
+/// <summary>Builds <see cref="TypeShape"/> trees from signatures.</summary>
+internal sealed class TypeShapeProvider : ISignatureTypeProvider<TypeShape, GenericScope>
 {
     private const byte ValueTypeKind = 0x11;
     private const byte ClassKind = 0x12;
@@ -164,8 +164,10 @@ internal sealed class TypeShapeProvider : ISignatureTypeProvider<TypeShape, Gene
     public TypeShape GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) =>
         TypeShape.Named(MetadataNames.FullName(reader, handle), rawTypeKind == ValueTypeKind);
 
+    // The decoder asks for this only for a modifier naming a type specification, which compilers do not emit.
+    // Decoding it here would recurse outside SignatureDepth's check (and a specification can name itself), so it stays opaque.
     public TypeShape GetTypeFromSpecification(MetadataReader reader, GenericScope genericContext, TypeSpecificationHandle handle, byte rawTypeKind) =>
-        reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
+        TypeShape.Named("?", false);
 
     public TypeShape GetSZArrayType(TypeShape elementType) => TypeShape.ArrayOf(elementType, 1);
 
@@ -194,15 +196,6 @@ internal sealed class TypeShapeProvider : ISignatureTypeProvider<TypeShape, Gene
         var types = signature.ParameterTypes.Append(signature.ReturnType).Select(TypeShapeWriter.WriteOblivious);
         return TypeShape.FunctionPointer("delegate*<" + string.Join(", ", types) + ">");
     }
-
-    public TypeShape GetSystemType() => TypeShape.Named("System.Type", false);
-
-    public bool IsSystemType(TypeShape type) => type.Kind == TypeShapeKind.Named && type.Name == "System.Type";
-
-    public TypeShape GetTypeFromSerializedName(string name) => TypeShape.Named(name, false);
-
-    // Only attributes with primitive, string and array arguments are decoded, so any enum is assumed to be int.
-    public PrimitiveTypeCode GetUnderlyingEnumType(TypeShape type) => PrimitiveTypeCode.Int32;
 }
 
 /// <summary>Reads nullable flags in the order the compiler stored them.</summary>

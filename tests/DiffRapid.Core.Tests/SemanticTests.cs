@@ -149,6 +149,21 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MovesOverThePairLimitPairEachRightWithItsIdenticalLeft()
+    {
+        // Two lefts share M(int)'s identity, so with no pairs allowed only identical bodies (found by lookup) pair.
+        var left = "class A { int a1; void M(int x) { One(); } }\nclass C { int c1; void M(int x) { Two(); } }\n";
+        var right = "class B { int b2; void M(int x) { Two(); } }\nclass D { int d2; void M(int x) { One(); } }\n";
+        var unscored = new MemberMatchOptions { MaxSimilarityPairs = 0 };
+
+        var moves = MemberMatcher.Compare(left, right, unscored).Flatten()
+            .Where(entry => entry.Status == MemberDiffStatus.Moved)
+            .Select(entry => entry.Left!.QualifiedName + " -> " + entry.Right!.QualifiedName)
+            .OrderBy(text => text, StringComparer.Ordinal);
+        Assert.Equal(["A.M(int) -> D.M(int)", "C.M(int) -> B.M(int)"], moves);
+    }
+
+    [Fact]
     public void DetectsMemberReorderedWithinType()
     {
         var area = "\n        public int Area(int scale)\n        {\n            var total = Width * Width;\n            return total * scale;\n        }\n";

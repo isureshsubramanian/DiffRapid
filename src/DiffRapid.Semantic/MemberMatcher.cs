@@ -310,15 +310,21 @@ public static class MemberMatcher
                 var rightCounts = rights
                     .GroupBy(member => member.Key, StringComparer.Ordinal)
                     .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+                Dictionary<(string Key, string Body), Queue<CSharpMember>>? identical = null;
                 foreach (var right in rights)
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
                     var group = byKey[right.Key];
                     var scoreAll = (long)group.Count() * rightCounts[right.Key] <= _options.MaxSimilarityPairs;
-                    var candidates = group.Where(left => !_leftDiffs.ContainsKey(left));
-                    if (!scoreAll)
+                    IEnumerable<CSharpMember> candidates;
+                    if (scoreAll)
                     {
-                        candidates = candidates.Where(left => Tokens(left).SequenceEqual(Tokens(right)));
+                        candidates = group.Where(left => !_leftDiffs.ContainsKey(left));
+                    }
+                    else
+                    {
+                        identical ??= IdenticalBodiesByKey(byKey, rightCounts);
+                        candidates = NextUnpaired(identical, (right.Key, BodyKey(right))) is { } left ? [left] : [];
                     }
 
                     var best = candidates
@@ -339,6 +345,53 @@ public static class MemberMatcher
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// The lefts of each identity over the pair limit, grouped by identical body and kept in identity order, so a
+        /// right finds its identical lefts by lookup rather than by comparing it with every left. Built once per pass.
+        /// </summary>
+        private Dictionary<(string Key, string Body), Queue<CSharpMember>> IdenticalBodiesByKey(
+            ILookup<string, CSharpMember> byKey, Dictionary<string, int> rightCounts)
+        {
+            var identical = new Dictionary<(string Key, string Body), Queue<CSharpMember>>();
+            foreach (var group in byKey)
+            {
+                if (!rightCounts.TryGetValue(group.Key, out var rightCount) || (long)group.Count() * rightCount <= _options.MaxSimilarityPairs)
+                {
+                    continue;
+                }
+
+                foreach (var left in group)
+                {
+                    var body = (group.Key, BodyKey(left));
+                    if (!identical.TryGetValue(body, out var queue))
+                    {
+                        queue = new Queue<CSharpMember>();
+                        identical[body] = queue;
+                    }
+
+                    queue.Enqueue(left);
+                }
+            }
+
+            return identical;
+        }
+
+        // The first left with this body not yet paired; paired lefts stay paired, so they are dropped for good.
+        private CSharpMember? NextUnpaired(Dictionary<(string Key, string Body), Queue<CSharpMember>> identical, (string Key, string Body) body)
+        {
+            if (!identical.TryGetValue(body, out var queue))
+            {
+                return null;
+            }
+
+            while (queue.Count > 0 && _leftDiffs.ContainsKey(queue.Peek()))
+            {
+                queue.Dequeue();
+            }
+
+            return queue.Count > 0 ? queue.Peek() : null;
         }
 
         private double CachedSimilarity(Dictionary<(CSharpMember Left, CSharpMember Right), double> scores, CSharpMember left, CSharpMember right)

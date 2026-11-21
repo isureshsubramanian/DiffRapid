@@ -129,6 +129,73 @@ public sealed class DocumentLimitsTests
     }
 
     [Fact]
+    public void ThousandsOfNestedContentControlsAreRejectedBeforeTheSdkLoadsThem()
+    {
+        // 1,500 levels of <w:sdt><w:sdtContent> overflowed the stack inside the SDK's recursive DOM load.
+        using var source = Docx(body => body.Append(new W.Paragraph(new W.Run(new W.Text("text")))));
+        using var stream = Replace(
+            source,
+            name => name == "word/document.xml",
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>"
+                + Nest("<w:sdt><w:sdtContent>", "<w:p><w:r><w:t>deep</w:t></w:r></w:p>", "</w:sdtContent></w:sdt>", 1500)
+                + "</w:body></w:document>");
+
+        var error = Assert.Throws<InvalidDataException>(() => DocxText.Extract(stream));
+        Assert.Contains("nested", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ThousandsOfNestedGroupShapesAreRejectedBeforeTheSdkLoadsThem()
+    {
+        var source = new MemoryStream();
+        using (var document = PresentationDocument.Create(source, PresentationDocumentType.Presentation))
+        {
+            var presentationPart = document.AddPresentationPart();
+            var slide = presentationPart.AddNewPart<SlidePart>();
+            slide.Slide = new P.Slide(new P.CommonSlideData(new P.ShapeTree()));
+            presentationPart.Presentation = new P.Presentation(new P.SlideIdList(
+                new P.SlideId { Id = 256, RelationshipId = presentationPart.GetIdOfPart(slide) }));
+        }
+
+        source.Position = 0;
+        using var stream = Replace(
+            source,
+            name => name.StartsWith("ppt/slides/", StringComparison.Ordinal) && name.EndsWith(".xml", StringComparison.Ordinal),
+            "<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree>"
+                + Nest("<p:grpSp>", string.Empty, "</p:grpSp>", 3000)
+                + "</p:spTree></p:cSld></p:sld>");
+
+        Assert.Throws<InvalidDataException>(() => PptxText.Extract(stream));
+    }
+
+    [Fact]
+    public void DeepNestingInAPartReadLaterIsRejected()
+    {
+        // The worksheet is read through OpenXmlReader long after the package opens; it is checked up front too.
+        using var source = Xlsx(new S.Row(new S.Cell { CellReference = "A1", CellValue = new S.CellValue("1") }) { RowIndex = 1u });
+        using var stream = Replace(
+            source,
+            name => name.StartsWith("xl/worksheets/", StringComparison.Ordinal),
+            "<x:worksheet xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><x:sheetData><x:row r=\"1\">"
+                + Nest("<x:c r=\"A1\"><x:is>", string.Empty, "</x:is></x:c>", 1500)
+                + "</x:row></x:sheetData></x:worksheet>");
+
+        Assert.Throws<InvalidDataException>(() => XlsxText.ReadSheets(stream));
+    }
+
+    [Fact]
+    public void ADoctypeInAnyPartIsRejected()
+    {
+        using var source = Docx(body => body.Append(new W.Paragraph(new W.Run(new W.Text("text")))));
+        using var stream = Replace(
+            source,
+            name => name == "word/document.xml",
+            "<!DOCTYPE d [<!ENTITY e \"x\">]><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body/></w:document>");
+
+        Assert.Throws<InvalidDataException>(() => DocxText.Extract(stream));
+    }
+
+    [Fact]
     public void PartsAreOpenedWithACharacterLimit()
     {
         using var stream = Docx(body => body.Append(new W.Paragraph(new W.Run(new W.Text(new string('x', 500))))));
@@ -170,6 +237,41 @@ public sealed class DocumentLimitsTests
             var some = 1L;
             ExtractLimits.AddText(ref some, long.MaxValue);
         });
+    }
+
+    private static string Nest(string open, string inner, string close, int levels)
+    {
+        var text = new System.Text.StringBuilder();
+        for (var level = 0; level < levels; level++)
+        {
+            text.Append(open);
+        }
+
+        text.Append(inner);
+        for (var level = 0; level < levels; level++)
+        {
+            text.Append(close);
+        }
+
+        return text.ToString();
+    }
+
+    // Copies a package and rewrites the first entry whose name matches with raw XML, so the SDK never builds (or writes) its DOM.
+    private static MemoryStream Replace(Stream source, Func<string, bool> matches, string xml)
+    {
+        var stream = new MemoryStream();
+        source.CopyTo(stream);
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Update, leaveOpen: true))
+        {
+            var entry = archive.Entries.First(candidate => matches(candidate.FullName));
+            var name = entry.FullName;
+            entry.Delete();
+            using var writer = new StreamWriter(archive.CreateEntry(name).Open());
+            writer.Write(xml);
+        }
+
+        stream.Position = 0;
+        return stream;
     }
 
     private static MemoryStream Docx(Action<W.Body> fillBody)
