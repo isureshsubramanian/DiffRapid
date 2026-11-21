@@ -183,6 +183,65 @@ public sealed class FolderPatchApplierTests : IDisposable
     }
 
     [Fact]
+    public void CaseOnlyRenameKeepsOneFileWithTheNewNameAndContent()
+    {
+        File.WriteAllText(At("Foo.txt"), "one\ntwo\nthree\n");
+        var patch = Parse("diff --git a/Foo.txt b/foo.txt\nsimilarity index 80%\nrename from Foo.txt\nrename to foo.txt\n" +
+            "--- a/Foo.txt\n+++ b/foo.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        var file = Assert.Single(plan.Files);
+        Assert.Equal(FilePatchAction.Rename, file.Action);
+        Assert.Equal(FilePatchStatus.Ready, file.Status);
+
+        Assert.True(Assert.Single(FolderPatchApplier.Apply(plan)).Written);
+        Assert.Equal([At("foo.txt")], Directory.GetFiles(_root));
+        Assert.Equal("one\nTWO\nthree\n", File.ReadAllText(At("foo.txt")));
+    }
+
+    [Fact]
+    public void UnreadableFolderMakesOnlyItsFileUnsafe()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Unix permission bits are needed to make a folder unreadable.");
+            return; // Tells the platform analyzer that the rest runs on Unix only.
+        }
+
+        File.WriteAllText(At("a.txt"), "one\ntwo\nthree\n");
+        Directory.CreateDirectory(At("locked"));
+        File.SetUnixFileMode(At("locked"), UnixFileMode.None);
+        try
+        {
+            if (CanList(At("locked")))
+            {
+                Assert.Skip("The folder stays readable (running as root).");
+            }
+
+            var patch = Parse(ChangeA + ChangeA.Replace("a/a.txt", "a/locked/a.txt").Replace("b/a.txt", "b/locked/a.txt"));
+            var plan = FolderPatchApplier.Plan(patch, _root);
+            Assert.Equal(FilePatchStatus.Ready, plan.Files[0].Status);
+            Assert.Equal(FilePatchStatus.Unsafe, plan.Files[1].Status);
+        }
+        finally
+        {
+            File.SetUnixFileMode(At("locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static bool CanList(string folder)
+    {
+        try
+        {
+            _ = Directory.GetFiles(folder);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    [Fact]
     public void ReverseUndoesTheChange()
     {
         File.WriteAllText(At("a.txt"), "one\nTWO\nthree\n");

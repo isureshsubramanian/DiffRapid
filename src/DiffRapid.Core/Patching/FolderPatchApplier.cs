@@ -101,8 +101,6 @@ public static class FolderPatchApplier
 {
     private static readonly IReadOnlyList<HunkOutcome> NoOutcomes = Array.Empty<HunkOutcome>();
 
-    private static StringComparison PathComparison => PathContainment.Comparison;
-
     /// <summary>
     /// Plans every file of <paramref name="patch"/> relative to <paramref name="root"/> without writing anything.
     /// </summary>
@@ -265,7 +263,8 @@ public static class FolderPatchApplier
 
         var action = source is null ? FilePatchAction.Add
             : target is null ? FilePatchAction.Delete
-            : string.Equals(source, target, PathComparison) ? FilePatchAction.Modify
+            // A target differing only in case is a rename on every platform (git records it as one), not a modify.
+            : string.Equals(source, target, StringComparison.Ordinal) ? FilePatchAction.Modify
             : FilePatchAction.Rename;
         return PlanContent(patch, display, source, target, action, options, cancellationToken) with { Root = root };
     }
@@ -345,8 +344,8 @@ public static class FolderPatchApplier
 
     /// <summary>
     /// Whether a rename would overwrite another file (git apply refuses with "already exists"). A target that differs
-    /// from the source only in case is the source itself on a case-insensitive file system, so then only an entry
-    /// spelled exactly like the target counts.
+    /// from the source only in case is the source itself on a case-insensitive file system, so then it counts only
+    /// when entries spelled exactly like both the source and the target exist (a case-sensitive file system).
     /// </summary>
     private static bool TargetTaken(string source, string target)
     {
@@ -355,13 +354,21 @@ public static class FolderPatchApplier
             return false;
         }
 
-        if (!string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
+        return !IsCaseOnly(source, target) || (ExactEntryExists(target) && ExactEntryExists(source));
+    }
+
+    private static bool IsCaseOnly(string source, string target) =>
+        string.Equals(source, target, StringComparison.OrdinalIgnoreCase) && !string.Equals(source, target, StringComparison.Ordinal);
+
+    private static bool ExactEntryExists(string path)
+    {
+        if (!File.Exists(path) && !Directory.Exists(path))
         {
-            return true;
+            return false;
         }
 
-        var name = Path.GetFileName(target);
-        return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(target)!)
+        var name = Path.GetFileName(path);
+        return Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)!)
             .Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal));
     }
 
@@ -383,11 +390,11 @@ public static class FolderPatchApplier
     private static FilePatchPlan Rejected(FilePatch patch, string display, FilePatchStatus status, string message) =>
         new(patch, display, null, null, FilePatchAction.Modify, status, string.Empty, string.Empty, NoOutcomes, message);
 
-    /// <summary>Rejects absolute paths, parent traversal, drive-qualified components, and links on the way.</summary>
+    /// <summary>Rejects absolute paths, parent traversal, drive-qualified components, NUL characters, and links on the way.</summary>
     private static string Resolve(string root, string path)
     {
         var components = path.Split('/', '\\');
-        if (Path.IsPathRooted(path) || components.Any(c => c == ".." || c.IndexOf(':') >= 0))
+        if (path.IndexOf('\0') >= 0 || Path.IsPathRooted(path) || components.Any(c => c == ".." || c.IndexOf(':') >= 0))
         {
             throw new UnsafePathException("Unsafe patch path: " + path);
         }
@@ -410,8 +417,16 @@ public static class FolderPatchApplier
             return "The patch path leaves the folder: " + shown;
         }
 
-        // Existing links can redirect an otherwise safe path outside the root.
-        return PathContainment.PassesThroughLink(root, fullPath) ? "The patch path goes through a link: " + shown : null;
+        // Existing links can redirect an otherwise safe path outside the root. A folder that cannot be read cannot be
+        // checked, so only this file is refused rather than the whole patch.
+        try
+        {
+            return PathContainment.PassesThroughLink(root, fullPath) ? "The patch path goes through a link: " + shown : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "The patch path cannot be checked for links: " + shown;
+        }
     }
 
     /// <summary>Returns why the disk no longer matches the preview, or null when it still does.</summary>
@@ -446,14 +461,41 @@ public static class FolderPatchApplier
 
         var preamble = file.HasByteOrderMark ? file.Encoding.GetPreamble() : Array.Empty<byte>();
         var content = file.Encoding.GetBytes(file.PatchedText);
-        AtomicFile.Write(file.TargetPath, stream =>
+        var caseOnly = file.Action == FilePatchAction.Rename && IsCaseOnly(file.SourcePath!, file.TargetPath);
+
+        // On a case-insensitive file system a case-only target is the source itself: writing it and then deleting the
+        // source would delete the result. So the content goes over the source, which is then renamed.
+        AtomicFile.Write(caseOnly ? file.SourcePath! : file.TargetPath, stream =>
         {
             stream.Write(preamble, 0, preamble.Length);
             stream.Write(content, 0, content.Length);
         });
-        if (file.Action == FilePatchAction.Rename)
+        if (caseOnly)
+        {
+            RenameCase(file.SourcePath!, file.TargetPath);
+        }
+        else if (file.Action == FilePatchAction.Rename)
         {
             File.Delete(file.SourcePath!);
+        }
+    }
+
+    /// <summary>
+    /// Renames a file to a name that differs only in case. The move goes through a temporary name, since a direct
+    /// move between two spellings of one file may change nothing; when the second step fails the first is undone.
+    /// </summary>
+    private static void RenameCase(string source, string target)
+    {
+        var temporary = Path.Combine(Path.GetDirectoryName(source)!, ".~dr" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp");
+        File.Move(source, temporary);
+        try
+        {
+            File.Move(temporary, target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            File.Move(temporary, source);
+            throw;
         }
     }
 

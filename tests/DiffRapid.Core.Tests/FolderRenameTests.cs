@@ -153,8 +153,25 @@ public sealed class FolderRenameTests : IDisposable
         var moved = Item(result, "old/target.cs");
         Assert.Equal(FolderCompareStatus.Moved, moved.Status);
         Assert.Equal("new/target.cs", moved.CounterpartPath);
-        Assert.Equal(0.6, moved.Similarity!.Value, 3);
+        Assert.Equal(5 / 7.0, moved.Similarity!.Value, 3);
         Assert.All(Enumerable.Range(0, 150), i => Assert.Equal(FolderCompareStatus.RightOnly, Item(result, $"other/f{i}.cs").Status));
+    }
+
+    [Fact]
+    public void Lines_shared_by_many_files_still_count_toward_a_candidate_pairs_similarity()
+    {
+        var header = string.Concat(Enumerable.Range(0, 8).Select(n => $"// licence header line {n}\n"));
+        Write(true, "old/target.cs", header + Lines(1, 2));
+        Write(false, "new/renamed.cs", header + Lines(1, 3));
+        for (var i = 0; i < 120; i++)
+        {
+            Write(false, $"other/f{i}.cs", header + $"unique {i}\n");
+        }
+
+        var moved = Item(Compare(similarity: 0.6), "old/target.cs");
+        Assert.Equal(FolderCompareStatus.Moved, moved.Status);
+        Assert.Equal("new/renamed.cs", moved.CounterpartPath);
+        Assert.Equal(9 / 11.0, moved.Similarity!.Value, 3);
     }
 
     [Fact]

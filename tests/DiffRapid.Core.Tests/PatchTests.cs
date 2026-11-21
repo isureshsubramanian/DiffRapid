@@ -152,6 +152,7 @@ public sealed class PatchTests
     [InlineData("--- a/x\n+++ b/x\n@@ broken\n", "Patch line 3: invalid hunk header")]
     [InlineData("--- a/x\n@@ -1 +1 @@\n", "Patch line 2: expected +++ file header")]
     [InlineData("--- a/x\n", "Patch line 2: expected +++ file header")]
+    [InlineData("--- \"a/x\\000y\"\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n", "Patch line 1: invalid quoted patch path")]
     public void MalformedInputNamesLineAndReason(string text, string message)
     {
         Assert.Equal(message, Assert.Throws<FormatException>(() => Patch.Parse(text)).Message);

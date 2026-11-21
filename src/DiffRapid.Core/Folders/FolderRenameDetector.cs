@@ -194,19 +194,12 @@ internal static class FolderRenameDetector
             }
         }
 
-        // Too-common lines leave every set, so the similarity is measured over the lines that tell files apart.
+        // Too-common lines (a shared header) leave the index, so they alone never make two files candidates and the
+        // lookup stays fast. The similarity of a candidate pair still counts them, measured over the full line sets.
         var common = new HashSet<ulong>(index.Where(entry => entry.Value.Count > MaxFilesPerLine).Select(entry => entry.Key));
-        if (common.Count > 0)
+        foreach (var line in common)
         {
-            foreach (var set in leftLines.Concat(rightLines))
-            {
-                set.ExceptWith(common);
-            }
-
-            foreach (var line in common)
-            {
-                index.Remove(line);
-            }
+            index.Remove(line);
         }
 
         var scored = new List<Pair>();
@@ -228,9 +221,11 @@ internal static class FolderRenameDetector
                 }
             }
 
+            var leftCommon = common.Count == 0 ? null : leftLines[i].Where(common.Contains).ToList();
             foreach (var match in shared)
             {
-                var similarity = match.Value / (double)(leftLines[i].Count + rightLines[match.Key].Count - match.Value);
+                var both = match.Value + (leftCommon?.Count(rightLines[match.Key].Contains) ?? 0);
+                var similarity = both / (double)(leftLines[i].Count + rightLines[match.Key].Count - both);
                 if (similarity >= threshold)
                 {
                     scored.Add(new Pair(lefts[i], rights[match.Key], similarity));
