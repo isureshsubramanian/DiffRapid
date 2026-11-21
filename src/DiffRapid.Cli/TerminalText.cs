@@ -14,11 +14,14 @@ namespace DiffRapid.Cli;
 /// </remarks>
 internal static class TerminalText
 {
-    /// <summary>Escapes control characters; with <paramref name="keepLineFeeds"/>, '\n' stays a line break.</summary>
+    /// <summary>
+    /// Escapes control characters; with <paramref name="keepLineFeeds"/>, '\n' and a '\r' directly before it (a CRLF
+    /// line break) stay as they are.
+    /// </summary>
     public static string Escape(string text, bool keepLineFeeds = false)
     {
         var index = 0;
-        while (index < text.Length && !NeedsEscape(text[index], keepLineFeeds))
+        while (index < text.Length && !NeedsEscape(text, index, keepLineFeeds))
         {
             index++;
         }
@@ -32,7 +35,7 @@ internal static class TerminalText
         for (; index < text.Length; index++)
         {
             var character = text[index];
-            if (NeedsEscape(character, keepLineFeeds))
+            if (NeedsEscape(text, index, keepLineFeeds))
             {
                 escaped.Append("\\x").Append(((int)character).ToString("X2", CultureInfo.InvariantCulture));
             }
@@ -45,7 +48,11 @@ internal static class TerminalText
         return escaped.ToString();
     }
 
-    private static bool NeedsEscape(char character, bool keepLineFeeds) =>
-        character != '\t' && !(keepLineFeeds && character == '\n')
-        && (character < 0x20 || (character >= 0x7F && character <= 0x9F));
+    private static bool NeedsEscape(string text, int index, bool keepLineFeeds)
+    {
+        var character = text[index];
+        var lineBreak = character == '\n' || (character == '\r' && index + 1 < text.Length && text[index + 1] == '\n');
+        return character != '\t' && !(keepLineFeeds && lineBreak)
+            && (character < 0x20 || (character >= 0x7F && character <= 0x9F));
+    }
 }

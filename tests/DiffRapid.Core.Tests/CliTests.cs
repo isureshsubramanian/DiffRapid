@@ -273,6 +273,7 @@ public sealed class CliTests
     [InlineData("\u001b]0;title\u0007\u001b[31mred", false, "\\x1B]0;title\\x07\\x1B[31mred")]
     [InlineData("a\r\nb\u009bc\u007f", false, "a\\x0D\\x0Ab\\x9Bc\\x7F")]
     [InlineData("a\nb\rc", true, "a\nb\\x0Dc")]
+    [InlineData("a\r\nb\rc\r", true, "a\r\nb\\x0Dc\\x0D")]
     [InlineData("café 日本", false, "café 日本")]
     public void TerminalTextEscapesControlCharacters(string text, bool keepLineFeeds, string expected)
     {
