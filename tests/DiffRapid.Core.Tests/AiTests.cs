@@ -255,13 +255,13 @@ public sealed class AiTests
     [Fact]
     public async Task StreamingTimeoutLimitsSilenceNotTheWholeAnswer()
     {
-        // Twelve events 50 ms apart take longer than the 400 ms timeout, but no gap between them comes close,
-        // even when the full suite loads the machine.
+        // Thirteen events 150 ms apart (1.95 s) outlast the 1.5 s timeout, while each gap stays a tenth of it,
+        // which leaves room for thread-pool delays when the full suite loads the machine.
         var chunks = Enumerable.Range(0, 12)
             .Select(i => $"data: {{\"choices\":[{{\"delta\":{{\"reasoning\":\"step {i}\"}}}}]}}\n\n")
             .Append("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
-        using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(50));
-        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(400) }, new FakeHandler((_, _) =>
+        using var stream = new DripStream(chunks, TimeSpan.FromMilliseconds(150));
+        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(1500) }, new FakeHandler((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) })));
         Assert.Equal("ok", await client.StreamAsync(Prompt, _ => { }));
     }
@@ -514,9 +514,9 @@ public sealed class AiTests
     [InlineData("explain", "--endpoint")]
     [InlineData("explain", "--endpoint=https://example.test", "--model")]
     [InlineData("explain", "--api-key=never-print-this")]
-    public void CliReturnsExitTwoForMissingConfigurationOrInvalidOptions(params string[] arguments)
+    public async Task CliReturnsExitTwoForMissingConfigurationOrInvalidOptions(params string[] arguments)
     {
-        Assert.Equal(2, Program.Main(arguments));
+        Assert.Equal(2, await Program.Main(arguments));
     }
 
     [Fact]
@@ -558,11 +558,13 @@ public sealed class AiTests
                 Assert.Contains("@@", content);
                 Assert.Equal(noRedact, content.Contains("old-secret", StringComparison.Ordinal));
                 Assert.Equal(noRedact, content.Contains("new-secret", StringComparison.Ordinal));
-                return Reply("Changed the password. test-credential");
+                return Reply("Changed the password. test-credential\u001b]0;pwned\u0007\nSecond line.");
             });
             Assert.Equal(0, await Program.RunExplainAsync(arguments.ToArray(), output, handler));
             Assert.Equal(1, calls);
             Assert.Contains("Changed the password.", output.ToString());
+            Assert.Contains("\\x1B]0;pwned\\x07\nSecond line.", output.ToString());
+            Assert.DoesNotContain('\u001b', output.ToString());
             Assert.DoesNotContain("test-credential", output.ToString());
             Assert.Equal("password=old-secret\n", File.ReadAllText(left));
             Assert.Equal("password=new-secret\n", File.ReadAllText(right));
