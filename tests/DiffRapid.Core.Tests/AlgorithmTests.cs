@@ -68,6 +68,38 @@ public class AlgorithmTests
     }
 
     [Fact]
+    public void Patience_bounds_nested_anchor_depth()
+    {
+        // A = 1, 2, 1, 3, 2, ..., n, n-1: each level's only unique anchor leaves a prefix whose last
+        // value has just become unique, so unbounded anchoring nests n levels deep.
+        const int n = 40000;
+        var a = new List<int> { 1 };
+        for (var k = 2; k <= n; k++)
+        {
+            a.Add(k);
+            a.Add(k - 1);
+        }
+
+        // A distinct insert between every element stops prefix and suffix trimming.
+        var b = a.SelectMany((key, index) => new[] { key, 1000000 + index }).ToArray();
+
+        var hunks = TextComparer.ComputeHunks(a.ToArray(), b, DiffAlgorithmKind.Patience, CancellationToken.None);
+
+        AssertValidEditScript(a.ToArray(), b, hunks);
+    }
+
+    [Fact]
+    public void Histogram_accepts_negative_keys_on_the_right()
+    {
+        int[] a = [1, 2, 3];
+        int[] b = [1, -5, 3];
+
+        var hunks = TextComparer.ComputeHunks(a, b, DiffAlgorithmKind.Histogram, CancellationToken.None);
+
+        Assert.Equal([new DiffHunk(1, 1, 1, 1)], hunks);
+    }
+
+    [Fact]
     public void Histogram_prefers_rare_lines_as_anchors()
     {
         // Moving a function: the brace lines are common, the signature lines are unique.

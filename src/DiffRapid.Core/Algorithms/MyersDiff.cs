@@ -51,6 +51,22 @@ public sealed class MyersDiff : IDiffAlgorithm
     /// </summary>
     internal static long SearchBudget(int size) => Math.Max(1000000L, 256L * size);
 
+    /// <summary>Narrows both ranges past their common prefix and suffix; shared by every algorithm here.</summary>
+    internal static void TrimCommonEnds(int[] a, ref int aLo, ref int aHi, int[] b, ref int bLo, ref int bHi)
+    {
+        while (aLo < aHi && bLo < bHi && a[aLo] == b[bLo])
+        {
+            aLo++;
+            bLo++;
+        }
+
+        while (aLo < aHi && bLo < bHi && a[aHi - 1] == b[bHi - 1])
+        {
+            aHi--;
+            bHi--;
+        }
+    }
+
     private sealed class Context
     {
         private long _remainingSteps;
@@ -81,17 +97,7 @@ public sealed class MyersDiff : IDiffAlgorithm
             while (true)
             {
                 _cancellationToken.ThrowIfCancellationRequested();
-                while (aLo < aHi && bLo < bHi && _a[aLo] == _b[bLo])
-                {
-                    aLo++;
-                    bLo++;
-                }
-
-                while (aLo < aHi && bLo < bHi && _a[aHi - 1] == _b[bHi - 1])
-                {
-                    aHi--;
-                    bHi--;
-                }
+                TrimCommonEnds(_a, ref aLo, ref aHi, _b, ref bLo, ref bHi);
 
                 if (aLo == aHi)
                 {
