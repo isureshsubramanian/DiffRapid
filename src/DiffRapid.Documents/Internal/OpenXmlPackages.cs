@@ -7,8 +7,18 @@ namespace DiffRapid.Documents.Internal;
 /// <summary>Opens Open XML packages read-only and reports damaged files as <see cref="InvalidDataException"/>.</summary>
 internal static class OpenXmlPackages
 {
-    /// <summary>Opens a package from a stream, copying it to memory first when the stream cannot seek.</summary>
-    public static TPackage Open<TPackage>(Stream stream, Func<Stream, TPackage> open, string kind)
+    /// <summary>
+    /// The most characters the SDK reads from any one part (an estimate: about 256 MB of XML, far past the
+    /// parts of ordinary documents, while capping what one part can cost to parse or hold in memory).
+    /// </summary>
+    public const long MaxCharactersInPart = 128L * 1024 * 1024;
+
+    /// <summary>
+    /// Opens a package from a stream (copying it to memory first when the stream cannot seek) and reads it.
+    /// Parts load lazily, so damage found while reading is reported the same way as damage found on opening.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The package, or a part read from it, is damaged or over a limit.</exception>
+    public static TResult Read<TPackage, TResult>(Stream stream, Func<Stream, OpenSettings, TPackage> open, string kind, Func<TPackage, TResult> read)
         where TPackage : OpenXmlPackage
     {
         if (stream is null)
@@ -27,7 +37,8 @@ internal static class OpenXmlPackages
 
         try
         {
-            return open(seekable);
+            using var document = open(seekable, new OpenSettings { MaxCharactersInPart = MaxCharactersInPart });
+            return read(document);
         }
         catch (Exception ex) when (IsDamagedPackage(ex))
         {
