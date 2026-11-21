@@ -86,8 +86,9 @@ internal static partial class Program
 
         if (device)
         {
-            // /dev/stdout redirected to a regular file: replace its contents, as the shell's '>' would.
-            stream.SetLength(0);
+            // /dev/stdout redirected to a regular file: the shell has already truncated (>) or not (>>) it, and may
+            // have written before this command, so write after what is there instead of from offset 0.
+            stream.Seek(0, SeekOrigin.End);
             return stream;
         }
 

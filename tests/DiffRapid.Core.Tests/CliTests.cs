@@ -207,6 +207,15 @@ public sealed class CliTests
                 Assert.Equal("--- a/left.txt\n+++ b/left.txt\n@@ -1 +1 @@\n-a\n+b\n", await output);
             }
 
+            // Redirected to a file the shell already wrote to, -o /dev/stdout writes after that output.
+            var log = Path.Combine(directory, "log.txt");
+            using (var shell = System.Diagnostics.Process.Start("/bin/sh", ["-c", "echo prior > \"$1\"; dotnet \"$2\" patch \"$3\" \"$4\" -o /dev/stdout >> \"$1\"", "sh", log, typeof(Program).Assembly.Location, left, right]))
+            {
+                await shell.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            }
+
+            Assert.Equal("prior\n--- a/left.txt\n+++ b/left.txt\n@@ -1 +1 @@\n-a\n+b\n", File.ReadAllText(log));
+
             // A named pipe, as the shell's >(command) gives, is written in place too.
             var pipe = Path.Combine(directory, "pipe");
             using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", [pipe]))
