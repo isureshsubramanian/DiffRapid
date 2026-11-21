@@ -27,7 +27,7 @@ public sealed partial class LocalHistoryStore
             }
 
             var indexPath = IndexPath(fullPath);
-            var latest = NewestFirst(ReadIndex(indexPath, cancellationToken)).FirstOrDefault();
+            var latest = ReadLatest(indexPath, cancellationToken);
             if (latest?.Hash == content.Value.Hash)
             {
                 return null;
