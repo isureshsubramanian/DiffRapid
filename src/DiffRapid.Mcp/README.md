@@ -136,8 +136,10 @@ diffrapid-mcp [--root <folder>]...
 - Folders a client lists through MCP `roots/list` are not used: the boundary is set by whoever starts the
   server, not by the client the agent drives.
 - Relative tool paths resolve against the first root. A path is allowed when, made absolute, it is a root or
-  lies below one (case-insensitive on Windows and macOS, case-sensitive on Linux), and every link on the way
-  below the root points inside a root. Folder tools do not follow links.
+  lies below one, and every link on the way below the root points inside a root. Each link is followed one
+  hop at a time and its target is checked as text before anything there is touched. Case is compared the way
+  each folder of the root compares it (probed at start-up, without creating files), so a case-sensitive volume
+  on macOS or Windows is compared case-sensitively. Folder tools do not follow links.
 - A refused path returns `isError: true` with "Path is outside the folders this server may read; start the
   server with --root <folder>." The message names neither the roots nor the path.
 - Files inside a root, such as a project's `.env`, remain readable: choose roots accordingly.
@@ -147,8 +149,10 @@ diffrapid-mcp [--root <folder>]...
 Paths must be local: network and device prefixes (`\\server\share`, `//server/share`,
 `\\?\`, `\\.\`) and, on Windows, device names such as `NUL` are refused before any
 file is touched. On macOS and Linux, paths under `/dev` (including links to them,
-such as `/dev/stdin`) are refused. Other special files, such as named pipes, report
-a length of 0 and are read as empty without being opened. Reads stop one byte past
+such as `/dev/stdin`) are refused. Other special files, such as named pipes and
+sockets, report a length of 0 and are read as empty without being opened, in file
+and folder tools alike: in `compare_folders` and folder patches any entry of length
+0 is compared by its listed size only, so two such entries are identical. Reads stop one byte past
 the 64 MiB limit, so a file that grows during a call is still refused. Folder
 patches compare bytes first, read only changed files, and stop writing once the
 65,536-character limit is reached; changed files over 64 MiB are refused.

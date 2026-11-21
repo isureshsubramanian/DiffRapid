@@ -18,6 +18,14 @@ internal static partial class Program
             ["algorithm", "ignore-whitespace", "line-filter", "substitute"]);
 
         public CommandSchema With(string[] switches, string[] values) => new([.. Switches, .. switches], [.. Values, .. values], Refused);
+
+        /// <summary>
+        /// The merge options. The merger compares lines exactly and honours only the algorithm, so the other
+        /// compare options are refused by name rather than accepted with no effect.
+        /// </summary>
+        public static CommandSchema Merge() => new(["diff3"], ["algorithm", "output", "left-label", "base-label", "right-label"],
+            Compare.Switches.Concat(Compare.Values).Where(name => name != "algorithm")
+                .ToDictionary(name => name, name => $"merge compares lines exactly; --{name} has no effect.", StringComparer.OrdinalIgnoreCase));
     }
 
     private static readonly Dictionary<string, CommandSchema> Commands = new(StringComparer.OrdinalIgnoreCase)
@@ -36,7 +44,7 @@ internal static partial class Program
             ["cp", "context", "left-label", "right-label", "unpacker", "prediffer", "rev", "report", "output"]),
         ["log"] = new([], ["count"]),
         ["history"] = CommandSchema.Compare.With(["quiet"], ["store", "label", "cp", "context", "left-label", "right-label"]),
-        ["merge"] = CommandSchema.Compare.With(["diff3"], ["output", "left-label", "base-label", "right-label"]),
+        ["merge"] = CommandSchema.Merge(),
         ["split-conflicts"] = new([], ["out-dir"]),
         ["sync"] = CommandSchema.Compare.With(["dry-run", "yes"], ["profile", "include", "exclude", "filter-file"]),
         ["table"] = new(["no-header", "ignore-case", "trim", "by-position", "ignore-order", "quiet"],

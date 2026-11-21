@@ -173,11 +173,107 @@ public sealed class CliTests
         }
     }
 
+    [Fact]
+    public async Task OutputToDevicesAndPipesIsWrittenInPlace()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var left = Path.Combine(directory, "left.txt");
+            var right = Path.Combine(directory, "right.txt");
+            File.WriteAllText(left, "a\n");
+            File.WriteAllText(right, "b\n");
+
+            // No temporary file can be created in /dev, so -o /dev/stdout must write to the device itself.
+            var start = new System.Diagnostics.ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            foreach (var argument in new[] { typeof(Program).Assembly.Location, "patch", left, right, "-o", "/dev/stdout" })
+            {
+                start.ArgumentList.Add(argument);
+            }
+
+            using (var process = System.Diagnostics.Process.Start(start)!)
+            {
+                var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+                var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+                await process.WaitForExitAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+                Assert.Equal("", await error);
+                Assert.Equal(1, process.ExitCode);
+                Assert.Equal("--- a/left.txt\n+++ b/left.txt\n@@ -1 +1 @@\n-a\n+b\n", await output);
+            }
+
+            // A named pipe, as the shell's >(command) gives, is written in place too.
+            var pipe = Path.Combine(directory, "pipe");
+            using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", [pipe]))
+            {
+                await mkfifo.WaitForExitAsync(TestContext.Current.CancellationToken);
+                Assert.Equal(0, mkfifo.ExitCode);
+            }
+
+            // Opening a pipe blocks until the other end opens, so the reader opens it on its own thread.
+            var reader = Task.Run(() => File.ReadAllText(pipe), TestContext.Current.CancellationToken);
+            var writer = Task.Run(() => Program.WriteText(pipe, text => text.Write("piped")), TestContext.Current.CancellationToken);
+            await writer.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            Assert.Equal("piped", await reader.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+            // An empty regular file is still replaced atomically.
+            var empty = Path.Combine(directory, "empty.txt");
+            File.WriteAllText(empty, "");
+            Assert.Throws<IOException>(() => Program.WriteText(empty, text =>
+            {
+                text.Write("partial");
+                throw new IOException("disk full");
+            }));
+            Assert.Equal("", File.ReadAllText(empty));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact(Skip = "Needs the AtomicFile change that keeps the Unix file mode; remove this Skip once it is merged.")]
+    public async Task MergeOutputKeepsTheFileMode()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var basePath = Path.Combine(directory, "base.sh");
+            var remote = Path.Combine(directory, "remote.sh");
+            var script = Path.Combine(directory, "script.sh");
+            File.WriteAllText(basePath, "echo a\n");
+            File.WriteAllText(remote, "echo b\n");
+            File.WriteAllText(script, "echo a\n");
+            var executable = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+            File.SetUnixFileMode(script, executable);
+            Assert.Equal(0, await Program.Main(["merge", basePath, script, remote, "-o", script]));
+            Assert.Equal("echo b\n", File.ReadAllText(script));
+            Assert.Equal(executable, File.GetUnixFileMode(script));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("plain\ttext", false, "plain\ttext")]
     [InlineData("\u001b]0;title\u0007\u001b[31mred", false, "\\x1B]0;title\\x07\\x1B[31mred")]
     [InlineData("a\r\nb\u009bc\u007f", false, "a\\x0D\\x0Ab\\x9Bc\\x7F")]
     [InlineData("a\nb\rc", true, "a\nb\\x0Dc")]
+    [InlineData("a\r\nb\rc\r", true, "a\r\nb\\x0Dc\\x0D")]
     [InlineData("café 日本", false, "café 日本")]
     public void TerminalTextEscapesControlCharacters(string text, bool keepLineFeeds, string expected)
     {
@@ -212,6 +308,20 @@ public sealed class CliTests
         }
 
         Assert.Single(captured.ToString().Split('\n'), line => line.TrimStart().StartsWith("diffrapid git-config", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("--ignore-case")]
+    [InlineData("--ignore-blank-lines")]
+    [InlineData("--ignore-whitespace=all")]
+    [InlineData("--line-filter=^//")]
+    [InlineData("--substitute=a=b")]
+    public void MergeRefusesCompareOptionsItIgnores(string option)
+    {
+        var name = option.Split('=')[0];
+        var error = Assert.Throws<Program.UsageException>(() => Program.ParsedArgs.Parse(["merge", "base", "left", "right", option], 1));
+        Assert.Equal($"merge compares lines exactly; {name} has no effect.", error.Message);
+        Assert.Equal("patience", Program.ParsedArgs.Parse(["merge", "base", "left", "right", "--algorithm", "patience"], 1).Value("algorithm"));
     }
 
     [Fact]

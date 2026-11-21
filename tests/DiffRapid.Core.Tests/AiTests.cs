@@ -313,6 +313,16 @@ public sealed class AiTests
     }
 
     [Fact]
+    public async Task TimeoutCoversAStalledErrorBody()
+    {
+        using var stream = new GatedStream("", ignoresToken: true);
+        using var client = new ChatClient(Endpoint with { Timeout = TimeSpan.FromMilliseconds(30) }, new FakeHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StreamContent(stream) })));
+        var exception = await Assert.ThrowsAsync<AiException>(() => client.StreamAsync(Prompt, _ => { }).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Contains("timed out", exception.Message);
+    }
+
+    [Fact]
     public void InvalidEndpointSettingsAndCredentialsAreRejectedSafely()
     {
         AiEndpoint[] invalid =
@@ -651,7 +661,8 @@ public sealed class AiTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken);
     }
 
-    private sealed class GatedStream(string initial) : Stream
+    // With ignoresToken, a read ends only when the stream is disposed, as .NET Framework's response streams do.
+    private sealed class GatedStream(string initial, bool ignoresToken = false) : Stream
     {
         private readonly MemoryStream _initial = new(Encoding.UTF8.GetBytes(initial));
         private readonly CancellationTokenSource _closed = new();
@@ -674,7 +685,7 @@ public sealed class AiTests
                 return read;
             }
 
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _closed.Token);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ignoresToken ? CancellationToken.None : cancellationToken, _closed.Token);
             await Task.Delay(Timeout.Infinite, linked.Token);
             return 0;
         }

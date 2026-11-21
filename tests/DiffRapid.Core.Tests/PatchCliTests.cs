@@ -24,6 +24,32 @@ public sealed class PatchCliTests : IDisposable
     private string At(string path) => Path.Combine(_root, path);
 
     [Fact]
+    public async Task PatchPathsAreEscapedWhenPrinted()
+    {
+        // A patch names a file whose name sets the terminal colour; apply prints names and errors.
+        File.WriteAllText(At("patch"), "--- a/\u001b[31mred.txt\n+++ b/\u001b[31mred.txt\n@@ -1 +1 @@\n-a\n+b\n");
+        Directory.CreateDirectory(At("copy"));
+        var (output, error) = (Console.Out, Console.Error);
+        using var capturedOutput = new StringWriter();
+        using var capturedError = new StringWriter();
+        Console.SetOut(capturedOutput);
+        Console.SetError(capturedError);
+        try
+        {
+            Assert.NotEqual(0, await Program.Main(["apply", At("patch"), "--dir", At("copy"), "--dry-run"]));
+        }
+        finally
+        {
+            Console.SetOut(output);
+            Console.SetError(error);
+        }
+
+        var printed = capturedOutput + "\n" + capturedError;
+        Assert.DoesNotContain('\u001b', printed);
+        Assert.Contains("\\x1B[31mred.txt", printed);
+    }
+
+    [Fact]
     public async Task FolderPatchReproducesRightAndReverses()
     {
         CreateFolders();

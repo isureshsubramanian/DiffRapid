@@ -65,9 +65,10 @@ internal static partial class Program
         return TextDocument.Parse(decoded.Text);
     }
 
+    // Messages can carry file names, patch paths and exception text from files, so they are escaped too.
     private static int Fail(string message)
     {
-        Console.Error.WriteLine("diffrapid: " + message);
+        Console.Error.WriteLine("diffrapid: " + TerminalText.Escape(message, keepLineFeeds: true));
         return ExitError;
     }
 

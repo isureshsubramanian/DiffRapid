@@ -58,8 +58,8 @@ public static class FolderPatchWriter
     {
         var oldName = "a/" + (leftPath ?? rightPath);
         var newName = "b/" + (rightPath ?? leftPath);
-        var left = leftPath is null ? null : TextFileReader.ReadFile(Path.Combine(result.LeftRoot, leftPath));
-        var right = rightPath is null ? null : TextFileReader.ReadFile(Path.Combine(result.RightRoot, rightPath));
+        var left = leftPath is null ? null : Read(Path.Combine(result.LeftRoot, leftPath));
+        var right = rightPath is null ? null : Read(Path.Combine(result.RightRoot, rightPath));
         writer.Write("diff --git " + PatchPath.Quote(oldName) + " " + PatchPath.Quote(newName) + "\n");
         if (rename)
         {
@@ -88,6 +88,15 @@ public static class FolderPatchWriter
             // An unchanged rename has no hunks and no file header: the rename lines say everything.
             UnifiedDiffWriter.Write(writer, diff, oldLabel, newLabel, contextLines);
         }
+    }
+
+    // A size of 0 is never opened, so a pipe, socket or device in the tree cannot block the patch.
+    private static DecodedText Read(string path)
+    {
+        using var stream = FolderComparer.OpenUnlessEmpty(path, new FileInfo(path).Length);
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return TextFileReader.Decode(bytes.ToArray());
     }
 
     /// <summary>Patch paths use '/'; on Unix a backslash is part of a name and is kept (and quoted).</summary>

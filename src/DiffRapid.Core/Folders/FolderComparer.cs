@@ -518,7 +518,7 @@ public static class FolderComparer
                 case FolderCompareMethod.Hash when !sizeEqual:
                     return (false, null);
                 case FolderCompareMethod.Hash:
-                    return (XxHash64.ComputeFile(left, _token) == XxHash64.ComputeFile(right, _token), null);
+                    return (leftMeta.Size == 0 || XxHash64.ComputeFile(left, _token) == XxHash64.ComputeFile(right, _token), null);
                 case FolderCompareMethod.Date:
                     return (dateEqual, null);
                 case FolderCompareMethod.DateAndSize:
@@ -529,8 +529,8 @@ public static class FolderComparer
                     return (true, 0);
             }
 
-            using var leftStream = Open(left);
-            using var rightStream = Open(right);
+            using var leftStream = OpenUnlessEmpty(left, leftMeta.Size);
+            using var rightStream = OpenUnlessEmpty(right, rightMeta.Size);
             if (BytesEqual(leftStream, rightStream))
             {
                 return (true, 0);
@@ -552,9 +552,6 @@ public static class FolderComparer
             var diff = TextComparer.Compare(TextDocument.Parse(leftText), TextDocument.Parse(rightText), _options.TextOptions, _token);
             return (diff.AreEqual, diff.DifferenceCount);
         }
-
-        private static FileStream Open(string path) =>
-            new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1);
 
         private bool BytesEqual(Stream left, Stream right)
         {
@@ -627,6 +624,16 @@ public static class FolderComparer
             return bytes;
         }
     }
+
+    /// <summary>
+    /// Opens a file for reading, or returns an empty stream when its listed size is 0. Pipes, sockets and
+    /// devices list a size of 0 and .NET reports no file type on macOS or Linux, so this is what keeps folder
+    /// comparisons and folder patches from opening them: opening a pipe with no writer blocks without end. An
+    /// empty regular file needs no read either. A file that grew after it was listed is compared as listed.
+    /// </summary>
+    internal static Stream OpenUnlessEmpty(string path, long listedSize) => listedSize == 0
+        ? new MemoryStream(Array.Empty<byte>(), writable: false)
+        : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1);
 
     /// <summary>A followed folder on the current branch of the scan, by real path (null when unknown).</summary>
     private sealed record Branch(string? RealPath, Branch? Parent, bool IsCycle);
