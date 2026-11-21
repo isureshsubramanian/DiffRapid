@@ -67,6 +67,13 @@ public static class CSharpDiffClassifier
 
     private static CSharpUnimportantReason? ReasonFor(Side left, Side right, DiffHunk hunk)
     {
+        // The normalized text splits a token per line and drops its line breaks, so a change inside a
+        // multi-line verbatim or raw string would read as formatting. Such a hunk is never trivia-only.
+        if (left.InMultiLineToken(hunk.LeftStart, hunk.LeftCount) || right.InMultiLineToken(hunk.RightStart, hunk.RightCount))
+        {
+            return OnlyUsings(left, right, hunk) ? CSharpUnimportantReason.UsingOrder : null;
+        }
+
         if (SameContent(left.Formatting, right.Formatting, hunk))
         {
             return CSharpUnimportantReason.Formatting;
@@ -128,14 +135,18 @@ public static class CSharpDiffClassifier
     private sealed class Side
     {
         private readonly HashSet<int> _usingLines;
+        private readonly HashSet<int> _multiLineTokenLines;
 
-        private Side(NormalizedText formatting, NormalizedText comments, NormalizedText regions, HashSet<int> usingLines, List<string> usings)
+        private Side(
+            NormalizedText formatting, NormalizedText comments, NormalizedText regions,
+            HashSet<int> usingLines, List<string> usings, HashSet<int> multiLineTokenLines)
         {
             Formatting = formatting;
             Comments = comments;
             Regions = regions;
             _usingLines = usingLines;
             Usings = usings;
+            _multiLineTokenLines = multiLineTokenLines;
         }
 
         public NormalizedText Formatting { get; }
@@ -168,12 +179,44 @@ public static class CSharpDiffClassifier
             }
 
             usings.Sort(StringComparer.Ordinal);
+            var multiLineTokenLines = new HashSet<int>();
+            var count = 0;
+            foreach (var token in tree.GetRoot(cancellationToken).DescendantTokens(descendIntoTrivia: false))
+            {
+                if (++count % 4096 == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                var first = table.LineOf(token.Span.Start);
+                var last = table.LineOf(Math.Max(token.Span.Start, token.Span.End - 1));
+                for (var line = first; line <= last && first != last; line++)
+                {
+                    multiLineTokenLines.Add(line);
+                }
+            }
+
             return new Side(
                 CSharpNormalizer.Normalize(tree, text, table, formatting, cancellationToken),
                 CSharpNormalizer.Normalize(tree, text, table, comments, cancellationToken),
                 CSharpNormalizer.Normalize(tree, text, table, regions, cancellationToken),
                 usingLines,
-                usings);
+                usings,
+                multiLineTokenLines);
+        }
+
+        /// <summary>True when a line of the range is part of a token that spans several lines.</summary>
+        public bool InMultiLineToken(int start, int count)
+        {
+            for (var line = start; line < start + count; line++)
+            {
+                if (_multiLineTokenLines.Contains(line))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>The number of using lines in a range, or -1 when the range holds anything but usings and blank lines.</summary>

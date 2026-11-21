@@ -226,6 +226,15 @@ public sealed class SemanticTests
         Assert.True(MemberMatcher.Compare(left, right).AreEqual);
     }
 
+    [Theory]
+    [InlineData("class C { string s = @\"a\nb\"; }\n", "class C { string s = @\"a b\"; }\n")]
+    [InlineData("class C { string s = \"\"\"\na\nb\n\"\"\"; }\n", "class C { string s = \"\"\"\na b\n\"\"\"; }\n")]
+    [InlineData("class C { string s = @\"a\n  b\"; }\n", "class C { string s = @\"a\n    b\"; }\n")]
+    public void ChangesInsideMultiLineStringsAreImportant(string left, string right)
+    {
+        Assert.Empty(Classify(left, right));
+    }
+
     [Fact]
     public void DifferentUsingsAreImportant()
     {
