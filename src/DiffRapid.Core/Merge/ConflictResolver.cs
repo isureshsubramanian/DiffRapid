@@ -41,7 +41,8 @@ public sealed record ConflictTextResolution(string Text, int ConflictCount, IRea
 }
 
 /// <summary>
-/// Resolves conflicts that need no judgement: identical changes, whitespace-only changes on one side, and
+/// Resolves conflicts that need no judgement: identical changes, whitespace-only changes on one side (only the
+/// amount of whitespace changed, as with <see cref="WhitespaceMode.IgnoreChange"/>), and
 /// changes to different lines inside one conflict block.
 /// </summary>
 public static class ConflictResolver
@@ -68,15 +69,15 @@ public static class ConflictResolver
     public static ConflictTextResolution ResolveConflictText(string text, CancellationToken cancellationToken = default)
     {
         // Parse first so malformed markers are reported the same way as everywhere else.
-        var parts = ConflictFile.Parse(text);
         var document = TextDocument.Parse(text);
+        var parts = ConflictFile.Parse(document);
         var output = new StringBuilder(text.Length);
         var resolutions = new List<SimpleResolution>();
         var conflict = 0;
         var i = 0;
         while (i < document.LineCount)
         {
-            if (Marker(document[i].Content) != '<')
+            if (ConflictFile.Marker(document[i].Content) != '<')
             {
                 AppendLine(output, document[i]);
                 i++;
@@ -143,9 +144,9 @@ public static class ConflictResolver
         }
 
         var original = Slice(result.Base, chunk.BaseStart, chunk.BaseEnd);
-        var baseText = WithoutWhitespace(original);
-        var leftWhitespaceOnly = baseText == WithoutWhitespace(left);
-        var rightWhitespaceOnly = baseText == WithoutWhitespace(right);
+        var baseText = CollapseWhitespace(original);
+        var leftWhitespaceOnly = baseText == CollapseWhitespace(left);
+        var rightWhitespaceOnly = baseText == CollapseWhitespace(right);
         if (leftWhitespaceOnly && !rightWhitespaceOnly)
         {
             return Apply(session, index, SimpleResolutionKind.LeftWhitespaceOnly, MergeResolution.Right);
@@ -304,18 +305,32 @@ public static class ConflictResolver
         return true;
     }
 
-    private static string WithoutWhitespace(List<TextLine> lines)
+    // Each run of whitespace, line breaks included, becomes one space, and the ends are trimmed (the
+    // IgnoreChange rule). Whitespace is not removed outright: "Hello World" to "HelloWorld" is a real change.
+    private static string CollapseWhitespace(List<TextLine> lines)
     {
         var sb = new StringBuilder();
+        var pendingSpace = false;
         foreach (var line in lines)
         {
             foreach (var c in line.Content)
             {
-                if (!char.IsWhiteSpace(c))
+                if (char.IsWhiteSpace(c))
                 {
-                    sb.Append(c);
+                    pendingSpace = sb.Length > 0;
+                    continue;
                 }
+
+                if (pendingSpace)
+                {
+                    sb.Append(' ');
+                    pendingSpace = false;
+                }
+
+                sb.Append(c);
             }
+
+            pendingSpace = sb.Length > 0;
         }
 
         return sb.ToString();
@@ -358,7 +373,7 @@ public static class ConflictResolver
         while (true)
         {
             var line = document[i];
-            switch (Marker(line.Content))
+            switch (ConflictFile.Marker(line.Content))
             {
                 case '|':
                     block.Base = new List<TextLine>();
@@ -382,25 +397,6 @@ public static class ConflictResolver
     private static void AppendLine(StringBuilder sb, TextLine line)
     {
         sb.Append(line.Content).Append(line.EndingText);
-    }
-
-    // Seven identical marker characters followed by the end of the line, a space or a tab.
-    private static char Marker(string content)
-    {
-        if (content.Length < 7 || (content[0] != '<' && content[0] != '|' && content[0] != '=' && content[0] != '>'))
-        {
-            return '\0';
-        }
-
-        for (var i = 1; i < 7; i++)
-        {
-            if (content[i] != content[0])
-            {
-                return '\0';
-            }
-        }
-
-        return content.Length == 7 || content[7] == ' ' || content[7] == '\t' ? content[0] : '\0';
     }
 
     private readonly struct LineEdit
