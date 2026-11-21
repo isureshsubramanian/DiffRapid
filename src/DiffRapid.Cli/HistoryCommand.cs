@@ -13,36 +13,13 @@ namespace DiffRapid.Cli;
 
 internal static partial class Program
 {
-    private static int RunHistory(string[] rawArgs)
+    private static int RunHistory(ParsedArgs args, CancellationToken cancellationToken)
     {
-        var args = ParsedArgs.Parse(JoinHistoryOptionValues(rawArgs), 1);
         ValidateHistoryArguments(args);
         var storePath = args.Value("store") ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiffRapid", "History");
         var store = new LocalHistoryStore(storePath, new LocalHistoryOptions());
-        using var cancellation = new CancellationTokenSource();
-        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            cancellation.Cancel();
-        };
-        Console.CancelKeyPress += cancelHandler;
-        try
-        {
-            return RunHistoryAction(args, store, cancellation.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            return Fail("History operation canceled.");
-        }
-        catch (InvalidDataException exception)
-        {
-            return Fail(exception.Message);
-        }
-        finally
-        {
-            Console.CancelKeyPress -= cancelHandler;
-        }
+        return RunHistoryAction(args, store, cancellationToken);
     }
 
     private static int RunHistoryAction(ParsedArgs args, LocalHistoryStore store, CancellationToken cancellationToken)
@@ -158,27 +135,5 @@ internal static partial class Program
                 throw new UsageException($"--{option} needs a nonempty value.");
             }
         }
-    }
-
-    private static string[] JoinHistoryOptionValues(string[] rawArgs)
-    {
-        var joined = new List<string>();
-        for (var index = 0; index < rawArgs.Length; index++)
-        {
-            var argument = rawArgs[index];
-            if (argument.Equals("--store", StringComparison.OrdinalIgnoreCase) || argument.Equals("--label", StringComparison.OrdinalIgnoreCase))
-            {
-                if (index + 1 >= rawArgs.Length || rawArgs[index + 1].StartsWith("--", StringComparison.Ordinal))
-                {
-                    throw new UsageException($"Option '{argument}' needs a value.");
-                }
-
-                argument += "=" + rawArgs[++index];
-            }
-
-            joined.Add(argument);
-        }
-
-        return joined.ToArray();
     }
 }

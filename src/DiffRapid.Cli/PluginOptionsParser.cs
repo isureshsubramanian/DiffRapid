@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using DiffRapid.Core.Plugins;
 using DiffRapid.Core.Text;
 
@@ -33,28 +34,34 @@ internal static partial class Program
     }
 
     /// <summary>Loads both sides of a diff, running the plugin pipelines when any are given.</summary>
-    private static (TextDocument Left, TextDocument Right) LoadDiffInputs(ParsedArgs args, string leftPath, string rightPath, Encoding? encoding)
+    private static async Task<(TextDocument Left, TextDocument Right)> LoadDiffInputsAsync(ParsedArgs args, string leftPath, string rightPath,
+        Encoding? encoding, CancellationToken cancellationToken)
     {
         var plugins = ToPluginOptions(args, encoding);
         var revision = args.Value("rev");
         if (plugins is null)
         {
-            var plainLeft = revision is null ? LoadDocumentOrText(leftPath, encoding) : LoadRevision(leftPath, revision, encoding);
+            var plainLeft = revision is null
+                ? LoadDocumentOrText(leftPath, encoding)
+                : await LoadRevisionAsync(leftPath, revision, encoding, cancellationToken).ConfigureAwait(false);
             return (plainLeft, LoadDocumentOrText(rightPath, encoding));
         }
 
-        var leftBytes = revision is null ? File.ReadAllBytes(leftPath) : ReadRevisionBytes(leftPath, revision);
-        var left = Prepare(leftBytes, revision is null ? leftPath : leftPath + "@" + revision, leftPath, plugins);
-        var right = Prepare(File.ReadAllBytes(rightPath), rightPath, rightPath, plugins);
+        var leftBytes = revision is null
+            ? await File.ReadAllBytesAsync(leftPath, cancellationToken).ConfigureAwait(false)
+            : await ReadRevisionBytesAsync(leftPath, revision, cancellationToken).ConfigureAwait(false);
+        var left = Prepare(leftBytes, revision is null ? leftPath : leftPath + "@" + revision, leftPath, plugins, cancellationToken);
+        var rightBytes = await File.ReadAllBytesAsync(rightPath, cancellationToken).ConfigureAwait(false);
+        var right = Prepare(rightBytes, rightPath, rightPath, plugins, cancellationToken);
         return (left, right);
     }
 
-    private static TextDocument Prepare(byte[] content, string displayName, string fileName, PluginOptions plugins)
+    private static TextDocument Prepare(byte[] content, string displayName, string fileName, PluginOptions plugins, CancellationToken cancellationToken)
     {
         PreparedFile prepared;
         try
         {
-            prepared = PluginPipeline.Prepare(content, fileName, plugins, CancellationToken.None);
+            prepared = PluginPipeline.Prepare(content, fileName, plugins, cancellationToken);
         }
         catch (PluginException ex)
         {
@@ -68,13 +75,5 @@ internal static partial class Program
 
         // The command line compares and prints the transformed text.
         return TextDocument.Parse(prepared.CompareText);
-    }
-
-    private static byte[] ReadRevisionBytes(string path, string revision)
-    {
-        var repository = Repository(path);
-        var relative = Path.GetRelativePath(repository.Root, Path.GetFullPath(path)).Replace('\\', '/');
-        return repository.ReadFileAsync(revision, relative, CancellationToken.None).GetAwaiter().GetResult()
-            ?? throw new UsageException($"{repository.Kind}: '{path}' does not exist at '{revision}'.");
     }
 }

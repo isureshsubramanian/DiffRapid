@@ -11,7 +11,7 @@ public sealed class ConflictFileCliTests
     [InlineData(true, true, "file", 1200)]
     [InlineData(false, true, "file.txt", 1201)]
     [InlineData(false, false, "file.txt", 28591)]
-    public void WritesVersionsWithOriginalEncoding(bool outDirectory, bool includeBase, string name, int codePage)
+    public async Task WritesVersionsWithOriginalEncoding(bool outDirectory, bool includeBase, string name, int codePage)
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -23,7 +23,7 @@ public sealed class ConflictFileCliTests
             File.WriteAllText(input, text, encoding);
             var output = outDirectory ? Path.Combine(directory, "output") : directory;
             string[] args = outDirectory ? ["split-conflicts", input, "--out-dir", output] : ["split-conflicts", input];
-            Assert.Equal(0, Program.Main(args));
+            Assert.Equal(1, await Program.Main(args));
             Check("left", "head\r\nété\r\ntail");
             Check("right", "head\r\nright\ntail");
             if (includeBase) Check("base", "head\r\nold\ntail");
@@ -39,7 +39,7 @@ public sealed class ConflictFileCliTests
     }
 
     [Fact]
-    public void ReturnsNoConflictsAndErrorsWithoutWritingVersions()
+    public async Task ReturnsNoConflictsAndErrorsWithoutWritingVersions()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -47,12 +47,12 @@ public sealed class ConflictFileCliTests
         {
             var input = Path.Combine(directory, "file.txt");
             File.WriteAllText(input, "plain");
-            Assert.Equal(1, Program.Main(["split-conflicts", input]));
+            Assert.Equal(0, await Program.Main(["split-conflicts", input]));
             File.WriteAllText(input, "<<<<<<<\n");
-            Assert.Equal(2, Program.Main(["split-conflicts", input]));
-            Assert.Equal(2, Program.Main(["split-conflicts"]));
-            Assert.Equal(2, Program.Main(["split-conflicts", input, "--out-dir"]));
-            Assert.Equal(2, Program.Main(["split-conflicts", Path.Combine(directory, "missing")]));
+            Assert.Equal(2, await Program.Main(["split-conflicts", input]));
+            Assert.Equal(2, await Program.Main(["split-conflicts"]));
+            Assert.Equal(2, await Program.Main(["split-conflicts", input, "--out-dir"]));
+            Assert.Equal(2, await Program.Main(["split-conflicts", Path.Combine(directory, "missing")]));
             Assert.Single(Directory.GetFiles(directory));
         }
         finally

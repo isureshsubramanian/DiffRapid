@@ -422,7 +422,7 @@ public sealed class SemanticTests
     }
 
     [Fact]
-    public void CliPrintsTheMemberTreeWithExitCodes()
+    public async Task CliPrintsTheMemberTreeWithExitCodes()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -435,18 +435,18 @@ public sealed class SemanticTests
             File.WriteAllText(right, Shapes.Replace("public int Area(int scale)", "public int ComputeArea(int scale)"));
             var output = new StringWriter();
             Console.SetOut(output);
-            Assert.Equal(1, Program.Main(["semantic", left, right]));
+            Assert.Equal(1, await Program.Main(["semantic", left, right]));
             var text = output.ToString();
             Assert.Contains("Unchanged  namespace Demo", text);
             Assert.Contains("    Renamed    method ComputeArea(int) (was Area(int))", text);
 
             File.WriteAllText(right, "  // comment\n" + Shapes.Replace("    ", "  "));
-            Assert.Equal(1, Program.Main(["semantic", left, right]));
-            Assert.Equal(0, Program.Main(["semantic", left, right, "--ignore", "format,comments"]));
-            Assert.Equal(0, Program.Main(["semantic", left, left]));
-            Assert.Equal(2, Program.Main(["semantic", left, right, "--ignore", "bogus"]));
-            Assert.Equal(2, Program.Main(["semantic", left]));
-            Assert.Equal(2, Program.Main(["semantic", left, Path.Combine(directory, "missing.cs")]));
+            Assert.Equal(1, await Program.Main(["semantic", left, right]));
+            Assert.Equal(0, await Program.Main(["semantic", left, right, "--ignore", "format,comments"]));
+            Assert.Equal(0, await Program.Main(["semantic", left, left]));
+            Assert.Equal(2, await Program.Main(["semantic", left, right, "--ignore", "bogus"]));
+            Assert.Equal(2, await Program.Main(["semantic", left]));
+            Assert.Equal(2, await Program.Main(["semantic", left, Path.Combine(directory, "missing.cs")]));
         }
         finally
         {

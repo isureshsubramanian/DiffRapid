@@ -156,7 +156,8 @@ Double-click it to install, or open `DiffRapid.slnx`, set `DiffRapid.VisualStudi
 ## Command line
 
 `diffrapid` exposes the engine for scripts, CI and Git. Exit codes: `0` identical or merged cleanly,
-`1` different or conflicts remain, `2` error.
+`1` different or conflicts remain, `2` error. `patch` returns `1` when the patch is not empty, and `split-conflicts`
+returns `1` when it split conflicts and `0` when the file has none.
 
 ```powershell
 diffrapid diff left.cs right.cs --ignore-whitespace change     # unified diff
@@ -182,8 +183,16 @@ diffrapid history list Program.cs
 | `explain` | Ask an AI service to explain a diff or propose conflict resolutions |
 | `plugins`, `info`, `git-config`, `mcp` | Utilities and setup |
 
-WinMerge-style switches such as `/ignorews:1`, `/ignorecase`, `/ignoreblanklines` and `/ignoreeol` are accepted.
-Run `diffrapid --help` for every option.
+Each command accepts only its own options: an unknown option, a value given to a switch, or a missing value is an
+error (exit code `2`) that names the option, so a typo such as `--dryrun` never runs the command without it. `--`
+ends the options, for file names that start with `-`. A separate value may not start with `--`; write
+`--left-label=--text` instead. On Windows, WinMerge-style switches such as `/ignorews:1`, `/ignorecase`,
+`/ignoreblanklines`, `/ignoreeol`, `/o` and `/dl` are accepted; on macOS and Linux an argument starting with `/` is
+always a path (use `-o`, `--ignore-case` and so on). Run `diffrapid --help` for every option.
+
+Text that comes from files, repositories or AI services (file names, log entries, table cells, structured values,
+AI replies) is printed with control characters such as ESC shown as `\xNN`, so it cannot drive the terminal. Diff
+bodies and files written with `-o` are unchanged.
 
 ### Use with Git
 
@@ -216,8 +225,13 @@ eight tools: `compare_files`, `compare_text`, `compare_folders`, `merge_three_wa
 
 ```powershell
 dotnet build src/DiffRapid.Mcp
-claude mcp add diffrapid -- dotnet <repo>\src\DiffRapid.Mcp\bin\Debug\net10.0\diffrapid-mcp.dll
+claude mcp add diffrapid -- dotnet <repo>\src\DiffRapid.Mcp\bin\Debug\net10.0\diffrapid-mcp.dll --root C:\Work
 ```
+
+The server reads only files inside its allowed root folders: each `--root <folder>`, or the directory the client
+starts it in when none is given. `--roots-from-client` also accepts the folders the client lists. A path outside
+them, or a link that leads outside, is refused. `diffrapid mcp --root <folder>` prints a registration with the
+roots filled in.
 
 See [src/DiffRapid.Mcp/README.md](src/DiffRapid.Mcp/README.md) for Claude Code, Visual Studio Copilot and other clients.
 

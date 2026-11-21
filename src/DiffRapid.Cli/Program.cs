@@ -1,6 +1,9 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using DiffRapid.Hosting;
 
 namespace DiffRapid.Cli;
 
@@ -21,6 +24,7 @@ internal static partial class Program
         Usage:
           diffrapid info <file>
           diffrapid patch <left> <right> [-o <file>] [-u <n>] [compare options]
+                         Exit code 1 when the patch is not empty, 0 when the inputs match.
           diffrapid explain <left> <right> --endpoint <URL> --model <name>
           diffrapid explain --conflicts <file-with-markers> --endpoint <URL> --model <name>
                          [--api-key-env <VAR>] [--azure-deployment <name> --api-version <version>] [--no-redact]
@@ -55,6 +59,7 @@ internal static partial class Program
           diffrapid merge <base> <left> <right> [-o <output>] [--diff3] [options]
           diffrapid split-conflicts <file> [--out-dir <dir>]
                          Writes the left, right and (diff3) base versions of a file with conflict markers.
+                         Exit code 1 when conflicts were split, 0 when there are none.
           diffrapid sync <left> <right> --profile mirror-right|mirror-left|update|update-both
                          [--dry-run] [--yes] [--include <glob>] [--exclude <glob>] [--filter-file <path>]
                          Prints the plan; --yes carries it out.
@@ -76,11 +81,10 @@ internal static partial class Program
           diffrapid image <left> <right> [--tolerance <0..255>] [--diff-out <file.png>]
                          [--ignore-alpha] [--max-offset <n>]
                          Compares PNG or BMP images; --diff-out writes the differences highlighted.
-          diffrapid git-config [--global]      print setup commands for Git Bash / POSIX shells
           diffrapid api <left.dll|.nupkg> [<right.dll|.nupkg>] [--breaking-only]
                          One file: print its public API. Two: list API changes, marking breaking ones.
           diffrapid plugins                      list the built-in unpackers and prediffers
-          diffrapid mcp                          print MCP client registration JSON
+          diffrapid mcp [--root <dir>]...         print MCP client registration JSON; each --root is a folder the server may read
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)
@@ -106,11 +110,24 @@ internal static partial class Program
           --diff3                               include base text in conflict markers
           /dl <text>, /dm <text>, /dr <text>     local, base, and remote conflict labels
 
+        Options:
+          Each command accepts only the options listed for it; others are an error (exit code 2).
+          --                                    end of options; later arguments are file names
+          --name=value or --name value          a separate value may not start with --
+          /name                                 Windows only; elsewhere an argument starting with / is a path
+
         Exit codes: 0 identical/clean, 1 different/conflicts, 2 error.
         """;
 
-    /// <summary>Runs the requested command and returns its exit code.</summary>
-    public static int Main(string[] args)
+    /// <summary>Runs the requested command and returns its exit code; the first Ctrl+C cancels the command.</summary>
+    public static async Task<int> Main(string[] args)
+    {
+        using var cancellation = new ConsoleCancellation();
+        return await RunAsync(args, cancellation.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>Runs one command. Every failure becomes a one-line message on stderr and exit code 2.</summary>
+    internal static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
     {
         try
         {
@@ -131,20 +148,20 @@ internal static partial class Program
             return command switch
             {
                 "patch" => RunPatch(parsed),
-                "explain" => RunExplain(args),
+                "explain" => await RunExplainAsync(args, Console.Out, cancellationToken: cancellationToken).ConfigureAwait(false),
                 "apply" => RunApply(parsed),
                 "dir" => RunDirectory(parsed),
                 "dir3" => RunDirectory3(parsed),
-                "diff" => RunDiff(parsed),
-                "log" => RunLog(parsed),
-                "history" => RunHistory(args),
+                "diff" => await RunDiffAsync(parsed, cancellationToken).ConfigureAwait(false),
+                "log" => await RunLogAsync(parsed, cancellationToken).ConfigureAwait(false),
+                "history" => RunHistory(parsed, cancellationToken),
                 "info" => RunInfo(parsed),
                 "merge" => RunMerge(parsed),
                 "split-conflicts" => RunSplitConflicts(parsed),
                 "sync" => RunSync(parsed),
-                "table" => RunTable(args),
+                "table" => RunTable(parsed),
                 "hex" => RunHex(parsed, Console.Out),
-                "image" => RunImage(args),
+                "image" => RunImage(parsed),
                 "resolve" => RunResolve(parsed),
                 "api" => RunApi(parsed),
                 "plugins" => RunPlugins(parsed),
@@ -153,26 +170,14 @@ internal static partial class Program
                 "mcp" => RunMcp(parsed),
                 _ => Fail($"Unknown command '{args[0]}'. Run 'diffrapid --help'."),
             };
-
         }
-        catch (UsageException ex)
+        catch (OperationCanceledException)
         {
-            return Fail(ex.Message);
+            return Fail("Cancelled.");
         }
-        catch (ArgumentException ex)
+        catch (Exception ex)
         {
-            return Fail(ex.Message);
-        }
-        catch (FormatException ex)
-        {
-            return Fail(ex.Message);
-        }
-        catch (IOException ex)
-        {
-            return Fail(ex.Message);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
+            // Usage, file, format and data errors, and anything unexpected: the message only, never a stack trace.
             return Fail(ex.Message);
         }
     }

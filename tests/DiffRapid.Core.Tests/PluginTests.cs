@@ -274,7 +274,7 @@ public sealed class PluginTests
     }
 
     [Fact]
-    public void CliDiffRunsUnpackersAndPrediffers()
+    public async Task CliDiffRunsUnpackersAndPrediffers()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(directory);
@@ -284,13 +284,13 @@ public sealed class PluginTests
             var right = Path.Combine(directory, "right.txt");
             File.WriteAllText(left, "b // one\na\n");
             File.WriteAllText(right, "a\nb // two\n");
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet"]));
-            Assert.Equal(0, Program.Main(["diff", left, right, "--quiet", "--prediffer", "IgnoreComments c | SortLines"]));
-            Assert.Equal(1, Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines |"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer", "NoSuchPlugin"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer", "PrettifyJson"]));
-            Assert.Equal(2, Program.Main(["diff", left, right, "--quiet", "--prediffer"]));
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet"]));
+            Assert.Equal(0, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "IgnoreComments c | SortLines"]));
+            Assert.Equal(1, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "SortLines |"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "NoSuchPlugin"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer", "PrettifyJson"]));
+            Assert.Equal(2, await Program.Main(["diff", left, right, "--quiet", "--prediffer"]));
 
             var leftZip = Path.Combine(directory, "left.zip");
             var rightZip = Path.Combine(directory, "right.zip");
@@ -298,10 +298,10 @@ public sealed class PluginTests
             File.WriteAllBytes(leftZip, CreateZip(("a.txt", "one\n"u8.ToArray()), ("b.txt", "two\n"u8.ToArray())));
             File.WriteAllBytes(rightZip, CreateZip(("b.txt", "two\n"u8.ToArray()), ("a.txt", "one\n"u8.ToArray())));
             File.WriteAllBytes(changedZip, CreateZip(("a.txt", "one\n"u8.ToArray()), ("b.txt", "TWO\n"u8.ToArray())));
-            Assert.Equal(2, Program.Main(["diff", leftZip, rightZip, "--quiet"]));
-            Assert.Equal(0, Program.Main(["diff", leftZip, rightZip, "--quiet", "--unpacker", "auto"]));
-            Assert.Equal(1, Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries"]));
-            Assert.Equal(0, Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries", "--prediffer", "ToLower"]));
+            Assert.Equal(2, await Program.Main(["diff", leftZip, rightZip, "--quiet"]));
+            Assert.Equal(0, await Program.Main(["diff", leftZip, rightZip, "--quiet", "--unpacker", "auto"]));
+            Assert.Equal(1, await Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries"]));
+            Assert.Equal(0, await Program.Main(["diff", leftZip, changedZip, "--quiet", "--unpacker", "ZipEntries", "--prediffer", "ToLower"]));
         }
         finally
         {
@@ -310,7 +310,7 @@ public sealed class PluginTests
     }
 
     [Fact]
-    public void CliListsEveryBuiltInPlugin()
+    public async Task CliListsEveryBuiltInPlugin()
     {
         var listing = Program.FormatPlugins(PluginRegistry.Default);
         string[] names =
@@ -321,8 +321,8 @@ public sealed class PluginTests
 
         Assert.All(names, name => Assert.Contains("  " + name, listing));
         Assert.Contains("IgnoreColumns <ranges such as 1-8,20->", listing);
-        Assert.Equal(0, Program.Main(["plugins"]));
-        Assert.Equal(2, Program.Main(["plugins", "extra"]));
+        Assert.Equal(0, await Program.Main(["plugins"]));
+        Assert.Equal(2, await Program.Main(["plugins", "extra"]));
         var parsed = Program.ParsedArgs.Parse(["diff", "a", "b", "--unpacker", "auto", "--prediffer", "SortLines desc"], 1);
         var options = Program.ToPluginOptions(parsed, null)!;
         Assert.Equal(["a", "b"], parsed.Positionals);

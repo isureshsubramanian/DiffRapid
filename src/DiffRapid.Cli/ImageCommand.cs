@@ -8,16 +8,8 @@ namespace DiffRapid.Cli;
 
 internal static partial class Program
 {
-    private static readonly HashSet<string> ImageValueOptions = new(StringComparer.OrdinalIgnoreCase)
+    private static int RunImage(ParsedArgs args)
     {
-        "--tolerance",
-        "--diff-out",
-        "--max-offset",
-    };
-
-    private static int RunImage(string[] rawArgs)
-    {
-        var args = ParsedArgs.Parse(JoinImageOptionValues(rawArgs), 1);
         if (args.Positionals.Count != 2)
         {
             throw new UsageException("image needs two image files.");
@@ -34,50 +26,16 @@ internal static partial class Program
             throw new UsageException("--tolerance must be between 0 and 255.");
         }
 
-        try
+        var left = ImageFile.Load(args.Positionals[0]);
+        var right = ImageFile.Load(args.Positionals[1]);
+        var result = ImageComparer.Compare(left, right, options);
+        WriteImageSummary(args.Positionals[0], args.Positionals[1], result);
+        if (args.Value("diff-out") is { } diffOut)
         {
-            var left = ImageFile.Load(args.Positionals[0]);
-            var right = ImageFile.Load(args.Positionals[1]);
-            var result = ImageComparer.Compare(left, right, options);
-            WriteImageSummary(args.Positionals[0], args.Positionals[1], result);
-            if (args.Value("diff-out") is { } diffOut)
-            {
-                ImageFile.SavePng(ImageOverlay.Highlight(left, right, result), diffOut);
-            }
-
-            return result.AreIdentical ? ExitSame : ExitDifferent;
-        }
-        catch (NotSupportedException ex)
-        {
-            return Fail(ex.Message);
-        }
-        catch (InvalidDataException ex)
-        {
-            return Fail(ex.Message);
-        }
-    }
-
-    /// <summary>Turns "--tolerance 5" into "--tolerance=5" so the shared parser keeps the value with its option.</summary>
-    private static string[] JoinImageOptionValues(string[] rawArgs)
-    {
-        var joined = new List<string>();
-        for (var index = 0; index < rawArgs.Length; index++)
-        {
-            var argument = rawArgs[index];
-            if (index > 0 && ImageValueOptions.Contains(argument))
-            {
-                if (index + 1 >= rawArgs.Length)
-                {
-                    throw new UsageException($"Option '{argument}' needs a value.");
-                }
-
-                argument += "=" + rawArgs[++index];
-            }
-
-            joined.Add(argument);
+            ImageFile.SavePng(ImageOverlay.Highlight(left, right, result), diffOut);
         }
 
-        return joined.ToArray();
+        return result.AreIdentical ? ExitSame : ExitDifferent;
     }
 
     private static void WriteImageSummary(string leftPath, string rightPath, ImageDiffResult result)

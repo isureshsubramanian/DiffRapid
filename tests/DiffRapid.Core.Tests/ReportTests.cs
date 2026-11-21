@@ -276,7 +276,7 @@ public sealed class ReportTests : IDisposable
     }
 
     [Fact]
-    public void Cli_writes_diff_reports_in_each_format()
+    public async Task Cli_writes_diff_reports_in_each_format()
     {
         var left = Path.Combine(_root, "left.txt");
         var right = Path.Combine(_root, "right.txt");
@@ -286,10 +286,10 @@ public sealed class ReportTests : IDisposable
         var markdown = Path.Combine(_root, "report.md");
         var json = Path.Combine(_root, "report.json");
 
-        Assert.Equal(1, Program.Main(["diff", left, right, "--report", "html", "-o", html]));
-        Assert.Equal(1, Program.Main(["diff", left, right, "--report", "md", "-o", markdown, "--left-label", "old"]));
-        Assert.Equal(1, Program.Main(["diff", left, right, "--report=json", "--output", json]));
-        Assert.Equal(2, Program.Main(["diff", left, right, "--report", "pdf", "-o", json]));
+        Assert.Equal(1, await Program.Main(["diff", left, right, "--report", "html", "-o", html]));
+        Assert.Equal(1, await Program.Main(["diff", left, right, "--report", "md", "-o", markdown, "--left-label", "old"]));
+        Assert.Equal(1, await Program.Main(["diff", left, right, "--report=json", "--output", json]));
+        Assert.Equal(2, await Program.Main(["diff", left, right, "--report", "pdf", "-o", json]));
 
         Assert.Contains("<table class=\"sbs\">", File.ReadAllText(html));
         Assert.Contains("```diff\n--- old\n", File.ReadAllText(markdown));
@@ -299,7 +299,7 @@ public sealed class ReportTests : IDisposable
     }
 
     [Fact]
-    public void Cli_folder_report_includes_diffs_on_request()
+    public async Task Cli_folder_report_includes_diffs_on_request()
     {
         var left = Path.Combine(_root, "l");
         var right = Path.Combine(_root, "r");
@@ -310,8 +310,8 @@ public sealed class ReportTests : IDisposable
         var plain = Path.Combine(_root, "plain.html");
         var withDiffs = Path.Combine(_root, "diffs.html");
 
-        Assert.Equal(1, Program.Main(["dir", left, right, "--report", plain]));
-        Assert.Equal(1, Program.Main(["dir", left, right, "--report", withDiffs, "--include-diffs"]));
+        Assert.Equal(1, await Program.Main(["dir", left, right, "--report", plain]));
+        Assert.Equal(1, await Program.Main(["dir", left, right, "--report", withDiffs, "--include-diffs"]));
 
         Assert.DoesNotContain("Changed files", File.ReadAllText(plain));
         Assert.Contains("<mark>new</mark>", File.ReadAllText(withDiffs));

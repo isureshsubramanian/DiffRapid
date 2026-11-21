@@ -10,36 +10,29 @@ internal static partial class Program
 {
     private static int RunApi(ParsedArgs args)
     {
-        try
+        if (args.Positionals.Count == 1)
         {
-            if (args.Positionals.Count == 1)
-            {
-                WriteApi(args.Positionals[0]);
-                return ExitSame;
-            }
-
-            if (args.Positionals.Count != 2)
-            {
-                throw new UsageException("api needs one or two .dll or .nupkg files.");
-            }
-
-            var left = args.Positionals[0];
-            var right = args.Positionals[1];
-            var isPackage = IsPackage(left);
-            if (isPackage != IsPackage(right))
-            {
-                throw new UsageException("api compares a .dll with a .dll, or a .nupkg with a .nupkg.");
-            }
-
-            var breakingOnly = args.Has("breaking-only");
-            return isPackage
-                ? ReportPackages(NuGetPackageReader.Read(left), NuGetPackageReader.Read(right), breakingOnly)
-                : ReportAssemblies(ApiReader.Read(left), ApiReader.Read(right), breakingOnly);
+            WriteApi(args.Positionals[0]);
+            return ExitSame;
         }
-        catch (InvalidDataException exception)
+
+        if (args.Positionals.Count != 2)
         {
-            return Fail(exception.Message);
+            throw new UsageException("api needs one or two .dll or .nupkg files.");
         }
+
+        var left = args.Positionals[0];
+        var right = args.Positionals[1];
+        var isPackage = IsPackage(left);
+        if (isPackage != IsPackage(right))
+        {
+            throw new UsageException("api compares a .dll with a .dll, or a .nupkg with a .nupkg.");
+        }
+
+        var breakingOnly = args.Has("breaking-only");
+        return isPackage
+            ? ReportPackages(NuGetPackageReader.Read(left), NuGetPackageReader.Read(right), breakingOnly)
+            : ReportAssemblies(ApiReader.Read(left), ApiReader.Read(right), breakingOnly);
     }
 
     private static bool IsPackage(string path) => path.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase);

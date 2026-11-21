@@ -67,12 +67,12 @@ internal static partial class Program
                 ThreeWayFolderStatus.RemovedBoth => "removed both",
                 _ => "error",
             };
-            Console.Out.WriteLine($"{label,-20} {item.RelativePath}" + (item.Error is null ? "" : $": {item.Error}"));
+            Console.Out.WriteLine(TerminalText.Escape($"{label,-20} {item.RelativePath}" + (item.Error is null ? "" : $": {item.Error}")));
         }
 
         if (result.Root.Error is not null)
         {
-            Console.Error.WriteLine(result.Root.Error);
+            Console.Error.WriteLine(TerminalText.Escape(result.Root.Error));
         }
 
         Console.Out.WriteLine(string.Join(", ", result.Counts.Where(c => c.Value != 0).Select(c => $"{c.Key}: {c.Value}")));

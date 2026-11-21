@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 
@@ -16,7 +17,16 @@ internal static partial class Program
         var executable = OperatingSystem.IsWindows() ? "diffrapid-mcp.exe" : "diffrapid-mcp";
         var sibling = Path.Combine(AppContext.BaseDirectory, executable);
         var command = File.Exists(sibling) ? sibling : executable;
-        var registration = new { mcpServers = new { diffrapid = new { command, args = Array.Empty<string>() } } };
+        // Each --root becomes an absolute "--root <folder>" pair for the server; without one the server
+        // reads only below the directory the client starts it in.
+        var serverArgs = new List<string>();
+        foreach (var root in args.Values("root"))
+        {
+            serverArgs.Add("--root");
+            serverArgs.Add(Path.GetFullPath(root));
+        }
+
+        var registration = new { mcpServers = new { diffrapid = new { command, args = serverArgs } } };
         Console.Out.WriteLine(JsonSerializer.Serialize(registration, new JsonSerializerOptions { WriteIndented = true }));
         return ExitSame;
     }
