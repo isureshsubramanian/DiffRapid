@@ -69,7 +69,7 @@ internal static class OpenXmlPackages
         };
         foreach (var part in document.GetAllParts())
         {
-            if (part.ContentType.IndexOf("xml", StringComparison.OrdinalIgnoreCase) < 0)
+            if (!IsXmlPart(part))
             {
                 continue;
             }
@@ -81,6 +81,24 @@ internal static class OpenXmlPackages
                 ExtractLimits.CheckDepth(reader.Depth);
             }
         }
+    }
+
+    // Only parts the SDK parses as XML. Every Office content type contains "xml", including binary ones such as the
+    // printer settings Excel saves with a page setup, so the test is the "+xml" suffix or a plain XML type. Images
+    // (an SVG may carry a DOCTYPE) and embedded packages are never parsed by the SDK or the extractors.
+    private static bool IsXmlPart(OpenXmlPart part)
+    {
+        if (part is ImagePart or EmbeddedPackagePart or EmbeddedObjectPart)
+        {
+            return false;
+        }
+
+        var type = part.ContentType;
+        var parameters = type.IndexOf(';');
+        type = (parameters < 0 ? type : type.Substring(0, parameters)).Trim();
+        return type.EndsWith("+xml", StringComparison.OrdinalIgnoreCase)
+            || type.Equals("application/xml", StringComparison.OrdinalIgnoreCase)
+            || type.Equals("text/xml", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDamagedPackage(Exception exception) =>

@@ -196,6 +196,33 @@ public sealed class DocumentLimitsTests
     }
 
     [Fact]
+    public void BinaryAndImagePartsAreNotScannedAsXml()
+    {
+        // Excel saves binary printer settings with a page setup; Word may hold an SVG with a DOCTYPE. Neither is XML
+        // the SDK parses, so neither makes the document unreadable.
+        var stream = new MemoryStream();
+        using (var document = SpreadsheetDocument.Create(stream, SpreadsheetDocumentType.Workbook))
+        {
+            var workbookPart = document.AddWorkbookPart();
+            var sheet = workbookPart.AddNewPart<WorksheetPart>();
+            sheet.Worksheet = new S.Worksheet(new S.SheetData(new S.Row(new S.Cell { CellValue = new S.CellValue("7"), DataType = S.CellValues.Number })));
+            workbookPart.Workbook = new S.Workbook(new S.Sheets(
+                new S.Sheet { Name = "Data", SheetId = 1, Id = workbookPart.GetIdOfPart(sheet) }));
+            var printer = sheet.AddNewPart<SpreadsheetPrinterSettingsPart>();
+            using var printerData = new MemoryStream([0x00, 0x01, 0x3C, 0x00, 0xFF]);
+            printer.FeedData(printerData);
+            var drawing = sheet.AddNewPart<DrawingsPart>();
+            drawing.WorksheetDrawing = new DocumentFormat.OpenXml.Drawing.Spreadsheet.WorksheetDrawing();
+            var image = drawing.AddImagePart(ImagePartType.Svg);
+            using var svg = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("<!DOCTYPE svg><svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
+            image.FeedData(svg);
+        }
+
+        stream.Position = 0;
+        Assert.Contains("7", XlsxText.Extract(stream), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PartsAreOpenedWithACharacterLimit()
     {
         using var stream = Docx(body => body.Append(new W.Paragraph(new W.Run(new W.Text(new string('x', 500))))));
