@@ -84,6 +84,22 @@ public sealed class PerfGuardTests
     }
 
     [Fact]
+    public void Moved_block_detection_bounds_work_for_repeated_lines()
+    {
+        // Every removed brace matches every added brace in the other hunk, but only as a one-line, insignificant
+        // run; without a candidate limit each of the 20,000 starts scans all 20,000 candidates.
+        const int count = 20000;
+        var left = string.Concat(Enumerable.Range(0, count).Select(index => $"}}\nold {index}\n")) + "anchor\n";
+        var right = "anchor\n" + string.Concat(Enumerable.Range(0, count).Select(index => $"}}\nnew {index}\n"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var result = TextComparer.Compare(TextDocument.Parse(left), TextDocument.Parse(right), cancellationToken: timeout.Token);
+
+        Assert.Equal(2, result.Hunks.Count);
+        Assert.Empty(result.MovedBlocks);
+    }
+
+    [Fact]
     public void Interned_keys_preserve_content_and_line_ending_identity()
     {
         var document = TextDocument.Parse("a\na\r\na\ra");

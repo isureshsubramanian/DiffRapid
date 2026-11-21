@@ -136,6 +136,19 @@ public sealed class SemanticTests
     }
 
     [Fact]
+    public void MovesAcrossTypesHonourTheSimilarityPairLimit()
+    {
+        var left = "class A { int M(int x) { var y = x * 2; y += 3; y -= 1; return y; } }\nclass B { }\n";
+        var identical = "class A { }\nclass B { int M(int x) { var y = x * 2; y += 3; y -= 1; return y; } }\n";
+        var similar = "class A { }\nclass B { int M(int x) { var y = x * 2; y += 3; y -= 2; return y; } }\n";
+        var unscored = new MemberMatchOptions { MaxSimilarityPairs = 0 };
+
+        Assert.Contains(MemberMatcher.Compare(left, similar).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+        Assert.DoesNotContain(MemberMatcher.Compare(left, similar, unscored).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+        Assert.Contains(MemberMatcher.Compare(left, identical, unscored).Flatten(), entry => entry.Status == MemberDiffStatus.Moved);
+    }
+
+    [Fact]
     public void DetectsMemberReorderedWithinType()
     {
         var area = "\n        public int Area(int scale)\n        {\n            var total = Width * Width;\n            return total * scale;\n        }\n";
@@ -224,6 +237,35 @@ public sealed class SemanticTests
         Assert.All(unimportant, hunk => Assert.Equal(CSharpUnimportantReason.UsingOrder, hunk.Reason));
         Assert.Equal(Compare(left, right).Hunks.Count, unimportant.Count);
         Assert.True(MemberMatcher.Compare(left, right).AreEqual);
+    }
+
+    [Theory]
+    [InlineData("class C { string s = @\"a\nb\"; }\n", "class C { string s = @\"a b\"; }\n")]
+    [InlineData("class C { string s = \"\"\"\na\nb\n\"\"\"; }\n", "class C { string s = \"\"\"\na b\n\"\"\"; }\n")]
+    [InlineData("class C { string s = @\"a\n  b\"; }\n", "class C { string s = @\"a\n    b\"; }\n")]
+    public void ChangesInsideMultiLineStringsAreImportant(string left, string right)
+    {
+        Assert.Empty(Classify(left, right));
+    }
+
+    [Fact]
+    public void ExplicitImplementationsOfDifferentGenericInterfacesKeepTheirOwnIdentity()
+    {
+        var text = "class C : IFoo<int>, IFoo<string> { void IFoo<int>.Bar() { } void IFoo<string>.Bar() { } }\n";
+
+        var members = MemberMatcher.ListMembers(text).SelectMany(member => member.Children).ToList();
+
+        Assert.Equal(2, members.Count);
+        Assert.Equal(2, members.Select(member => member.Key).Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData("class C { void IFoo<int.Bar() {} }\n")]
+    [InlineData("class C { void Bar<T() {} }\n")]
+    public void MalformedGenericNamesDoNotThrow(string text)
+    {
+        Assert.NotEmpty(MemberMatcher.ListMembers(text));
+        Assert.True(MemberMatcher.Compare(text, text).AreEqual);
     }
 
     [Fact]

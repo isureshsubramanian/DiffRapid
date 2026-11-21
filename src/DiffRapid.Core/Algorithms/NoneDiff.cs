@@ -8,17 +8,7 @@ public sealed class NoneDiff : IDiffAlgorithm
     public void Compare(int[] a, int[] b, bool[] changedA, bool[] changedB, CancellationToken cancellationToken)
     {
         int aLo = 0, bLo = 0, aHi = a.Length, bHi = b.Length;
-        while (aLo < aHi && bLo < bHi && a[aLo] == b[bLo])
-        {
-            aLo++;
-            bLo++;
-        }
-
-        while (aLo < aHi && bLo < bHi && a[aHi - 1] == b[bHi - 1])
-        {
-            aHi--;
-            bHi--;
-        }
+        MyersDiff.TrimCommonEnds(a, ref aLo, ref aHi, b, ref bLo, ref bHi);
 
         for (var i = aLo; i < aHi; i++)
         {

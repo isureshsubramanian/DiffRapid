@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using DiffRapid.Core.Algorithms;
 using DiffRapid.Core.Text;
@@ -44,10 +45,12 @@ public static class TextComparer
         if (lineFilters.Length > 0)
         {
             hunks = hunks.Select(hunk =>
-                Enumerable.Range(hunk.LeftStart, hunk.LeftCount).All(i => lineFilters.Any(f => f.IsMatch(left[i].Content))) &&
-                Enumerable.Range(hunk.RightStart, hunk.RightCount).All(i => lineFilters.Any(f => f.IsMatch(right[i].Content)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return AllFiltered(lineFilters, left, hunk.LeftStart, hunk.LeftEnd) && AllFiltered(lineFilters, right, hunk.RightStart, hunk.RightEnd)
                     ? hunk with { Significance = DiffSignificance.Ignored }
-                    : hunk).ToList();
+                    : hunk;
+            }).ToList();
         }
 
         IReadOnlyList<MovedBlock> moved = options.DetectMovedBlocks
@@ -100,6 +103,37 @@ public static class TextComparer
         }
 
         return hunks;
+    }
+
+    private static bool AllFiltered(Regex[] filters, TextDocument document, int start, int end)
+    {
+        for (var i = start; i < end; i++)
+        {
+            var matched = false;
+            foreach (var filter in filters)
+            {
+                try
+                {
+                    matched = filter.IsMatch(document[i].Content);
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    throw FilterRegex.MatchTimedOut(filter.ToString());
+                }
+
+                if (matched)
+                {
+                    break;
+                }
+            }
+
+            if (!matched)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static List<DiffHunk> ClassifyBlankLineHunks(List<DiffHunk> hunks, TextDocument left, TextDocument right)

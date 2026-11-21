@@ -290,27 +290,39 @@ public static class MemberMatcher
             return candidates;
         }
 
-        /// <summary>Pairs leftovers that have the same identity in different containers, when the bodies are similar.</summary>
+        /// <summary>
+        /// Pairs leftovers that have the same identity in different containers, when the bodies are similar. As in
+        /// <see cref="FindSimilar"/>, an identity shared by more than <see cref="MemberMatchOptions.MaxSimilarityPairs"/>
+        /// left-by-right pairs only pairs identical bodies. Scores are kept across passes.
+        /// </summary>
         private void MatchMovesAcrossContainers()
         {
+            var scores = new Dictionary<(CSharpMember Left, CSharpMember Right), double>();
             var found = true;
             while (found)
             {
+                // Another pass only finds something when a moved container brought new unmatched children.
                 found = false;
                 var byKey = _unmatchedLeft
                     .Where(member => !_leftDiffs.ContainsKey(member))
                     .ToLookup(member => member.Key, StringComparer.Ordinal);
-                foreach (var right in _unmatchedRight.ToList())
+                var rights = _unmatchedRight.Where(member => !_rightDiffs.ContainsKey(member)).ToList();
+                var rightCounts = rights
+                    .GroupBy(member => member.Key, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+                foreach (var right in rights)
                 {
                     _cancellationToken.ThrowIfCancellationRequested();
-                    if (_rightDiffs.ContainsKey(right))
+                    var group = byKey[right.Key];
+                    var scoreAll = (long)group.Count() * rightCounts[right.Key] <= _options.MaxSimilarityPairs;
+                    var candidates = group.Where(left => !_leftDiffs.ContainsKey(left));
+                    if (!scoreAll)
                     {
-                        continue;
+                        candidates = candidates.Where(left => Tokens(left).SequenceEqual(Tokens(right)));
                     }
 
-                    var best = byKey[right.Key]
-                        .Where(left => !_leftDiffs.ContainsKey(left))
-                        .Select(left => (Left: left, Similarity: Similarity(left, right)))
+                    var best = candidates
+                        .Select(left => (Left: left, Similarity: scoreAll ? CachedSimilarity(scores, left, right) : 1.0))
                         .Where(candidate => candidate.Similarity >= _options.SimilarityThreshold)
                         .OrderByDescending(candidate => candidate.Similarity)
                         .FirstOrDefault();
@@ -320,13 +332,24 @@ public static class MemberMatcher
                     }
 
                     Pair(best.Left, right, MemberDiffStatus.Moved, best.Similarity);
-                    found = true;
                     if (best.Left.IsContainer && right.IsContainer)
                     {
                         MatchLevel(best.Left.Children, right.Children);
+                        found = true;
                     }
                 }
             }
+        }
+
+        private double CachedSimilarity(Dictionary<(CSharpMember Left, CSharpMember Right), double> scores, CSharpMember left, CSharpMember right)
+        {
+            if (!scores.TryGetValue((left, right), out var similarity))
+            {
+                similarity = Similarity(left, right);
+                scores.Add((left, right), similarity);
+            }
+
+            return similarity;
         }
 
         private void AddLeftovers()

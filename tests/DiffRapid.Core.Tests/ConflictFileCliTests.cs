@@ -48,7 +48,7 @@ public sealed class ConflictFileCliTests
             var input = Path.Combine(directory, "file.txt");
             File.WriteAllText(input, "plain");
             Assert.Equal(1, Program.Main(["split-conflicts", input]));
-            File.WriteAllText(input, "=======\n");
+            File.WriteAllText(input, "<<<<<<<\n");
             Assert.Equal(2, Program.Main(["split-conflicts", input]));
             Assert.Equal(2, Program.Main(["split-conflicts"]));
             Assert.Equal(2, Program.Main(["split-conflicts", input, "--out-dir"]));

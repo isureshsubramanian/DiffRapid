@@ -71,17 +71,7 @@ public sealed class HistogramDiff : IDiffAlgorithm
             {
                 _cancellationToken.ThrowIfCancellationRequested();
 
-                while (aLo < aHi && bLo < bHi && _a[aLo] == _b[bLo])
-                {
-                    aLo++;
-                    bLo++;
-                }
-
-                while (aLo < aHi && bLo < bHi && _a[aHi - 1] == _b[bHi - 1])
-                {
-                    aHi--;
-                    bHi--;
-                }
+                MyersDiff.TrimCommonEnds(_a, ref aLo, ref aHi, _b, ref bLo, ref bHi);
 
                 if (aLo == aHi || bLo == bHi || depth > MaxDepth
                     || !FindBestRegion(aLo, aHi, bLo, bHi, out var aStart, out var aEnd, out var bStart, out var bEnd))
@@ -117,7 +107,7 @@ public sealed class HistogramDiff : IDiffAlgorithm
             {
                 var next = j + 1;
                 var key = _b[j];
-                var occurrences = key < _count.Length ? _count[key] : 0;
+                var occurrences = (uint)key < (uint)_count.Length ? _count[key] : 0;
                 if (occurrences > 0 && occurrences <= bestCount)
                 {
                     for (var ai = _first[key]; ai >= 0; ai = _next[ai])
