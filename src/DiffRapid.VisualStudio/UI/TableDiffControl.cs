@@ -990,8 +990,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         var dialog = new SaveFileDialog
         {
             Title = "Export table comparison report",
-            FileName = string.Concat((Path.GetFileNameWithoutExtension(_leftPath) + " vs " + Path.GetFileNameWithoutExtension(_rightPath) + " report")
-                .Select(c => Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            FileName = UiText.SafeFileName(Path.GetFileNameWithoutExtension(_leftPath) + " vs " + Path.GetFileNameWithoutExtension(_rightPath) + " report"),
             Filter = "HTML report (*.html)|*.html|Markdown report (*.md)|*.md",
             AddExtension = true,
             OverwritePrompt = true,
@@ -1005,7 +1004,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
         var options = new TableReportOptions { Title = leftName + " ↔ " + rightName, LeftLabel = _leftPath, RightLabel = _rightPath };
         try
         {
-            using (var writer = new StreamWriter(dialog.FileName, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            UiText.WriteText(dialog.FileName, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), writer =>
             {
                 if (html)
                 {
@@ -1015,7 +1014,7 @@ internal sealed class TableDiffControl : DockPanel, IComparisonView
                 {
                     TableReportWriter.WriteMarkdown(_outcome.Result, options, writer);
                 }
-            }
+            });
 
             _position.Text = $"Saved the report to {dialog.FileName}";
             if (html)

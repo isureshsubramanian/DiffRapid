@@ -789,7 +789,8 @@ internal sealed class MergeControl : DockPanel, IComparisonView, IOleCommandTarg
             var bytes = new byte[preamble.Length + body.Length];
             Buffer.BlockCopy(preamble, 0, bytes, 0, preamble.Length);
             Buffer.BlockCopy(body, 0, bytes, preamble.Length, body.Length);
-            File.WriteAllBytes(_resultPath, bytes);
+            // Through a temporary file: the result can be one of the merged files, which a failed write must not truncate.
+            DiffRapid.Core.IO.AtomicFile.WriteAllBytes(_resultPath, bytes);
             _savedText = text;
             _resultHeader.SetDirty(false);
             _position.Text = $"Saved {Path.GetFileName(_resultPath)}";

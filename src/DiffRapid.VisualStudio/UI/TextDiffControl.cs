@@ -398,10 +398,9 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var cancellation = new CancellationTokenSource();
         _compareCancellation = cancellation;
 
+        // Snapshots never change, so their text is read on the background thread with the compare.
         var leftSnapshot = _left.Buffer.CurrentSnapshot;
         var rightSnapshot = _right.Buffer.CurrentSnapshot;
-        var leftText = leftSnapshot.GetText();
-        var rightText = rightSnapshot.GetText();
         var options = _options;
         _verdict.Text = "Comparing…";
         _verdict.ClearValue(TextBlock.ForegroundProperty);
@@ -413,7 +412,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             {
                 var stopwatch = Stopwatch.StartNew();
                 var unimportant = _greyUnimportant ? UnimportantClassifier(_left.Path) : null;
-                var model = await Task.Run(() => DiffModel.Build(leftText, rightText, options, cancellation.Token, unimportant), cancellation.Token);
+                var model = await Task.Run(() => DiffModel.Build(leftSnapshot.GetText(), rightSnapshot.GetText(), options, cancellation.Token, unimportant), cancellation.Token);
                 var elapsed = stopwatch.Elapsed;
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellation.Token);
                 if (!_disposed && !cancellation.IsCancellationRequested)
@@ -513,44 +512,51 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// </summary>
     private void CreatePatch()
     {
-        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
-        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
-        var result = TextComparer.Compare(left, right, CompareOptions.Default with { Algorithm = _options.Algorithm });
-        if (result.AreEqual)
-        {
-            _position.Text = "The files are identical: there is nothing to put in a patch";
-            return;
-        }
-
+        ThreadHelper.ThrowIfNotOnUIThread();
         var leftName = System.IO.Path.GetFileName(_left.Path);
         var rightName = System.IO.Path.GetFileName(_right.Path);
-        var message = PatchExport.Save(
-            System.IO.Path.GetFileNameWithoutExtension(rightName),
-            writer => UnifiedDiffWriter.Write(writer, result, "a/" + leftName, "b/" + rightName));
-        if (message is not null)
+        CompareInBackground(CompareOptions.Default with { Algorithm = _options.Algorithm }, "Could not create the patch: ", async result =>
         {
-            _position.Text = message;
-        }
+            if (result.AreEqual)
+            {
+                _position.Text = "The files are identical: there is nothing to put in a patch";
+                return;
+            }
+
+            if (PatchExport.AskPath(System.IO.Path.GetFileNameWithoutExtension(rightName)) is not { } path)
+            {
+                return;
+            }
+
+            _position.Text = "Creating the patch…";
+            var message = await Task.Run(() => PatchExport.Write(path, writer => UnifiedDiffWriter.Write(writer, result, "a/" + leftName, "b/" + rightName)), _package.DisposalToken);
+            await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_package.DisposalToken);
+            if (!_disposed)
+            {
+                _position.Text = message;
+            }
+        });
     }
 
     /// <summary>Asks the configured AI service to explain the differences as shown, unsaved edits included.</summary>
     private void Explain()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
-        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
-        var result = TextComparer.Compare(left, right, _options);
-        if (result.AreEqual)
-        {
-            _position.Text = "The files are identical: there is nothing to explain";
-            return;
-        }
-
         var leftName = System.IO.Path.GetFileName(LeftLabel ?? _left.Path);
         var rightName = System.IO.Path.GetFileName(RightLabel ?? _right.Path);
-        var diff = UnifiedDiffWriter.Write(result, "a/" + leftName, "b/" + rightName);
         var language = System.IO.Path.GetExtension(_right.Path).TrimStart('.');
-        _ai.Ask($"What changed: {leftName} → {rightName}", builder => builder.ExplainDiff(diff, leftName, rightName, language.Length == 0 ? null : language));
+        CompareInBackground(_options, "Could not compare the files: ", result =>
+        {
+            if (result.AreEqual)
+            {
+                _position.Text = "The files are identical: there is nothing to explain";
+                return Task.CompletedTask;
+            }
+
+            var diff = UnifiedDiffWriter.Write(result, "a/" + leftName, "b/" + rightName);
+            _ai.Ask($"What changed: {leftName} → {rightName}", builder => builder.ExplainDiff(diff, leftName, rightName, language.Length == 0 ? null : language));
+            return Task.CompletedTask;
+        });
     }
 
     /// <summary>
@@ -559,9 +565,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
     /// </summary>
     private void ExportReport()
     {
-        var left = TextDocument.Parse(_left.Buffer.CurrentSnapshot.GetText());
-        var right = TextDocument.Parse(_right.Buffer.CurrentSnapshot.GetText());
-        var result = TextComparer.Compare(left, right, _options);
+        ThreadHelper.ThrowIfNotOnUIThread();
         var leftLabel = LeftLabel ?? _left.Path;
         var rightLabel = RightLabel ?? _right.Path;
         var leftName = System.IO.Path.GetFileName(leftLabel);
@@ -570,8 +574,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Export comparison report",
-            FileName = string.Concat((leftName + " vs " + rightName + " report")
-                .Select(c => Array.IndexOf(System.IO.Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            FileName = UiText.SafeFileName(leftName + " vs " + rightName + " report"),
             Filter = "HTML report, side by side (*.html)|*.html|Markdown for a pull request (*.md)|*.md",
             AddExtension = true,
             OverwritePrompt = true,
@@ -581,6 +584,7 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             return;
         }
 
+        var path = dialog.FileName;
         var html = dialog.FilterIndex == 1;
         var options = new FileReportOptions
         {
@@ -590,31 +594,73 @@ internal sealed class TextDiffControl : DockPanel, IComparisonView, IOleCommandT
             GeneratedAt = DateTimeOffset.Now,
         };
 
-        try
+        _position.Text = "Saving the report…";
+        CompareInBackground(_options, "Could not save the report: ", async result =>
         {
-            using (var writer = new StreamWriter(dialog.FileName, append: false, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            await Task.Run(
+                () => UiText.WriteText(path, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), writer =>
+                {
+                    if (html)
+                    {
+                        FileReportWriter.WriteHtml(result, options, writer);
+                    }
+                    else
+                    {
+                        writer.NewLine = "\n";
+                        FileReportWriter.WriteMarkdown(result, options, writer);
+                    }
+                }),
+                _package.DisposalToken);
+            await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_package.DisposalToken);
+            if (_disposed)
             {
-                if (html)
-                {
-                    FileReportWriter.WriteHtml(result, options, writer);
-                }
-                else
-                {
-                    writer.NewLine = "\n";
-                    FileReportWriter.WriteMarkdown(result, options, writer);
-                }
+                return;
             }
 
-            _position.Text = $"Saved the report to {dialog.FileName}";
+            _position.Text = $"Saved the report to {path}";
             if (html)
             {
-                Process.Start(dialog.FileName);
+                Process.Start(path);
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        });
+    }
+
+    /// <summary>
+    /// Compares the buffers as they are now (unsaved edits included) on a background thread, then runs
+    /// <paramref name="then"/> on the UI thread with the result. Failures show in the footer after <paramref name="failure"/>.
+    /// </summary>
+    private void CompareInBackground(CompareOptions options, string failure, Func<TextDiffResult, Task> then)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // Snapshots never change, so their text can be read on the background thread.
+        var leftSnapshot = _left.Buffer.CurrentSnapshot;
+        var rightSnapshot = _right.Buffer.CurrentSnapshot;
+        _package.JoinableTaskFactory.RunAsync(async () =>
         {
-            _position.Text = $"Could not save the report: {ex.Message}";
-        }
+            try
+            {
+                var result = await Task.Run(
+                    () => TextComparer.Compare(TextDocument.Parse(leftSnapshot.GetText()), TextDocument.Parse(rightSnapshot.GetText()), options),
+                    _package.DisposalToken);
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_package.DisposalToken);
+                if (!_disposed)
+                {
+                    await then(result);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (!_disposed)
+                {
+                    _position.Text = failure + ex.Message;
+                }
+            }
+        }).FileAndForget("DiffRapid/TextCompareAction");
     }
 
     private const string StructureSuffix = " (structure)";

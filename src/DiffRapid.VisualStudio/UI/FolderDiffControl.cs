@@ -1196,8 +1196,7 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         var dialog = new SaveFileDialog
         {
             Title = "Export folder comparison report",
-            FileName = string.Concat((left + " vs " + right + " report")
-                .Select(c => Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? '_' : c)),
+            FileName = UiText.SafeFileName(left + " vs " + right + " report"),
             Filter = "HTML report, differences only (*.html)|*.html"
                 + "|HTML report, all files (*.html)|*.html"
                 + "|CSV, differences only (*.csv)|*.csv"
@@ -1221,31 +1220,83 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             IncludeIdentical = dialog.FilterIndex % 2 == 0,
         };
 
+        var result = _result;
+        var path = dialog.FileName;
+        RunExport(
+            "Saving the report…",
+            "Could not save the report: ",
+            () =>
+            {
+                // CSV gets a byte order mark so Excel reads non-ASCII paths correctly.
+                UiText.WriteText(path, new UTF8Encoding(encoderShouldEmitUTF8Identifier: !html), writer =>
+                {
+                    if (html)
+                    {
+                        FolderReportWriter.WriteHtml(result, options, writer);
+                    }
+                    else
+                    {
+                        FolderReportWriter.WriteCsv(result, options, writer);
+                    }
+                });
+                return $"Saved the report to {path}";
+            },
+            html ? () => OpenReport(path) : null);
+    }
+
+    private void OpenReport(string path)
+    {
         try
         {
-            // CSV gets a byte order mark so Excel reads non-ASCII paths correctly.
-            using (var writer = new StreamWriter(dialog.FileName, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: !html)))
+            Process.Start(path);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            _position.Text = $"Saved the report, but could not open it: {ex.Message}";
+        }
+    }
+
+    // Writes a report or patch off the UI thread; the buttons stay disabled and the footer says so until it is done.
+    // The work returns the footer message; when it throws, the footer shows the failure instead and done is skipped.
+    private void RunExport(string busyText, string failure, Func<string> work, Action? done = null)
+    {
+        _busy = true;
+        UpdateActionButtons();
+        _position.Text = busyText;
+        _package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            string? message = null;
+            var succeeded = false;
+            try
             {
-                if (html)
-                {
-                    FolderReportWriter.WriteHtml(_result, options, writer);
-                }
-                else
-                {
-                    FolderReportWriter.WriteCsv(_result, options, writer);
-                }
+                message = await Task.Run(work, _package.DisposalToken);
+                succeeded = true;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                message = failure + ex.Message;
+            }
+            finally
+            {
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                _busy = false;
             }
 
-            _position.Text = $"Saved the report to {dialog.FileName}";
-            if (html)
+            if (_disposed || message is null)
             {
-                Process.Start(dialog.FileName);
+                return;
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        {
-            _position.Text = $"Could not save the report: {ex.Message}";
-        }
+
+            UpdateActionButtons();
+            _position.Text = message;
+            if (succeeded)
+            {
+                done?.Invoke();
+            }
+        }).FileAndForget("DiffRapid/FolderExport");
     }
 
     // One git-style patch for every changed, added and removed text file; it always compares exact content.
@@ -1258,16 +1309,19 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
 
         var result = _result;
         var names = ReportNames();
-        var message = PatchExport.Save(
-            names.Left.Replace(Path.DirectorySeparatorChar, ' ') + " to " + names.Right.Replace(Path.DirectorySeparatorChar, ' '),
-            writer => FolderPatchWriter.Write(writer, result, DiffRapid.Core.Comparison.CompareOptions.Default));
-        if (message is not null)
+        var path = PatchExport.AskPath(names.Left.Replace(Path.DirectorySeparatorChar, ' ') + " to " + names.Right.Replace(Path.DirectorySeparatorChar, ' '));
+        if (path is null)
         {
-            _position.Text = message;
+            return;
         }
+
+        RunExport(
+            "Creating the patch…",
+            "Could not save the patch: ",
+            () => PatchExport.Write(path, writer => FolderPatchWriter.Write(writer, result, DiffRapid.Core.Comparison.CompareOptions.Default)));
     }
 
-    // Previews a sync profile over the current results, then runs it; deletions go to the Recycle Bin.
+    // Previews a sync profile over the current results, then runs it; deletions go to the Recycle Bin where there is one.
     private void Synchronize()
     {
         if (_scanning || _busy || _result is null)
