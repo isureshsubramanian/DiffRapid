@@ -26,7 +26,7 @@ internal sealed partial class ApiSurfaceBuilder
         var visible = new List<TypeDefinitionHandle>();
         foreach (var handle in _reader.TypeDefinitions)
         {
-            if (IsVisible(_reader.GetTypeDefinition(handle)))
+            if (IsVisible(_reader.GetTypeDefinition(handle), 0))
             {
                 visible.Add(handle);
             }
@@ -45,7 +45,7 @@ internal sealed partial class ApiSurfaceBuilder
         return _entries;
     }
 
-    private bool IsVisible(TypeDefinition definition)
+    private bool IsVisible(TypeDefinition definition, int depth)
     {
         switch (definition.Attributes & TypeAttributes.VisibilityMask)
         {
@@ -54,7 +54,8 @@ internal sealed partial class ApiSurfaceBuilder
             case TypeAttributes.NestedPublic:
             case TypeAttributes.NestedFamily:
             case TypeAttributes.NestedFamORAssem:
-                return IsVisible(_reader.GetTypeDefinition(definition.GetDeclaringType()));
+                MetadataNames.CheckNestingDepth(depth + 1);
+                return IsVisible(_reader.GetTypeDefinition(definition.GetDeclaringType()), depth + 1);
             default:
                 return false;
         }
@@ -292,8 +293,9 @@ internal sealed partial class ApiSurfaceBuilder
             SimpleName = tick < 0 ? name : name.Substring(0, tick);
             var outermost = Definition;
             byte? context = MetadataNames.NullableContext(reader, Definition.GetCustomAttributes());
-            while (!outermost.GetDeclaringType().IsNil)
+            for (var depth = 1; !outermost.GetDeclaringType().IsNil; depth++)
             {
+                MetadataNames.CheckNestingDepth(depth);
                 outermost = reader.GetTypeDefinition(outermost.GetDeclaringType());
                 context ??= MetadataNames.NullableContext(reader, outermost.GetCustomAttributes());
             }

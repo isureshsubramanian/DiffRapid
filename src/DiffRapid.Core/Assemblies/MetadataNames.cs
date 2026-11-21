@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
 using System.Text;
@@ -20,31 +21,57 @@ internal static class MetadataNames
     public const string IsExternalInit = CompilerServices + "IsExternalInit";
     public const string ParamArrayAttribute = "System.ParamArrayAttribute";
 
+    /// <summary>
+    /// The most levels of type nesting followed for one name. C# code rarely nests more than a few levels;
+    /// 64 is an estimate with wide headroom that still stops a circular chain at once.
+    /// </summary>
+    public const int MaxNestingDepth = 64;
+
     /// <summary>The namespace-qualified name of a type definition; nested types are joined with '.'.</summary>
+    /// <exception cref="InvalidDataException">The declaring types nest deeper than <see cref="MaxNestingDepth"/> or form a cycle.</exception>
     public static string FullName(MetadataReader reader, TypeDefinitionHandle handle)
     {
         var definition = reader.GetTypeDefinition(handle);
         var name = reader.GetString(definition.Name);
         var declaring = definition.GetDeclaringType();
-        if (!declaring.IsNil)
+        for (var depth = 1; !declaring.IsNil; depth++)
         {
-            return FullName(reader, declaring) + "." + name;
+            CheckNestingDepth(depth);
+            definition = reader.GetTypeDefinition(declaring);
+            name = reader.GetString(definition.Name) + "." + name;
+            declaring = definition.GetDeclaringType();
         }
 
         return Qualify(reader.GetString(definition.Namespace), name);
     }
 
     /// <summary>The namespace-qualified name of a type reference; nested types are joined with '.'.</summary>
+    /// <exception cref="InvalidDataException">The resolution scopes nest deeper than <see cref="MaxNestingDepth"/> or form a cycle.</exception>
     public static string FullName(MetadataReader reader, TypeReferenceHandle handle)
     {
         var reference = reader.GetTypeReference(handle);
         var name = reader.GetString(reference.Name);
-        if (reference.ResolutionScope.Kind == HandleKind.TypeReference)
+        for (var depth = 1; reference.ResolutionScope.Kind == HandleKind.TypeReference; depth++)
         {
-            return FullName(reader, (TypeReferenceHandle)reference.ResolutionScope) + "." + name;
+            CheckNestingDepth(depth);
+            reference = reader.GetTypeReference((TypeReferenceHandle)reference.ResolutionScope);
+            name = reader.GetString(reference.Name) + "." + name;
         }
 
         return Qualify(reader.GetString(reference.Namespace), name);
+    }
+
+    /// <summary>
+    /// Stops a chain of declaring types or resolution scopes that a damaged or crafted assembly makes
+    /// circular or deeper than any real nesting.
+    /// </summary>
+    /// <exception cref="InvalidDataException"><paramref name="depth"/> is past <see cref="MaxNestingDepth"/>.</exception>
+    public static void CheckNestingDepth(int depth)
+    {
+        if (depth > MaxNestingDepth)
+        {
+            throw new InvalidDataException($"The assembly's types are nested more than {MaxNestingDepth} levels deep, or their nesting is circular.");
+        }
     }
 
     /// <summary>The full name of a type definition or reference, or null for a type specification.</summary>
