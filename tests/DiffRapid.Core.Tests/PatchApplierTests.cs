@@ -78,6 +78,15 @@ public sealed class PatchApplierTests
         Assert.Equal("c d\n", result.Text);
     }
 
+    [Fact]
+    public void WhitespaceMatchingFollowsEarlierHunkEdits()
+    {
+        var file = Patch.Parse("--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n-a  1\n+A\n+B\n@@ -3 +4 @@\n-c  3\n+C\n").Files[0];
+        var result = PatchApplier.Apply("a 1\nb\nc\t3\n", file, new PatchApplyOptions { IgnoreWhitespace = true });
+        Assert.True(result.Succeeded);
+        Assert.Equal("A\nB\nb\nC\n", result.Text);
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(3)]
