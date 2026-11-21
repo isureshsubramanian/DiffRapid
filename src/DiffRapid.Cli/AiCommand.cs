@@ -59,7 +59,7 @@ internal static partial class Program
             var prompt = builder.ExplainDiff(diff, Path.GetFileName(files[0]), Path.GetFileName(files[1]),
                 cancellationToken: cancellationToken);
             var reply = await client.CompleteAsync(prompt, redact, cancellationToken).ConfigureAwait(false);
-            output.WriteLine(HideAiCredential(reply, endpoint.ApiKey));
+            output.WriteLine(TerminalText.Escape(HideAiCredential(reply, endpoint.ApiKey), keepLineFeeds: true));
         }
 
         return ExitSame;
@@ -242,11 +242,11 @@ internal static partial class Program
         foreach (var line in resolution.Lines)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            output.WriteLine(HideAiCredential(line, key));
+            output.WriteLine(TerminalText.Escape(HideAiCredential(line, key), keepLineFeeds: true));
         }
 
         output.WriteLine(fence);
-        output.WriteLine(HideAiCredential(resolution.Reasoning, key));
+        output.WriteLine(TerminalText.Escape(HideAiCredential(resolution.Reasoning, key), keepLineFeeds: true));
     }
 
     private static string HideAiCredential(string text, string? key) => string.IsNullOrEmpty(key) ? text : text.Replace(key, "[REDACTED]");

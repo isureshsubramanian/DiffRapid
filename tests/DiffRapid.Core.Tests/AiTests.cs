@@ -558,11 +558,13 @@ public sealed class AiTests
                 Assert.Contains("@@", content);
                 Assert.Equal(noRedact, content.Contains("old-secret", StringComparison.Ordinal));
                 Assert.Equal(noRedact, content.Contains("new-secret", StringComparison.Ordinal));
-                return Reply("Changed the password. test-credential");
+                return Reply("Changed the password. test-credential\u001b]0;pwned\u0007\nSecond line.");
             });
             Assert.Equal(0, await Program.RunExplainAsync(arguments.ToArray(), output, handler));
             Assert.Equal(1, calls);
             Assert.Contains("Changed the password.", output.ToString());
+            Assert.Contains("\\x1B]0;pwned\\x07\nSecond line.", output.ToString());
+            Assert.DoesNotContain('\u001b', output.ToString());
             Assert.DoesNotContain("test-credential", output.ToString());
             Assert.Equal("password=old-secret\n", File.ReadAllText(left));
             Assert.Equal("password=new-secret\n", File.ReadAllText(right));

@@ -173,6 +173,29 @@ public sealed class CliTests
         }
     }
 
+    [Theory]
+    [InlineData("plain\ttext", false, "plain\ttext")]
+    [InlineData("\u001b]0;title\u0007\u001b[31mred", false, "\\x1B]0;title\\x07\\x1B[31mred")]
+    [InlineData("a\r\nb\u009bc\u007f", false, "a\\x0D\\x0Ab\\x9Bc\\x7F")]
+    [InlineData("a\nb\rc", true, "a\nb\\x0Dc")]
+    [InlineData("café 日本", false, "café 日本")]
+    public void TerminalTextEscapesControlCharacters(string text, bool keepLineFeeds, string expected)
+    {
+        Assert.Equal(expected, TerminalText.Escape(text, keepLineFeeds));
+    }
+
+    [Fact]
+    public void ConsoleOutputEscapesFileContentAndNames()
+    {
+        var differences = DiffRapid.Core.Structured.StructuredComparer.Compare("{\"a\": \"x\"}", "{\"a\": \"\\u001b[2Jy\", \"k\\u0007\": 1}",
+            new DiffRapid.Core.Structured.StructuredCompareOptions { Format = DiffRapid.Core.Structured.StructuredFormat.Json }).Differences;
+        var lines = string.Join("\n", differences.Select(Program.FormatDifference));
+        Assert.DoesNotContain('\u001b', lines);
+        Assert.DoesNotContain('\u0007', lines);
+        Assert.Contains("\\x1B[2Jy", lines);
+        Assert.Contains("\\x07", lines);
+    }
+
     [Fact]
     public void DoubleDashEndsOptions()
     {

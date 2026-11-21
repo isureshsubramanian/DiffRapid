@@ -77,7 +77,7 @@ internal static partial class Program
                 {
                     if (item.Left.Exists)
                     {
-                        Console.Out.WriteLine(RenameLine(item));
+                        Console.Out.WriteLine(TerminalText.Escape(RenameLine(item)));
                     }
 
                     continue;
@@ -90,12 +90,12 @@ internal static partial class Program
                     FolderCompareStatus.Different => "M",
                     _ => "!",
                 };
-                Console.Out.WriteLine($"{marker}  {item.RelativePath}" + (item.Error is null ? "" : $": {item.Error}"));
+                Console.Out.WriteLine(TerminalText.Escape($"{marker}  {item.RelativePath}" + (item.Error is null ? "" : $": {item.Error}")));
             }
 
             if (result.Root.Error is not null)
             {
-                Console.Error.WriteLine(result.Root.Error);
+                Console.Error.WriteLine(TerminalText.Escape(result.Root.Error));
             }
 
             Console.Out.WriteLine(string.Join(", ", result.Counts.Select(c => $"{c.Key}: {c.Value}")));

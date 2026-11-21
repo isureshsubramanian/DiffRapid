@@ -89,7 +89,7 @@ internal static partial class Program
         var history = await repository.GetHistoryAsync(args.Positionals[0], args.IntValue("count", 20), cancellationToken).ConfigureAwait(false);
         foreach (var version in history)
         {
-            Console.Out.WriteLine($"{version.ShortId} {version.Date:yyyy-MM-dd} {version.Author} {version.Subject}");
+            Console.Out.WriteLine(TerminalText.Escape($"{version.ShortId} {version.Date:yyyy-MM-dd} {version.Author} {version.Subject}"));
         }
 
         return ExitSame;

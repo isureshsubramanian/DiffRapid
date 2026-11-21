@@ -190,6 +190,10 @@ ends the options, for file names that start with `-`. A separate value may not s
 `/ignoreblanklines`, `/ignoreeol`, `/o` and `/dl` are accepted; on macOS and Linux an argument starting with `/` is
 always a path (use `-o`, `--ignore-case` and so on). Run `diffrapid --help` for every option.
 
+Text that comes from files, repositories or AI services (file names, log entries, table cells, structured values,
+AI replies) is printed with control characters such as ESC shown as `\xNN`, so it cannot drive the terminal. Diff
+bodies and files written with `-o` are unchanged.
+
 ### Use with Git
 
 ```sh

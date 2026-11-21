@@ -117,14 +117,14 @@ internal static partial class Program
         foreach (var column in result.ColumnDifferences)
         {
             var side = column.LeftIndex is null ? "right only" : column.RightIndex is null ? "left only" : "renamed to " + column.RightName;
-            writer.WriteLine($"Column {column.Name}: {side}");
+            writer.WriteLine(TerminalText.Escape($"Column {column.Name}: {side}"));
         }
 
         foreach (var duplicate in result.DuplicateKeys)
         {
             var table = duplicate.Side == TableSide.Left ? result.Left : result.Right;
             var lines = string.Join(", ", duplicate.Rows.Select(table.LineOf));
-            writer.WriteLine($"Duplicate {duplicate.Side.ToString().ToLowerInvariant()} key [{string.Join(", ", duplicate.Key)}] on lines {lines}");
+            writer.WriteLine(TerminalText.Escape($"Duplicate {duplicate.Side.ToString().ToLowerInvariant()} key [{string.Join(", ", duplicate.Key)}] on lines {lines}"));
         }
 
         foreach (var row in result.Rows.Where(r => r.Status != TableRowStatus.Same))
@@ -143,7 +143,7 @@ internal static partial class Program
         writer.WriteLine($"{row.Status} {leftLine}/{rightLine}");
         foreach (var cell in row.Cells.Where(c => c.IsChanged))
         {
-            writer.WriteLine($"  {result.Columns[cell.Column].Name}: \"{cell.Left}\" -> \"{cell.Right}\"");
+            writer.WriteLine(TerminalText.Escape($"  {result.Columns[cell.Column].Name}: \"{cell.Left}\" -> \"{cell.Right}\""));
         }
     }
 }
