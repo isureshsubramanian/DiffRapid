@@ -537,6 +537,57 @@ public sealed class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void LinksAreCheckedAsTextBeforeTheirTargetIsTouched()
+    {
+        var app = DirectoryPath("app");
+        var outside = DirectoryPath("outside");
+        var guard = new PathGuard([app]);
+
+        // A self-loop outside the root: following it fails with an error that names the path.
+        System.IO.File.CreateSymbolicLink(Path.Combine(outside, "loop"), Path.Combine(outside, "loop"));
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "loop"), Path.Combine(outside, "loop"));
+        Assert.Equal(PathGuard.OutsideMessage, Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "loop"))).Message);
+        var refused = ErrorText(ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = Path.Combine(app, "loop"), right = Path.Combine(app, "loop") }), guard));
+        Assert.Equal("compare_files: " + PathGuard.OutsideMessage, refused);
+
+        // A network target is refused from the link text, so no share is contacted.
+        var share = OperatingSystem.IsWindows() ? @"\\host\share\x" : "//host/share/x";
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "share"), share);
+        Assert.Equal(PathGuard.OutsideMessage, Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "share", "file.txt"))).Message);
+
+        // A chain of links, relative and absolute, that stays inside the root is allowed.
+        var real = File("app/sub/real.txt", "a\n");
+        Directory.CreateSymbolicLink(Path.Combine(app, "second"), "sub");
+        Directory.CreateSymbolicLink(Path.Combine(app, "first"), Path.Combine(app, "second"));
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "file"), Path.Combine("first", "real.txt"));
+        Assert.Equal(Path.Combine(app, "first", "real.txt"), guard.Resolve(Path.Combine(app, "first", "real.txt")));
+        Assert.Equal(Path.Combine(app, "file"), guard.Resolve(Path.Combine(app, "file")));
+        Assert.True(Call("compare_files", new { left = Path.Combine(app, "file"), right = real }).GetProperty("identical").GetBoolean());
+    }
+
+    [Fact]
+    public void CaseVariantsOfADistinctFolderAreRefused()
+    {
+        var app = DirectoryPath("Distinct/proj");
+        File("Distinct/proj/a.txt", "a\n");
+        var variant = DirectoryPath("Distinct/PROJ");
+        var guard = new PathGuard([app]);
+        var request = Path.Combine(variant, "a.txt");
+
+        // Where the volume or folder tells case apart, PROJ is another folder and must be refused; elsewhere it
+        // is the root under another spelling.
+        if (System.IO.File.Exists(request))
+        {
+            Assert.Equal(request, guard.Resolve(request));
+        }
+        else
+        {
+            File("Distinct/PROJ/a.txt", "secret\n");
+            Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(request));
+        }
+    }
+
+    [Fact]
     public void CaseVariantsFollowThePlatformRule()
     {
         var app = DirectoryPath("Case/App");
