@@ -29,9 +29,15 @@ public static class PptxText
 
     /// <summary>Extracts the text of a presentation read from <paramref name="stream"/>.</summary>
     /// <exception cref="InvalidDataException">The stream is not a readable PowerPoint presentation.</exception>
-    public static string Extract(Stream stream, CancellationToken cancellationToken = default)
+    public static string Extract(Stream stream, CancellationToken cancellationToken = default) =>
+        OpenXmlPackages.Read(
+            stream,
+            (source, settings) => PresentationDocument.Open(source, false, settings),
+            "PowerPoint",
+            document => ReadPresentation(document, cancellationToken));
+
+    private static string ReadPresentation(PresentationDocument document, CancellationToken cancellationToken)
     {
-        using var document = OpenXmlPackages.Open(stream, source => PresentationDocument.Open(source, false), "PowerPoint");
         var presentationPart = document.PresentationPart
             ?? throw new InvalidDataException("The PowerPoint presentation has no presentation part.");
         var lines = new TextLines();
@@ -66,14 +72,15 @@ public static class PptxText
                 lines.Add("# " + string.Join(" ", Paragraphs(title.TextBody).Select(ParagraphText).Where(text => text.Length > 0)));
             }
 
-            WriteShapes(lines, tree, title);
+            WriteShapes(lines, tree, title, 0);
         }
 
         WriteNotes(lines, slidePart.NotesSlidePart);
     }
 
-    private static void WriteShapes(TextLines lines, OpenXmlElement container, P.Shape? title)
+    private static void WriteShapes(TextLines lines, OpenXmlElement container, P.Shape? title, int depth)
     {
+        ExtractLimits.CheckDepth(depth);
         foreach (var child in container.ChildElements)
         {
             switch (child)
@@ -82,7 +89,7 @@ public static class PptxText
                     WriteShapeText(lines, shape);
                     break;
                 case P.GroupShape group:
-                    WriteShapes(lines, group, title);
+                    WriteShapes(lines, group, title, depth + 1);
                     break;
                 case P.GraphicFrame frame:
                     WriteTables(lines, frame);

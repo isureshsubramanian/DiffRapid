@@ -8,7 +8,8 @@ namespace DiffRapid.Documents.Internal;
 internal static class CellReferences
 {
     private const int MaxColumn = 16384;
-    private const int MaxRow = 1048576;
+    /// <summary>The last row of an Excel worksheet.</summary>
+    public const int MaxRow = 1048576;
 
     private static readonly Regex Reference = new(
         @"\G(\$?)([A-Za-z]{1,3})(\$?)([0-9]{1,7})(?![A-Za-z0-9_(!.])",

@@ -40,20 +40,22 @@ internal readonly struct ImageCanvas
     public int RightHeight { get; }
 
     /// <summary>Places the left image at the origin and the right image shifted by the offset.</summary>
+    /// <exception cref="ArgumentException">The canvas would hold more than <see cref="PixelImage.MaxPixels"/> pixels.</exception>
     public static ImageCanvas Create(PixelImage left, PixelImage right, int offsetX, int offsetY)
     {
-        var minX = Math.Min(0, offsetX);
-        var minY = Math.Min(0, offsetY);
-        var maxX = Math.Max(left.Width, offsetX + right.Width);
-        var maxY = Math.Max(left.Height, offsetY + right.Height);
+        // Long arithmetic: an offset near int.MinValue or int.MaxValue must not wrap around.
+        var minX = Math.Min(0L, offsetX);
+        var minY = Math.Min(0L, offsetY);
+        var maxX = Math.Max(left.Width, (long)offsetX + right.Width);
+        var maxY = Math.Max(left.Height, (long)offsetY + right.Height);
         var width = maxX - minX;
         var height = maxY - minY;
-        if ((long)width * height > int.MaxValue)
+        if (width > int.MaxValue || height > int.MaxValue || width * height > PixelImage.MaxPixels)
         {
             throw new ArgumentException("The images are too large to compare in one canvas.");
         }
 
-        return new ImageCanvas(width, height, -minX, -minY, offsetX - minX, offsetY - minY, left, right);
+        return new ImageCanvas((int)width, (int)height, (int)-minX, (int)-minY, (int)(offsetX - minX), (int)(offsetY - minY), left, right);
     }
 
     /// <summary>True when canvas column/row (x, y) falls inside the left image.</summary>

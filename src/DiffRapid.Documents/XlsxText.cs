@@ -75,11 +75,21 @@ public static class XlsxText
     public static IReadOnlyList<XlsxSheet> ReadSheets(Stream stream, XlsxTextOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= XlsxTextOptions.Default;
-        using var document = OpenXmlPackages.Open(stream, source => SpreadsheetDocument.Open(source, false), "Excel");
+        var content = options.CellContent;
+        return OpenXmlPackages.Read(
+            stream,
+            (source, settings) => SpreadsheetDocument.Open(source, false, settings),
+            "Excel",
+            document => ReadWorkbook(document, content, cancellationToken));
+    }
+
+    private static IReadOnlyList<XlsxSheet> ReadWorkbook(SpreadsheetDocument document, XlsxCellContent content, CancellationToken cancellationToken)
+    {
         var workbookPart = document.WorkbookPart
             ?? throw new InvalidDataException("The Excel workbook has no workbook part.");
-        var cells = new XlsxCellReader(workbookPart, options.CellContent);
+        var cells = new XlsxCellReader(workbookPart, content, cancellationToken);
         var sheets = new List<XlsxSheet>();
+        var characters = 0L;
         foreach (var sheet in workbookPart.Workbook?.Sheets?.Elements<Sheet>() ?? [])
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -90,7 +100,7 @@ public static class XlsxText
             }
 
             var hidden = sheet.State?.Value is { } state && state != SheetStateValues.Visible;
-            sheets.Add(new XlsxSheet(sheet.Name?.Value ?? string.Empty, hidden, ReadRows(worksheetPart, cells, cancellationToken)));
+            sheets.Add(new XlsxSheet(sheet.Name?.Value ?? string.Empty, hidden, ReadRows(worksheetPart, cells, ref characters, cancellationToken)));
         }
 
         return sheets;
@@ -122,8 +132,13 @@ public static class XlsxText
             ? cell
             : cell.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
 
-    /// <summary>Streams the sheet's rows so that large sheets are not loaded as one DOM.</summary>
-    private static IReadOnlyList<IReadOnlyList<string>> ReadRows(WorksheetPart part, XlsxCellReader cells, CancellationToken cancellationToken)
+    /// <summary>
+    /// Streams the sheet's rows so that large sheets are not loaded as one DOM. <paramref name="characters"/>
+    /// counts the text of every sheet read so far (a character per row and cell break included), so padding
+    /// and cell text together stay within <see cref="ExtractLimits.MaxTextLength"/>.
+    /// </summary>
+    /// <exception cref="InvalidDataException">A row number is past the last worksheet row, or the text is too long.</exception>
+    private static IReadOnlyList<IReadOnlyList<string>> ReadRows(WorksheetPart part, XlsxCellReader cells, ref long characters, CancellationToken cancellationToken)
     {
         var rows = new List<IReadOnlyList<string>>();
         var sharedFormulas = new Dictionary<uint, SharedFormula>();
@@ -138,18 +153,25 @@ public static class XlsxText
 
             cancellationToken.ThrowIfCancellationRequested();
             var row = (Row)reader.LoadCurrentElement()!;
-            var rowNumber = (int?)row.RowIndex?.Value ?? rows.Count + 1;
+            var rowIndex = row.RowIndex?.Value ?? (uint)rows.Count + 1;
+            if (rowIndex > CellReferences.MaxRow)
+            {
+                throw new InvalidDataException($"The worksheet has a row numbered {rowIndex}, past the last row ({CellReferences.MaxRow}).");
+            }
+
+            var rowNumber = (int)rowIndex;
             if (rowNumber <= rows.Count)
             {
                 continue;
             }
 
+            ExtractLimits.AddText(ref characters, rowNumber - rows.Count);
             while (rows.Count < rowNumber - 1)
             {
                 rows.Add(Array.Empty<string>());
             }
 
-            var values = ReadCells(row, rowNumber, cells, sharedFormulas);
+            var values = ReadCells(row, rowNumber, cells, sharedFormulas, ref characters);
             rows.Add(values);
             if (values.Count > 0)
             {
@@ -161,7 +183,7 @@ public static class XlsxText
         return rows;
     }
 
-    private static IReadOnlyList<string> ReadCells(Row row, int rowNumber, XlsxCellReader cells, Dictionary<uint, SharedFormula> sharedFormulas)
+    private static IReadOnlyList<string> ReadCells(Row row, int rowNumber, XlsxCellReader cells, Dictionary<uint, SharedFormula> sharedFormulas, ref long characters)
     {
         var values = new List<string>();
         foreach (var cell in row.Elements<Cell>())
@@ -172,12 +194,15 @@ public static class XlsxText
                 continue;
             }
 
+            // The padding cells and this one each add a tab, then this cell's text.
+            var text = cells.Read(cell, rowNumber, column, sharedFormulas);
+            ExtractLimits.AddText(ref characters, (long)column - values.Count + text.Length);
             while (values.Count < column - 1)
             {
                 values.Add(string.Empty);
             }
 
-            values.Add(cells.Read(cell, rowNumber, column, sharedFormulas));
+            values.Add(text);
         }
 
         var length = values.Count;

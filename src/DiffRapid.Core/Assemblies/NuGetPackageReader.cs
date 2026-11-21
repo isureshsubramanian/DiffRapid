@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
+using DiffRapid.Core.Plugins;
 
 namespace DiffRapid.Core.Assemblies;
 
@@ -61,6 +62,15 @@ public sealed record NuGetPackage(string Id, string Version, IReadOnlyList<NuGet
 /// <summary>Reads a NuGet package (a zip file) without extracting it to disk.</summary>
 public static class NuGetPackageReader
 {
+    /// <summary>
+    /// The largest library read (an estimate: well above the biggest managed assemblies shipped on nuget.org,
+    /// whose whole packages are limited to 250 MB compressed).
+    /// </summary>
+    internal const long MaxLibraryBytes = 256L * 1024 * 1024;
+
+    /// <summary>The most library bytes inflated from one package (an estimate: four libraries at the limit).</summary>
+    internal const long MaxTotalLibraryBytes = 4 * MaxLibraryBytes;
+
     /// <summary>Reads a .nupkg file.</summary>
     /// <exception cref="InvalidDataException">The file is not a valid package, or a library is not a valid assembly.</exception>
     public static NuGetPackage Read(string path, CancellationToken cancellationToken = default)
@@ -74,17 +84,19 @@ public static class NuGetPackageReader
     public static NuGetPackage Read(Stream stream, CancellationToken cancellationToken = default)
     {
         using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
-        var nuspec = archive.Entries.FirstOrDefault(entry => entry.FullName.IndexOfAny(['/', '\\']) < 0
+        var entries = ZipReadBudget.Entries(archive);
+        var nuspec = entries.FirstOrDefault(entry => entry.FullName.IndexOfAny(['/', '\\']) < 0
             && entry.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException("The package has no .nuspec file at its root.");
         var metadata = ReadNuspec(nuspec);
         var libraries = new List<NuGetLibrary>();
-        foreach (var entry in archive.Entries)
+        var budget = new ZipReadBudget(MaxLibraryBytes, MaxTotalLibraryBytes);
+        foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (LibraryFramework(entry.FullName) is { } framework)
             {
-                libraries.Add(ReadLibrary(entry, framework, cancellationToken));
+                libraries.Add(ReadLibrary(entry, framework, budget, cancellationToken));
             }
         }
 
@@ -158,17 +170,14 @@ public static class NuGetPackageReader
         return isLibrary ? Uri.UnescapeDataString(parts[1]) : null;
     }
 
-    private static NuGetLibrary ReadLibrary(ZipArchiveEntry entry, string framework, CancellationToken cancellationToken)
+    private static NuGetLibrary ReadLibrary(ZipArchiveEntry entry, string framework, ZipReadBudget budget, CancellationToken cancellationToken)
     {
-        // The metadata reader needs a seekable stream, which a zip entry is not.
-        using var buffer = new MemoryStream();
-        using (var source = entry.Open())
-        {
-            source.CopyTo(buffer);
-        }
-
-        buffer.Position = 0;
         var path = Uri.UnescapeDataString(entry.FullName.Replace('\\', '/'));
+
+        // The metadata reader needs a seekable stream, which a zip entry is not.
+        var bytes = budget.Read(entry, cancellationToken)
+            ?? throw new InvalidDataException($"{path}: the library is larger than {MaxLibraryBytes} bytes.");
+        using var buffer = new MemoryStream(bytes, writable: false);
         try
         {
             return new NuGetLibrary(framework, path, ApiReader.Read(buffer, cancellationToken));

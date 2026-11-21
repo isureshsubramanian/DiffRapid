@@ -17,6 +17,12 @@ internal sealed class ZipEntriesUnpacker : IUnpacker
     /// <summary>Entries larger than this are listed but not read.</summary>
     internal const long MaxEntryLength = 16 * 1024 * 1024;
 
+    /// <summary>
+    /// The most bytes inflated across one archive (an estimate: sixteen full-size entries). Past it the
+    /// archive is reported as unreadable rather than shown in part.
+    /// </summary>
+    internal const long MaxTotalLength = 16 * MaxEntryLength;
+
     private static readonly string[] Extensions = [".zip", ".jar", ".war", ".ear", ".nupkg", ".snupkg", ".vsix", ".apk"];
 
     public string Name => "ZipEntries";
@@ -36,9 +42,10 @@ internal sealed class ZipEntriesUnpacker : IUnpacker
         try
         {
             using var archive = new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: true);
-            entries = archive.Entries
+            var budget = new ZipReadBudget(MaxEntryLength, MaxTotalLength);
+            entries = ZipReadBudget.Entries(archive)
                 .OrderBy(entry => entry.FullName, StringComparer.Ordinal)
-                .Select(entry => ReadEntry(entry, context, readText: !arguments.Has("list")))
+                .Select(entry => ReadEntry(entry, context, budget, readText: !arguments.Has("list")))
                 .ToList();
         }
         catch (InvalidDataException ex)
@@ -49,7 +56,7 @@ internal sealed class ZipEntriesUnpacker : IUnpacker
         return new UnpackResult(Format(entries), entries);
     }
 
-    private static UnpackedEntry ReadEntry(ZipArchiveEntry entry, PluginContext context, bool readText)
+    private static UnpackedEntry ReadEntry(ZipArchiveEntry entry, PluginContext context, ZipReadBudget budget, bool readText)
     {
         context.CancellationToken.ThrowIfCancellationRequested();
         var name = entry.FullName.Replace('\\', '/');
@@ -59,7 +66,7 @@ internal sealed class ZipEntriesUnpacker : IUnpacker
             return new UnpackedEntry(name, entry.Length, null, false);
         }
 
-        var bytes = ReadBounded(entry);
+        var bytes = budget.Read(entry, context.CancellationToken);
         if (bytes is null)
         {
             return new UnpackedEntry(name, entry.Length, null, false);
@@ -69,26 +76,6 @@ internal sealed class ZipEntriesUnpacker : IUnpacker
         return decoded.IsBinary
             ? new UnpackedEntry(name, entry.Length, null, true)
             : new UnpackedEntry(name, entry.Length, decoded.Text, false);
-    }
-
-    /// <summary>Reads an entry, or returns null when it inflates past the limit whatever its header claims.</summary>
-    private static byte[]? ReadBounded(ZipArchiveEntry entry)
-    {
-        using var stream = entry.Open();
-        using var buffer = new MemoryStream();
-        var chunk = new byte[81920];
-        int read;
-        while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
-        {
-            if (buffer.Length + read > MaxEntryLength)
-            {
-                return null;
-            }
-
-            buffer.Write(chunk, 0, read);
-        }
-
-        return buffer.ToArray();
     }
 
     private static string Format(IReadOnlyList<UnpackedEntry> entries)

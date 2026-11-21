@@ -50,13 +50,21 @@ public static class DocxText
     public static string Extract(Stream stream, DocxTextOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= DocxTextOptions.Default;
-        using var document = OpenXmlPackages.Open(stream, source => WordprocessingDocument.Open(source, false), "Word");
+        return OpenXmlPackages.Read(
+            stream,
+            (source, settings) => WordprocessingDocument.Open(source, false, settings),
+            "Word",
+            document => ReadDocument(document, options, cancellationToken));
+    }
+
+    private static string ReadDocument(WordprocessingDocument document, DocxTextOptions options, CancellationToken cancellationToken)
+    {
         var main = document.MainDocumentPart
             ?? throw new InvalidDataException("The Word document has no main document part.");
         var context = new Context(main, cancellationToken);
         var lines = new TextLines();
         var body = main.Document?.Body;
-        WriteBlocks(lines, body, context);
+        WriteBlocks(lines, body, context, 0);
         if (options.IncludeHeadersAndFooters && body is not null)
         {
             WriteHeadersAndFooters(lines, main, body, context);
@@ -75,12 +83,14 @@ public static class DocxText
         return lines.ToString();
     }
 
-    private static void WriteBlocks(TextLines lines, OpenXmlElement? container, Context context)
+    private static void WriteBlocks(TextLines lines, OpenXmlElement? container, Context context, int depth)
     {
         if (container is null)
         {
             return;
         }
+
+        ExtractLimits.CheckDepth(depth);
 
         foreach (var element in container.ChildElements)
         {
@@ -88,25 +98,25 @@ public static class DocxText
             switch (element)
             {
                 case Paragraph paragraph:
-                    lines.Add(FormatParagraph(paragraph, context));
+                    lines.Add(FormatParagraph(paragraph, context, depth + 1));
                     break;
                 case Table table:
-                    WriteTable(lines, table, context);
+                    WriteTable(lines, table, context, depth + 1);
                     break;
                 case SdtBlock contentControl:
-                    WriteBlocks(lines, contentControl.SdtContentBlock, context);
+                    WriteBlocks(lines, contentControl.SdtContentBlock, context, depth + 1);
                     break;
                 case CustomXmlBlock customXml:
-                    WriteBlocks(lines, customXml, context);
+                    WriteBlocks(lines, customXml, context, depth + 1);
                     break;
             }
         }
     }
 
-    private static string FormatParagraph(Paragraph paragraph, Context context)
+    private static string FormatParagraph(Paragraph paragraph, Context context, int depth)
     {
         var text = new StringBuilder();
-        AppendInlineText(text, paragraph);
+        AppendInlineText(text, paragraph, depth);
         if (text.Length == 0)
         {
             return string.Empty;
@@ -130,8 +140,9 @@ public static class DocxText
     }
 
     /// <summary>Appends the visible text of runs, following inserted text and skipping deleted text.</summary>
-    private static void AppendInlineText(StringBuilder text, OpenXmlElement element)
+    private static void AppendInlineText(StringBuilder text, OpenXmlElement element, int depth)
     {
+        ExtractLimits.CheckDepth(depth);
         foreach (var child in element.ChildElements)
         {
             switch (child)
@@ -165,15 +176,15 @@ public static class DocxText
                     text.Append("[^e").Append(endnote.Id?.Value.ToString(CultureInfo.InvariantCulture)).Append(']');
                     break;
                 default:
-                    AppendInlineText(text, child);
+                    AppendInlineText(text, child, depth + 1);
                     break;
             }
         }
     }
 
-    private static void WriteTable(TextLines lines, Table table, Context context)
+    private static void WriteTable(TextLines lines, Table table, Context context, int depth)
     {
-        foreach (var row in Rows(table))
+        foreach (var row in Rows(table, depth))
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             if (row.TableRowProperties?.GetFirstChild<Deleted>() is not null)
@@ -181,12 +192,13 @@ public static class DocxText
                 continue;
             }
 
-            lines.Add(string.Join("\t", Cells(row).Select(cell => CellText(cell, context))));
+            lines.Add(string.Join("\t", Cells(row, depth).Select(cell => CellText(cell, context, depth + 1))));
         }
     }
 
-    private static IEnumerable<TableRow> Rows(OpenXmlElement container)
+    private static IEnumerable<TableRow> Rows(OpenXmlElement container, int depth)
     {
+        ExtractLimits.CheckDepth(depth);
         foreach (var child in container.ChildElements)
         {
             if (child is TableRow row)
@@ -195,7 +207,7 @@ public static class DocxText
             }
             else if (child is SdtRow or CustomXmlRow or SdtContentRow)
             {
-                foreach (var nested in Rows(child))
+                foreach (var nested in Rows(child, depth + 1))
                 {
                     yield return nested;
                 }
@@ -203,8 +215,9 @@ public static class DocxText
         }
     }
 
-    private static IEnumerable<TableCell> Cells(OpenXmlElement container)
+    private static IEnumerable<TableCell> Cells(OpenXmlElement container, int depth)
     {
+        ExtractLimits.CheckDepth(depth);
         foreach (var child in container.ChildElements)
         {
             if (child is TableCell cell)
@@ -213,7 +226,7 @@ public static class DocxText
             }
             else if (child is SdtCell or CustomXmlCell or SdtContentCell)
             {
-                foreach (var nested in Cells(child))
+                foreach (var nested in Cells(child, depth + 1))
                 {
                     yield return nested;
                 }
@@ -222,10 +235,10 @@ public static class DocxText
     }
 
     /// <summary>Joins a cell's lines with spaces so that each table row stays on one line.</summary>
-    private static string CellText(TableCell cell, Context context)
+    private static string CellText(TableCell cell, Context context, int depth)
     {
         var cellLines = new TextLines();
-        WriteBlocks(cellLines, cell, context);
+        WriteBlocks(cellLines, cell, context, depth);
         var parts = cellLines.ToString()
             .Split(['\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.Replace('\t', ' ').Trim())
@@ -312,7 +325,7 @@ public static class DocxText
         }
 
         lines.Add(label);
-        WriteBlocks(lines, root, context);
+        WriteBlocks(lines, root, context, 0);
     }
 
     private static void WriteNotes(TextLines lines, MainDocumentPart main, Context context)
@@ -322,7 +335,7 @@ public static class DocxText
             if (IsNormalNote(note.Type?.Value))
             {
                 lines.Add($"[Footnote {note.Id?.Value.ToString(CultureInfo.InvariantCulture)}]");
-                WriteBlocks(lines, note, context);
+                WriteBlocks(lines, note, context, 0);
             }
         }
 
@@ -331,7 +344,7 @@ public static class DocxText
             if (IsNormalNote(note.Type?.Value))
             {
                 lines.Add($"[Endnote {note.Id?.Value.ToString(CultureInfo.InvariantCulture)}]");
-                WriteBlocks(lines, note, context);
+                WriteBlocks(lines, note, context, 0);
             }
         }
     }
@@ -346,7 +359,7 @@ public static class DocxText
             var author = comment.Author?.Value;
             var by = string.IsNullOrEmpty(author) ? string.Empty : " by " + author;
             lines.Add($"[Comment {comment.Id?.Value}{by}]");
-            WriteBlocks(lines, comment, context);
+            WriteBlocks(lines, comment, context, 0);
         }
     }
 
