@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -17,6 +19,12 @@ internal static class TemporaryFiles
     // across a Visual Studio restart, and a younger folder may belong to another running instance).
     private static readonly TimeSpan SweepAge = TimeSpan.FromDays(1);
 
+    // Each folder gets an empty marker file ".owner-<process id>" when it is written, so the sweep of another
+    // Visual Studio instance leaves it alone while this one runs, however long the comparison stays open. The
+    // editor does not keep the copy open, so a locked-file test alone cannot tell. A reused process id only keeps
+    // a folder longer, never deletes one in use.
+    private const string OwnerMarkerPrefix = ".owner-";
+
     private const int FolderNameLength = 8;
 
     private static string Root => Path.Combine(Path.GetTempPath(), "DiffRapid");
@@ -26,6 +34,7 @@ internal static class TemporaryFiles
     {
         var folder = Path.Combine(Root, Guid.NewGuid().ToString("N").Substring(0, FolderNameLength));
         Directory.CreateDirectory(folder);
+        File.WriteAllBytes(Path.Combine(folder, OwnerMarkerPrefix + CurrentProcessId.ToString(CultureInfo.InvariantCulture)), Array.Empty<byte>());
         var safeName = UI.UiText.SafeFileName(name);
         var path = Path.Combine(folder, safeName + (safeName.EndsWith(extension, StringComparison.OrdinalIgnoreCase) ? string.Empty : extension));
         File.WriteAllBytes(path, content);
@@ -111,7 +120,10 @@ internal static class TemporaryFiles
     private static List<string> FoldersOf(IEnumerable<string?> paths) =>
         paths.Select(path => path is null ? null : FolderOf(path)).OfType<string>().ToList();
 
-    /// <summary>Removes temporary folders older than a day; meant for a background thread at start-up.</summary>
+    /// <summary>
+    /// Removes temporary folders older than a day that no running Visual Studio still uses (see
+    /// <see cref="OwnerMarkerPrefix"/>) and whose files nothing has open; meant for a background thread at start-up.
+    /// </summary>
     public static void Sweep(CancellationToken cancellationToken)
     {
         var root = new DirectoryInfo(Root);
@@ -121,6 +133,12 @@ internal static class TemporaryFiles
         }
 
         var cutoff = DateTime.UtcNow - SweepAge;
+        string processName;
+        using (var current = Process.GetCurrentProcess())
+        {
+            processName = current.ProcessName;
+        }
+
         IEnumerable<DirectoryInfo> folders;
         try
         {
@@ -134,10 +152,71 @@ internal static class TemporaryFiles
         foreach (var folder in folders)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (IsOurFolderName(folder.Name) && folder.LastWriteTimeUtc < cutoff)
+            if (IsOurFolderName(folder.Name) && folder.LastWriteTimeUtc < cutoff && !InUse(folder, processName))
             {
                 TryDeleteFolder(folder.FullName);
             }
+        }
+    }
+
+    private static int CurrentProcessId
+    {
+        get
+        {
+            using var current = Process.GetCurrentProcess();
+            return current.Id;
+        }
+    }
+
+    // In use when its owner (a process of the same name as this one) still runs, or when one of its files cannot be
+    // opened exclusively. Anything that cannot be checked counts as in use: the folder is then left for a later sweep.
+    private static bool InUse(DirectoryInfo folder, string processName)
+    {
+        try
+        {
+            foreach (var file in folder.EnumerateFiles())
+            {
+                if (file.Name.StartsWith(OwnerMarkerPrefix, StringComparison.Ordinal))
+                {
+                    if (int.TryParse(file.Name.Substring(OwnerMarkerPrefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var id)
+                        && IsRunning(id, processName))
+                    {
+                        return true;
+                    }
+                }
+                else if (!IsLink(file))
+                {
+                    // A link is never opened: that would test what it points to.
+                    using (file.Open(FileMode.Open, FileAccess.Read, FileShare.None))
+                    {
+                    }
+                }
+            }
+
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return true;
+        }
+    }
+
+    private static bool IsRunning(int processId, string processName)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited && string.Equals(process.ProcessName, processName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // No such process, or it has exited.
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Running, but not ours to inspect.
+            return true;
         }
     }
 
