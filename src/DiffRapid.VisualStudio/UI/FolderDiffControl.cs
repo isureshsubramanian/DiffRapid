@@ -1270,7 +1270,17 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             return;
         }
 
-        var options = new SyncExecuteOptions { Delete = RecycleDelete };
+        // Deletions on a side without a Recycle Bin are permanent, so they need a second yes.
+        var deletes = plan.Operations.Where(o => o.Action == SyncAction.Delete).ToList();
+        foreach (var root in new[] { (Direction: SyncDirection.RightToLeft, Root: _leftRoot), (Direction: SyncDirection.LeftToRight, Root: _rightRoot) })
+        {
+            if (deletes.Any(o => o.Direction == root.Direction) && !RecycleBin.CanRecycle(root.Root) && !ConfirmPermanentDelete(root.Root))
+            {
+                return;
+            }
+        }
+
+        var options = new SyncExecuteOptions { Delete = RecycleBin.Delete };
         RunFileOperation(
             "Synchronizing…",
             cancellation => SyncExecutor.Execute(plan, null, options, cancellation)
@@ -1281,18 +1291,6 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             errors => errors == 0
                 ? $"Synchronized: {Plural(plan.Operations.Count(o => o.ChangesFiles), "operation")}."
                 : $"Synchronized with {errors:N0} {(errors == 1 ? "failure" : "failures")}");
-    }
-
-    private static void RecycleDelete(string path, bool isFolder)
-    {
-        if (isFolder)
-        {
-            FileSystem.DeleteDirectory(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
-        }
-        else
-        {
-            FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
-        }
     }
 
     // Folders with the same name are told apart by their parent folder, e.g. "Xls" vs "Xls-10272026\Xls".
@@ -1402,14 +1400,35 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             return;
         }
 
+        var recycle = RecycleBin.CanRecycle(root);
+        if (!recycle && !ConfirmPermanentDelete(root))
+        {
+            return;
+        }
+
         RunFileOperation(
             $"Deleting {what} on the {side}…",
             token => plan.Run(root, token),
             "Delete",
             errors => errors == 0
-                ? $"Moved {what} on the {side} to the Recycle Bin."
+                ? recycle ? $"Moved {what} on the {side} to the Recycle Bin." : $"Deleted {what} on the {side} permanently."
                 : $"Deleted on the {side} with {errors:N0} {(errors == 1 ? "failure" : "failures")}");
     }
+
+    // A second question for a drive without a Recycle Bin (a network share, a removable drive), where the first
+    // question's "Recycle Bin" would not be true: there the delete cannot be undone.
+    private bool ConfirmPermanentDelete(string root) =>
+        VsShellUtilities.ShowMessageBox(
+            _package,
+            "This folder is on a network share or a drive without a Recycle Bin, so the items cannot be moved there."
+                + Environment.NewLine + Environment.NewLine
+                + "Delete them permanently? This cannot be undone."
+                + Environment.NewLine + Environment.NewLine
+                + "From: " + root,
+            "DiffRapid: Delete permanently",
+            OLEMSGICON.OLEMSGICON_WARNING,
+            OLEMSGBUTTON.OLEMSGBUTTON_YESNO,
+            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND) == (int)VSConstants.MessageBoxResult.IDYES;
 
     private bool Confirm(string message, string title, bool warn) =>
         VsShellUtilities.ShowMessageBox(
