@@ -15,6 +15,14 @@ internal static class MovedBlockDetector
 
     private const int MinLinesForTrivialMove = 3;
 
+    /// <summary>
+    /// A removed line is not tried as the start of a move when more than this many added lines share its key
+    /// (blank lines, lone braces); the same limit as <see cref="Algorithms.HistogramDiff.MaxChainLength"/>.
+    /// Each start then scans at most this many candidates, so a file of repeated lines costs
+    /// O(lines x MaxCandidates x move length) instead of O(removed x added x move length).
+    /// </summary>
+    private const int MaxCandidates = Algorithms.HistogramDiff.MaxChainLength;
+
     public static IReadOnlyList<MovedBlock> Detect(
         IReadOnlyList<DiffHunk> hunks, TextDocument left, int[] leftKeys, int[] rightKeys, CancellationToken cancellationToken)
     {
@@ -70,7 +78,7 @@ internal static class MovedBlockDetector
         while (li < leftKeys.Length)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (removedHunk[li] < 0 || !addedByKey.TryGetValue(leftKeys[li], out var candidates))
+            if (removedHunk[li] < 0 || !addedByKey.TryGetValue(leftKeys[li], out var candidates) || candidates.Count > MaxCandidates)
             {
                 li++;
                 continue;
