@@ -1,5 +1,7 @@
 using System;
+using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
@@ -36,15 +38,33 @@ internal static class DiffTheme
     public static Button CommandButton(object content, string tooltip, Action onClick)
     {
         var button = new Button { Content = content, ToolTip = tooltip, Style = FlatButton.Value };
+        SetAccessibleName(button, VisibleLabel(content) ?? tooltip, tooltip);
         button.Click += (_, _) => onClick();
         return button;
     }
+
+    // Screen readers announce the visible label when there is one (an icon with a caption), else the tooltip;
+    // the tooltip is also the longer help text.
+    private static void SetAccessibleName(DependencyObject control, string name, string help)
+    {
+        AutomationProperties.SetName(control, name);
+        AutomationProperties.SetHelpText(control, help);
+    }
+
+    private static string? VisibleLabel(object content) => content switch
+    {
+        string text => text,
+        TextBlock block => block.Text,
+        Panel panel => panel.Children.OfType<TextBlock>().Select(b => b.Text).FirstOrDefault(t => !string.IsNullOrWhiteSpace(t)),
+        _ => null,
+    };
 
     /// <summary>A pill-shaped on/off option for the command bar.</summary>
     /// <summary>A flat on/off button; <paramref name="isChecked"/> is its starting state and does not call <paramref name="onChanged"/>.</summary>
     public static ToggleButton OptionToggle(string text, string tooltip, Action<bool> onChanged, bool isChecked = false)
     {
         var toggle = new ToggleButton { Content = text, ToolTip = tooltip, Style = FlatToggle.Value, Margin = new Thickness(2, 0, 0, 0), IsChecked = isChecked };
+        SetAccessibleName(toggle, text, tooltip);
         toggle.Checked += (_, _) => onChanged(true);
         toggle.Unchecked += (_, _) => onChanged(false);
         return toggle;
