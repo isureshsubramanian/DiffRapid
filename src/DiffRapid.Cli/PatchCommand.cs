@@ -79,9 +79,9 @@ internal static partial class Program
         var failed = false;
         foreach (var file in plan.Files)
         {
-            var name = (options.Reverse ? file.Patch.NewPath : file.Patch.OldPath)
+            var name = TerminalText.Escape((options.Reverse ? file.Patch.NewPath : file.Patch.OldPath)
                 ?? (options.Reverse ? file.Patch.OldPath : file.Patch.NewPath)
-                ?? throw new UsageException("Patch has no file path.");
+                ?? throw new UsageException("Patch has no file path."));
             if (file.Status == FilePatchStatus.Binary)
             {
                 Console.Out.WriteLine($"{name}: skipped (binary file)");
@@ -114,7 +114,7 @@ internal static partial class Program
             var written = FolderPatchApplier.ApplyFile(file);
             if (!written.Written)
             {
-                Console.Out.WriteLine($"  not written: {written.Error}");
+                Console.Out.WriteLine($"  not written: {TerminalText.Escape(written.Error ?? string.Empty)}");
                 failed = true;
             }
         }

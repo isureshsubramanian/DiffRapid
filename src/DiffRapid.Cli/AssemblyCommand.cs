@@ -41,21 +41,21 @@ internal static partial class Program
     {
         if (!IsPackage(path))
         {
-            Console.Out.Write(ApiReader.Read(path).ToText());
+            Console.Out.Write(TerminalText.Escape(ApiReader.Read(path).ToText(), keepLineFeeds: true));
             return;
         }
 
         var package = NuGetPackageReader.Read(path);
         foreach (var property in package.ToProperties())
         {
-            Console.Out.WriteLine(property.Key + ": " + property.Value);
+            Console.Out.WriteLine(TerminalText.Escape(property.Key + ": " + property.Value));
         }
 
         foreach (var library in package.Libraries)
         {
             Console.Out.WriteLine();
-            Console.Out.WriteLine("== " + library.Path);
-            Console.Out.Write(library.Api.ToText());
+            Console.Out.WriteLine("== " + TerminalText.Escape(library.Path));
+            Console.Out.Write(TerminalText.Escape(library.Api.ToText(), keepLineFeeds: true));
         }
     }
 
@@ -74,7 +74,7 @@ internal static partial class Program
         var counts = WriteInfoChanges(comparison.InfoChanges, breakingOnly, string.Empty);
         foreach (var library in comparison.Libraries.Where(library => breakingOnly ? library.Comparison.HasBreakingChanges : !library.Comparison.IsIdentical))
         {
-            Console.Out.WriteLine(library.Path);
+            Console.Out.WriteLine(TerminalText.Escape(library.Path));
             var libraryCounts = WriteComparison(library.Comparison, breakingOnly, "  ");
             counts = (counts.Breaking + libraryCounts.Breaking, counts.Other + libraryCounts.Other);
         }
@@ -88,7 +88,7 @@ internal static partial class Program
         var counts = WriteInfoChanges(comparison.InfoChanges, breakingOnly, indent);
         foreach (var change in comparison.Changes.Where(change => !breakingOnly || change.IsBreaking))
         {
-            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + change);
+            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + TerminalText.Escape(change.ToString()));
             counts = change.IsBreaking ? (counts.Breaking + 1, counts.Other) : (counts.Breaking, counts.Other + 1);
         }
 
@@ -101,7 +101,7 @@ internal static partial class Program
         var other = 0;
         foreach (var change in changes.Where(change => !breakingOnly || change.IsBreaking))
         {
-            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + change);
+            Console.Out.WriteLine(indent + (change.IsBreaking ? "[breaking] " : string.Empty) + TerminalText.Escape(change.ToString()));
             if (change.IsBreaking)
             {
                 breaking++;
