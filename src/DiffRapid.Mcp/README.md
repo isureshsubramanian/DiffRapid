@@ -16,7 +16,7 @@ Register the absolute path to `artifacts/mcp/diffrapid-mcp.exe` on Windows, or
 `artifacts/mcp/diffrapid-mcp` on Linux/macOS. Keep all published files together.
 A framework-dependent deployment requires the .NET 10 runtime. You can also use
 `dotnet` as the command with the absolute path to `diffrapid-mcp.dll` as its argument.
-Relative comparison paths resolve against the server's working directory; absolute
+Relative comparison paths resolve against the first allowed root (see below); absolute
 paths avoid differences between client working directories.
 
 ## Claude Code
@@ -24,7 +24,7 @@ paths avoid differences between client working directories.
 Use a project-scoped registration:
 
 ```powershell
-claude mcp add --transport stdio --scope project diffrapid -- C:/Tools/DiffRapid/diffrapid-mcp.exe
+claude mcp add --transport stdio --scope project diffrapid -- C:/Tools/DiffRapid/diffrapid-mcp.exe --root C:/Work
 claude mcp list
 ```
 
@@ -35,7 +35,7 @@ Alternatively, merge this registration into the workspace's `.mcp.json`:
   "mcpServers": {
     "diffrapid": {
       "command": "C:/Tools/DiffRapid/diffrapid-mcp.exe",
-      "args": []
+      "args": ["--root", "C:/Work"]
     }
   }
 }
@@ -54,7 +54,7 @@ directory, open Copilot Chat in Agent mode, and enable the DiffRapid tools:
     "diffrapid": {
       "type": "stdio",
       "command": "C:/Tools/DiffRapid/diffrapid-mcp.exe",
-      "args": []
+      "args": ["--root", "C:/Work"]
     }
   }
 }
@@ -68,11 +68,11 @@ and [VS Code MCP configuration reference](https://code.visualstudio.com/docs/age
 
 Cursor's `.cursor/mcp.json` and Claude Desktop's MCP configuration accept the
 `mcpServers` form above. For other clients, add a local stdio server with the
-executable as its command and no arguments.
+executable as its command and `--root <folder>` arguments.
 
 `diffrapid mcp` prints the `mcpServers` registration JSON. If the MCP executable
 is beside the CLI executable, the command contains its absolute path; otherwise
-it uses `diffrapid-mcp.exe` (Windows) or `diffrapid-mcp` from PATH. The CLI does
+it uses `diffrapid-mcp.exe` (Windows) or `diffrapid-mcp` from PATH. Each `--root <folder>` given to `diffrapid mcp` is written into `args` as an absolute path. The CLI does
 not start the server and does not depend on the MCP project. For Visual Studio,
 rename the printed outer `mcpServers` key to `servers` and add `"type": "stdio"`.
 
@@ -119,8 +119,31 @@ patches, or reports.
 Missing paths, unsupported inputs, malformed documents and invalid options return
 `isError: true` with a readable message. MCP cancellation is forwarded to the
 comparison engines; existing synchronous readers and renderers observe it at
-operation boundaries. There is no network transport or path allowlist: tools can
-read files accessible to the server process.
+operation boundaries. There is no network transport.
+
+## Allowed root folders
+
+The server reads only files inside its allowed root folders:
+
+```text
+diffrapid-mcp [--root <folder>]... [--roots-from-client]
+```
+
+- Each `--root` (repeatable, also `--root=<folder>`) must be an existing local folder. Without `--root`, the
+  directory the client starts the server in is the only root, and the server says so on stderr.
+  **This changes existing registrations** (`"args": []`): they now read only below that directory. Add
+  `--root` for anything else.
+- `--roots-from-client` (off by default) also accepts the folders the client lists through MCP `roots/list`,
+  checked the same way; entries that are not existing local folders are ignored. The MCP specification
+  deprecates roots (2026-07-28), so this option may go when the SDK drops them.
+- Relative tool paths resolve against the first root. A path is allowed when, made absolute, it is a root or
+  lies below one (case-insensitive on Windows and macOS, case-sensitive on Linux), and every link on the way
+  below the root points inside a root. Folder tools do not follow links.
+- A refused path returns `isError: true` with "Path is outside the folders this server may read; start the
+  server with --root <folder>." The message names neither the roots nor the path.
+- Files inside a root, such as a project's `.env`, remain readable: choose roots accordingly.
+
+`diffrapid mcp --root <folder>` prints a registration whose `args` hold each root as an absolute path.
 
 Paths must be local: network and device prefixes (`\\server\share`, `//server/share`,
 `\\?\`, `\\.\`) and, on Windows, device names such as `NUL` are refused before any

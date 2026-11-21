@@ -18,25 +18,25 @@ internal static class ComparisonTools
     private const int MaxEntries = 1000;
     private const long MaxFileBytes = 64L * 1024 * 1024;
 
-    internal static object Run(string name, JsonElement arguments, CancellationToken cancellationToken) => name switch
+    internal static object Run(string name, JsonElement arguments, PathGuard paths, CancellationToken cancellationToken) => name switch
     {
-        "compare_files" => CompareText(arguments, true, cancellationToken),
-        "compare_text" => CompareText(arguments, false, cancellationToken),
-        "compare_folders" => CompareFolders(arguments, cancellationToken),
-        "merge_three_way" => Merge(arguments, cancellationToken),
-        "compare_structure" => CompareStructure(arguments, cancellationToken),
-        "compare_api" => CompareApi(arguments, cancellationToken),
-        "semantic_diff" => SemanticDiff(arguments, cancellationToken),
-        "create_patch" => CreatePatch(arguments, cancellationToken),
+        "compare_files" => CompareText(arguments, true, paths, cancellationToken),
+        "compare_text" => CompareText(arguments, false, paths, cancellationToken),
+        "compare_folders" => CompareFolders(arguments, paths, cancellationToken),
+        "merge_three_way" => Merge(arguments, paths, cancellationToken),
+        "compare_structure" => CompareStructure(arguments, paths, cancellationToken),
+        "compare_api" => CompareApi(arguments, paths, cancellationToken),
+        "semantic_diff" => SemanticDiff(arguments, paths, cancellationToken),
+        "create_patch" => CreatePatch(arguments, paths, cancellationToken),
         _ => throw new ArgumentException($"Unknown tool '{name}'."),
     };
 
-    private static object CompareText(JsonElement arguments, bool files, CancellationToken cancellationToken)
+    private static object CompareText(JsonElement arguments, bool files, PathGuard paths, CancellationToken cancellationToken)
     {
         var leftLabel = files ? Required(arguments, "left") : "left";
         var rightLabel = files ? Required(arguments, "right") : "right";
-        var leftText = files ? ReadText(leftLabel, true, cancellationToken) : Required(arguments, "left_text");
-        var rightText = files ? ReadText(rightLabel, true, cancellationToken) : Required(arguments, "right_text");
+        var leftText = files ? ReadText(paths, leftLabel, true, cancellationToken) : Required(arguments, "left_text");
+        var rightText = files ? ReadText(paths, rightLabel, true, cancellationToken) : Required(arguments, "right_text");
         var options = TextOptions(arguments);
         var context = Integer(arguments, "context", 3, 1000);
         var maxHunks = Integer(arguments, "max_hunks", 100, MaxEntries);
@@ -86,10 +86,10 @@ internal static class ComparisonTools
         };
     }
 
-    private static object CompareFolders(JsonElement arguments, CancellationToken cancellationToken)
+    private static object CompareFolders(JsonElement arguments, PathGuard paths, CancellationToken cancellationToken)
     {
-        var left = DirectoryPath(arguments, "left");
-        var right = DirectoryPath(arguments, "right");
+        var left = DirectoryPath(paths, arguments, "left");
+        var right = DirectoryPath(paths, arguments, "right");
         var method = Optional(arguments, "method", "full") switch
         {
             "full" => FolderCompareMethod.FullContents,
@@ -167,11 +167,11 @@ internal static class ComparisonTools
         return (changed, added, removed);
     }
 
-    private static object Merge(JsonElement arguments, CancellationToken cancellationToken)
+    private static object Merge(JsonElement arguments, PathGuard paths, CancellationToken cancellationToken)
     {
-        var baseText = ReadText(Required(arguments, "base"), false, cancellationToken);
-        var leftText = ReadText(Required(arguments, "left"), false, cancellationToken);
-        var rightText = ReadText(Required(arguments, "right"), false, cancellationToken);
+        var baseText = ReadText(paths, Required(arguments, "base"), false, cancellationToken);
+        var leftText = ReadText(paths, Required(arguments, "left"), false, cancellationToken);
+        var rightText = ReadText(paths, Required(arguments, "right"), false, cancellationToken);
         var result = ThreeWayMerger.Merge(ParseText(baseText), ParseText(leftText), ParseText(rightText), cancellationToken: cancellationToken);
         var budget = new ReportBudget(cancellationToken);
         var mergedText = budget.Text(result.ToText(includeBase: true));
@@ -187,11 +187,11 @@ internal static class ComparisonTools
         return new { mergedText, conflictCount = result.ConflictCount, conflicts, truncated = budget.Truncated || conflicts.Length < result.ConflictCount };
     }
 
-    private static object CompareStructure(JsonElement arguments, CancellationToken cancellationToken)
+    private static object CompareStructure(JsonElement arguments, PathGuard paths, CancellationToken cancellationToken)
     {
         var left = Required(arguments, "left");
-        var result = StructuredComparer.Compare(ReadText(left, false, cancellationToken),
-            ReadText(Required(arguments, "right"), false, cancellationToken), fileName: left, cancellationToken: cancellationToken);
+        var result = StructuredComparer.Compare(ReadText(paths, left, false, cancellationToken),
+            ReadText(paths, Required(arguments, "right"), false, cancellationToken), fileName: left, cancellationToken: cancellationToken);
         var budget = new ReportBudget(cancellationToken);
         var changes = new List<object>();
         foreach (var change in result.Differences.Take(MaxEntries))
@@ -215,10 +215,10 @@ internal static class ComparisonTools
         return new { identical = result.IsIdentical, format = Camel(result.Format), differenceCount = result.Differences.Count, changes, truncated = budget.Truncated || changes.Count < result.Differences.Count };
     }
 
-    private static object CompareApi(JsonElement arguments, CancellationToken cancellationToken)
+    private static object CompareApi(JsonElement arguments, PathGuard paths, CancellationToken cancellationToken)
     {
-        var left = AssemblyPath(Required(arguments, "left"));
-        var right = AssemblyPath(Required(arguments, "right"));
+        var left = AssemblyPath(paths, Required(arguments, "left"));
+        var right = AssemblyPath(paths, Required(arguments, "right"));
         var leftExtension = Path.GetExtension(left).ToLowerInvariant();
         var rightExtension = Path.GetExtension(right).ToLowerInvariant();
         var budget = new ReportBudget(cancellationToken);
@@ -249,8 +249,8 @@ internal static class ComparisonTools
     }
 
     // The readers open the file themselves; a length of 0 is an empty file or a special file that must not be opened.
-    private static string AssemblyPath(string path) =>
-        FilePath(path) == 0 ? throw new ArgumentException($"'{path}' is empty or not a regular file.") : path;
+    private static string AssemblyPath(PathGuard paths, string path) =>
+        FilePath(paths, path) is { Length: > 0 } file ? file.Full : throw new ArgumentException($"'{path}' is empty or not a regular file.");
 
     private static object ApiReport(ApiComparison result, ReportBudget budget)
     {
@@ -303,10 +303,10 @@ internal static class ComparisonTools
         return entries.ToArray();
     }
 
-    private static object SemanticDiff(JsonElement arguments, CancellationToken cancellationToken)
+    private static object SemanticDiff(JsonElement arguments, PathGuard paths, CancellationToken cancellationToken)
     {
-        var left = ReadText(Required(arguments, "left"), false, cancellationToken);
-        var right = ReadText(Required(arguments, "right"), false, cancellationToken);
+        var left = ReadText(paths, Required(arguments, "left"), false, cancellationToken);
+        var right = ReadText(paths, Required(arguments, "right"), false, cancellationToken);
         var result = MemberMatcher.Compare(left, right, cancellationToken: cancellationToken);
         var changed = result.Flatten().Where(member => member.Status != MemberDiffStatus.Unchanged).ToList();
         var budget = new ReportBudget(cancellationToken);
@@ -333,15 +333,15 @@ internal static class ComparisonTools
         return new { identical = result.AreEqual, leftHasErrors = result.LeftHasErrors, rightHasErrors = result.RightHasErrors, differenceCount = changed.Count, members, truncated = budget.Truncated || members.Count < changed.Count };
     }
 
-    private static object CreatePatch(JsonElement arguments, CancellationToken cancellationToken)
+    private static object CreatePatch(JsonElement arguments, PathGuard paths, CancellationToken cancellationToken)
     {
-        var left = LocalPath(Required(arguments, "left"));
-        var right = LocalPath(Required(arguments, "right"));
+        var left = paths.Resolve(Required(arguments, "left"));
+        var right = paths.Resolve(Required(arguments, "right"));
         RenderedText patch;
         if (Directory.Exists(left) || Directory.Exists(right))
         {
-            left = DirectoryPath(arguments, "left");
-            right = DirectoryPath(arguments, "right");
+            left = DirectoryPath(paths, arguments, "left");
+            right = DirectoryPath(paths, arguments, "right");
 
             // A byte comparison stops at the first differing byte; only changed files are then read, once, by the
             // patch writer, which stops when the output limit is reached. Files whose bytes differ but whose text
@@ -354,7 +354,7 @@ internal static class ComparisonTools
         }
         else
         {
-            var result = TextComparer.Compare(ParseText(ReadText(left, false, cancellationToken)), ParseText(ReadText(right, false, cancellationToken)), cancellationToken: cancellationToken);
+            var result = TextComparer.Compare(ParseText(ReadText(paths, left, false, cancellationToken)), ParseText(ReadText(paths, right, false, cancellationToken)), cancellationToken: cancellationToken);
 
             // Both labels name the left file on purpose: apply then patches that file in place. Different names
             // would make the patch rename the left file to the right file's name.
@@ -398,17 +398,17 @@ internal static class ComparisonTools
         };
     }
 
-    private static string ReadText(string path, bool extractDocuments, CancellationToken cancellationToken)
+    private static string ReadText(PathGuard paths, string path, bool extractDocuments, CancellationToken cancellationToken)
     {
-        var length = FilePath(path);
+        var (full, length) = FilePath(paths, path);
         cancellationToken.ThrowIfCancellationRequested();
         if (extractDocuments && length > 0)
         {
             var documentText = Path.GetExtension(path).ToLowerInvariant() switch
             {
-                ".docx" => DocxText.Extract(path, cancellationToken: cancellationToken),
-                ".xlsx" => XlsxText.Extract(path, cancellationToken: cancellationToken),
-                ".pptx" => PptxText.Extract(path, cancellationToken: cancellationToken),
+                ".docx" => DocxText.Extract(full, cancellationToken: cancellationToken),
+                ".xlsx" => XlsxText.Extract(full, cancellationToken: cancellationToken),
+                ".pptx" => PptxText.Extract(full, cancellationToken: cancellationToken),
                 _ => null,
             };
             if (documentText is not null)
@@ -417,7 +417,7 @@ internal static class ComparisonTools
             }
         }
 
-        var decoded = ReadDecoded(path, cancellationToken);
+        var decoded = ReadDecoded(full, length, path, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (decoded.IsBinary)
         {
@@ -427,10 +427,9 @@ internal static class ComparisonTools
         return decoded.Text;
     }
 
-    private static DecodedText ReadDecoded(string path, CancellationToken cancellationToken)
+    /// <summary>Reads a file checked by <see cref="FilePath"/>: <paramref name="full"/> is its resolved path.</summary>
+    private static DecodedText ReadDecoded(string full, long length, string path, CancellationToken cancellationToken)
     {
-        var length = FilePath(path);
-
         // Devices, pipes and sockets report a length of 0. They are never opened, so a read cannot block, run
         // without end, or consume another stream (such as this server's own standard input).
         if (length == 0)
@@ -439,7 +438,7 @@ internal static class ComparisonTools
         }
 
         // Read at most one byte past the limit, so a file that grew after the length check is still refused.
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
+        using var stream = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
         using var content = new MemoryStream((int)Math.Min(length, MaxFileBytes));
         var buffer = new byte[81920]; // the default Stream.CopyTo buffer size
         int read;
@@ -470,10 +469,10 @@ internal static class ComparisonTools
     /// Checks that <paramref name="path"/> names an existing file within the size limit and returns its length.
     /// A length of 0 also covers devices, pipes and sockets, which callers must not open.
     /// </summary>
-    private static long FilePath(string path)
+    private static (string Full, long Length) FilePath(PathGuard paths, string path)
     {
-        LocalPath(path);
-        var file = new FileInfo(path);
+        var full = paths.Resolve(path);
+        var file = new FileInfo(full);
         if (!file.Exists)
         {
             throw new FileNotFoundException($"File does not exist: '{path}'.");
@@ -492,31 +491,12 @@ internal static class ComparisonTools
             throw new ArgumentException($"'{path}' exceeds the 64 MiB per-file limit.");
         }
 
-        return file.Length;
+        return (full, file.Length);
     }
 
-    /// <summary>
-    /// Refuses network and device paths before any file-system call: the \\server\share, //server/share, \\?\ and
-    /// \\.\ prefixes, and on Windows device names such as NUL, which resolve to \\.\NUL.
-    /// </summary>
-    private static string LocalPath(string path)
+    private static string DirectoryPath(PathGuard paths, JsonElement arguments, string name)
     {
-        if (string.IsNullOrEmpty(path) || (path.Length >= 2 && path[0] is '\\' or '/' && path[1] is '\\' or '/'))
-        {
-            throw new ArgumentException($"'{path}' is not a local path; network and device paths are not supported.");
-        }
-
-        if (OperatingSystem.IsWindows() && Path.GetFullPath(path).StartsWith(@"\\", StringComparison.Ordinal))
-        {
-            throw new ArgumentException($"'{path}' is a device or network path, not a local file.");
-        }
-
-        return path;
-    }
-
-    private static string DirectoryPath(JsonElement arguments, string name)
-    {
-        var path = LocalPath(Required(arguments, name));
+        var path = paths.Resolve(Required(arguments, name));
         if (!Directory.Exists(path))
         {
             throw new DirectoryNotFoundException($"Directory does not exist: '{path}'.");

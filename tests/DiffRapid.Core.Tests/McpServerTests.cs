@@ -9,6 +9,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -33,7 +34,7 @@ public sealed class McpServerTests : IDisposable
         using var clientInput = new AnonymousPipeClientStream(PipeDirection.In, fromServer.ClientSafePipeHandle);
         using var writer = new StreamWriter(toServer, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(clientInput);
-        await using var server = McpServer.Create(new StreamServerTransport(serverInput, fromServer), ComparisonServer.CreateOptions());
+        await using var server = McpServer.Create(new StreamServerTransport(serverInput, fromServer), ComparisonServer.CreateOptions(new ServerSettings(Paths, false, false)));
         var running = server.RunAsync(cancellation.Token);
         try
         {
@@ -409,7 +410,7 @@ public sealed class McpServerTests : IDisposable
             arguments["base"] = Path.Combine(_root, "missing");
         }
 
-        var result = ComparisonServer.CallTool(name, JsonSerializer.SerializeToElement(arguments));
+        var result = Tool(name, JsonSerializer.SerializeToElement(arguments));
         Assert.True(result.IsError);
         Assert.Contains("does not exist", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
     }
@@ -428,7 +429,7 @@ public sealed class McpServerTests : IDisposable
     public void BadArgumentsProduceToolErrors(string name, string json)
     {
         using var document = JsonDocument.Parse(json);
-        var result = ComparisonServer.CallTool(name, document.RootElement);
+        var result = Tool(name, document.RootElement);
         Assert.True(result.IsError);
         Assert.False(string.IsNullOrWhiteSpace(Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text));
     }
@@ -438,10 +439,10 @@ public sealed class McpServerTests : IDisposable
     {
         var invalid = File("invalid.json", "{");
         var binary = File("invalid.dll", "not an assembly");
-        Assert.True(ComparisonServer.CallTool("compare_structure", JsonSerializer.SerializeToElement(new { left = invalid, right = invalid })).IsError);
-        Assert.True(ComparisonServer.CallTool("compare_api", JsonSerializer.SerializeToElement(new { left = binary, right = binary })).IsError);
+        Assert.True(Tool("compare_structure", JsonSerializer.SerializeToElement(new { left = invalid, right = invalid })).IsError);
+        Assert.True(Tool("compare_api", JsonSerializer.SerializeToElement(new { left = binary, right = binary })).IsError);
         var nul = File("binary.txt", "\0\0\0\0");
-        Assert.True(ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = nul, right = nul })).IsError);
+        Assert.True(Tool("compare_files", JsonSerializer.SerializeToElement(new { left = nul, right = nul })).IsError);
     }
 
     [Theory]
@@ -454,7 +455,7 @@ public sealed class McpServerTests : IDisposable
     {
         foreach (var name in new[] { "compare_files", "compare_folders", "create_patch", "compare_api" })
         {
-            var result = ComparisonServer.CallTool(name, JsonSerializer.SerializeToElement(new { left = path, right = path }));
+            var result = Tool(name, JsonSerializer.SerializeToElement(new { left = path, right = path }));
             Assert.True(result.IsError);
             Assert.Contains("not a local path", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
         }
@@ -468,13 +469,177 @@ public sealed class McpServerTests : IDisposable
             return;
         }
 
+        // Outside the test roots a device is refused by the guard; with "/" as a root the device check refuses it.
         var empty = File("empty.txt", "");
+        var everything = new PathGuard(["/"]);
         foreach (var device in new[] { "/dev/zero", "/dev/stdin", "/dev/random" })
         {
-            var result = ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = device, right = empty }));
-            Assert.True(result.IsError);
-            Assert.Contains("not a regular file", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
+            var arguments = JsonSerializer.SerializeToElement(new { left = device, right = empty });
+            Assert.Contains(PathGuard.OutsideMessage, ErrorText(Tool("compare_files", arguments)));
+            Assert.Contains("not a regular file", ErrorText(ComparisonServer.CallTool("compare_files", arguments, everything)));
         }
+    }
+
+    [Fact]
+    public void PathsInsideTheRootAreAllowedAndOthersRefused()
+    {
+        var app = DirectoryPath("work/app");
+        var sibling = DirectoryPath("work/app2");
+        var inside = File("work/app/a.txt", "a\n");
+        var outside = File("work/app2/a.txt", "a\n");
+        var guard = new PathGuard([app]);
+        Assert.Equal(inside, guard.Resolve(inside));
+        Assert.Equal(inside, guard.Resolve("a.txt"));
+        Assert.Equal(inside, guard.Resolve(Path.Combine(app, "sub", "..", "a.txt")));
+        Assert.Equal(app, guard.Resolve(app));
+        Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(outside));
+        Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(sibling));
+        Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine("..", "app2", "a.txt")));
+        Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "..", "app2", "a.txt")));
+
+        // The refusal names neither the root nor the requested path.
+        var refused = ErrorText(ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = outside, right = inside }), guard));
+        Assert.Equal("compare_files: " + PathGuard.OutsideMessage, refused);
+    }
+
+    [Theory]
+    [InlineData(@"\\host\share\a")]
+    [InlineData("//host/share/a")]
+    [InlineData(@"\\?\C:\a")]
+    [InlineData(@"\\.\pipe\a")]
+    [InlineData("a\0b")]
+    public void UnsafePathsAreRefusedBeforeAnyFileAccess(string path)
+    {
+        // Rooted at a folder that no longer exists: any file-system access while checking would fail differently.
+        var guard = new PathGuard([DirectoryPath("gone")]);
+        Directory.Delete(Path.Combine(_root, "gone"));
+        var error = Assert.Throws<ArgumentException>(() => guard.Resolve(path));
+        Assert.Contains("not a local path", error.Message);
+    }
+
+    [Fact]
+    public void LinksAreResolvedAndRechecked()
+    {
+        var app = DirectoryPath("app");
+        var secret = File("secret/key.txt", "secret\n");
+        File("app/real.txt", "a\n");
+        var guard = new PathGuard([app]);
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "file-out"), secret);
+        Directory.CreateSymbolicLink(Path.Combine(app, "folder-out"), Path.GetDirectoryName(secret)!);
+        System.IO.File.CreateSymbolicLink(Path.Combine(app, "file-in"), Path.Combine(app, "real.txt"));
+        Directory.CreateSymbolicLink(Path.Combine(app, "folder-in"), app);
+        Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "file-out")));
+        Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "folder-out", "key.txt")));
+        Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(Path.Combine(app, "folder-out")));
+        Assert.Equal(Path.Combine(app, "file-in"), guard.Resolve(Path.Combine(app, "file-in")));
+        Assert.Equal(Path.Combine(app, "folder-in", "real.txt"), guard.Resolve(Path.Combine(app, "folder-in", "real.txt")));
+        Assert.True(ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = Path.Combine(app, "file-out"), right = Path.Combine(app, "real.txt") }), guard).IsError);
+    }
+
+    [Fact]
+    public void CaseVariantsFollowThePlatformRule()
+    {
+        var app = DirectoryPath("Case/App");
+        File("Case/App/a.txt", "a\n");
+        var guard = new PathGuard([app]);
+        var variant = Path.Combine(_root, "case", "APP", "a.txt");
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        {
+            Assert.Equal(variant, guard.Resolve(variant));
+        }
+        else
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => guard.Resolve(variant));
+        }
+    }
+
+    [Fact]
+    public void SettingsDefaultToTheWorkingDirectoryAndValidateRoots()
+    {
+        var work = DirectoryPath("work");
+        var other = DirectoryPath("other");
+        var settings = ServerSettings.Parse([], work);
+        Assert.True(settings.UsesWorkingDirectory);
+        Assert.False(settings.RootsFromClient);
+        Assert.Equal([work], settings.Paths.Roots);
+        settings = ServerSettings.Parse(["--root", other, "--root=" + work, "--roots-from-client"], _root);
+        Assert.False(settings.UsesWorkingDirectory);
+        Assert.True(settings.RootsFromClient);
+        Assert.Equal([other, work], settings.Paths.Roots);
+        Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--root"], work));
+        Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--root", Path.Combine(_root, "missing")], work));
+        Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--root", "//host/share"], work));
+        Assert.Throws<ArgumentException>(() => ServerSettings.Parse(["--rot", work], work));
+        var withClient = new PathGuard([work]).WithClientRoots([new Uri(other).AbsoluteUri, "https://example.com/x", "file://host/share/x", new Uri(Path.Combine(_root, "missing")).AbsoluteUri]);
+        Assert.Equal([work, other], withClient.Roots);
+    }
+
+    [Fact]
+    public async Task ClientRootsAreUsedOnlyWhenEnabled()
+    {
+        var work = DirectoryPath("work");
+        var client = DirectoryPath("client");
+        var file = File("client/a.txt", "a\n");
+        Assert.True(await CallOverStreams(enabled: false));
+        Assert.False(await CallOverStreams(enabled: true));
+
+        async Task<bool> CallOverStreams(bool enabled)
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var toServer = new AnonymousPipeServerStream(PipeDirection.Out);
+            using var serverInput = new AnonymousPipeClientStream(PipeDirection.In, toServer.ClientSafePipeHandle);
+            using var fromServer = new AnonymousPipeServerStream(PipeDirection.Out);
+            using var clientInput = new AnonymousPipeClientStream(PipeDirection.In, fromServer.ClientSafePipeHandle);
+            var settings = new ServerSettings(new PathGuard([work]), enabled, false);
+            await using var server = McpServer.Create(new StreamServerTransport(serverInput, fromServer), ComparisonServer.CreateOptions(settings));
+            var running = server.RunAsync(cancellation.Token);
+#pragma warning disable MCP9005 // the stub client lists roots, a feature the specification deprecates (SEP-2577)
+            var options = new McpClientOptions
+            {
+                Capabilities = new ClientCapabilities { Roots = new RootsCapability() },
+                Handlers = new McpClientHandlers
+                {
+                    RootsHandler = (_, _) => ValueTask.FromResult(new ListRootsResult { Roots = [new Root { Uri = new Uri(client).AbsoluteUri }] }),
+                },
+            };
+#pragma warning restore MCP9005
+            try
+            {
+                await using var mcp = await McpClient.CreateAsync(new StreamClientTransport(toServer, clientInput), options, cancellationToken: cancellation.Token);
+                var result = await mcp.CallToolAsync("compare_files", new Dictionary<string, object?> { ["left"] = file, ["right"] = file }, cancellationToken: cancellation.Token);
+                return result.IsError == true;
+            }
+            finally
+            {
+                cancellation.Cancel();
+                try
+                {
+                    await running;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task CliRegistrationCarriesRoots()
+    {
+        var root = DirectoryPath("registered root");
+        var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var argument in new[] { typeof(DiffRapid.Cli.Program).Assembly.Location, "mcp", "--root", root, "--root=" + _root })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(0, process.ExitCode);
+        using var registration = JsonDocument.Parse(await output);
+        var args = registration.RootElement.GetProperty("mcpServers").GetProperty("diffrapid").GetProperty("args").EnumerateArray().Select(value => value.GetString()).ToArray();
+        Assert.Equal(["--root", root, "--root", _root], args);
     }
 
     [Fact]
@@ -497,7 +662,7 @@ public sealed class McpServerTests : IDisposable
         var call = Task.Run(() => Call("compare_files", new { left = pipe, right = empty }), TestContext.Current.CancellationToken);
         var result = await call.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.True(result.GetProperty("identical").GetBoolean());
-        Assert.True(ComparisonServer.CallTool("compare_api", JsonSerializer.SerializeToElement(new { left = pipe, right = pipe })).IsError);
+        Assert.True(Tool("compare_api", JsonSerializer.SerializeToElement(new { left = pipe, right = pipe })).IsError);
     }
 
     [Fact]
@@ -511,10 +676,10 @@ public sealed class McpServerTests : IDisposable
             big.SetLength(64L * 1024 * 1024 + 1);
         }
 
-        var result = ComparisonServer.CallTool("create_patch", JsonSerializer.SerializeToElement(new { left, right }));
+        var result = Tool("create_patch", JsonSerializer.SerializeToElement(new { left, right }));
         Assert.True(result.IsError);
         Assert.Contains("64 MiB", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
-        result = ComparisonServer.CallTool("compare_files", JsonSerializer.SerializeToElement(new { left = Path.Combine(left, "big.txt"), right = Path.Combine(right, "big.txt") }));
+        result = Tool("compare_files", JsonSerializer.SerializeToElement(new { left = Path.Combine(left, "big.txt"), right = Path.Combine(right, "big.txt") }));
         Assert.True(result.IsError);
     }
 
@@ -540,7 +705,7 @@ public sealed class McpServerTests : IDisposable
     {
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        Assert.Throws<OperationCanceledException>(() => ComparisonServer.CallTool("compare_text", JsonSerializer.SerializeToElement(new { left_text = "a", right_text = "b" }), cancellation.Token));
+        Assert.Throws<OperationCanceledException>(() => Tool("compare_text", JsonSerializer.SerializeToElement(new { left_text = "a", right_text = "b" }), cancellation.Token));
     }
 
     [Fact]
@@ -564,9 +729,21 @@ public sealed class McpServerTests : IDisposable
         Assert.Empty(server.GetProperty("args").EnumerateArray());
     }
 
-    private static JsonElement Call(string name, object arguments)
+    // The test folder, plus the build output that holds the assemblies compare_api reads.
+    private PathGuard Paths => new([_root, AppContext.BaseDirectory]);
+
+    private CallToolResult Tool(string name, JsonElement arguments, CancellationToken cancellationToken = default) =>
+        ComparisonServer.CallTool(name, arguments, Paths, cancellationToken);
+
+    private static string ErrorText(CallToolResult result)
     {
-        var result = ComparisonServer.CallTool(name, JsonSerializer.SerializeToElement(arguments));
+        Assert.True(result.IsError);
+        return Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+    }
+
+    private JsonElement Call(string name, object arguments)
+    {
+        var result = Tool(name, JsonSerializer.SerializeToElement(arguments));
         Assert.False(result.IsError, result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text);
         using var document = JsonDocument.Parse(Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
         return document.RootElement.Clone();

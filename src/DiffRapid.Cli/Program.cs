@@ -83,7 +83,7 @@ internal static partial class Program
           diffrapid api <left.dll|.nupkg> [<right.dll|.nupkg>] [--breaking-only]
                          One file: print its public API. Two: list API changes, marking breaking ones.
           diffrapid plugins                      list the built-in unpackers and prediffers
-          diffrapid mcp                          print MCP client registration JSON
+          diffrapid mcp [--root <dir>]...         print MCP client registration JSON; each --root is a folder the server may read
 
         Compare options:
           --algorithm <default|minimal|patience|histogram|none>   (default: histogram)

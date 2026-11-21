@@ -216,8 +216,13 @@ eight tools: `compare_files`, `compare_text`, `compare_folders`, `merge_three_wa
 
 ```powershell
 dotnet build src/DiffRapid.Mcp
-claude mcp add diffrapid -- dotnet <repo>\src\DiffRapid.Mcp\bin\Debug\net10.0\diffrapid-mcp.dll
+claude mcp add diffrapid -- dotnet <repo>\src\DiffRapid.Mcp\bin\Debug\net10.0\diffrapid-mcp.dll --root C:\Work
 ```
+
+The server reads only files inside its allowed root folders: each `--root <folder>`, or the directory the client
+starts it in when none is given. `--roots-from-client` also accepts the folders the client lists. A path outside
+them, or a link that leads outside, is refused. `diffrapid mcp --root <folder>` prints a registration with the
+roots filled in.
 
 See [src/DiffRapid.Mcp/README.md](src/DiffRapid.Mcp/README.md) for Claude Code, Visual Studio Copilot and other clients.
 

@@ -55,6 +55,7 @@ internal static partial class Program
             "format",
             "array-key",
             "ignore",
+            "root",
         };
 
         private readonly Dictionary<string, List<string>> _repeated = new(StringComparer.OrdinalIgnoreCase);
@@ -140,7 +141,7 @@ internal static partial class Program
         private void AddOption(string name, string? inlineValue)
         {
             _options[name] = inlineValue;
-            if ((name is "include" or "exclude") && inlineValue is not null)
+            if ((name is "include" or "exclude" or "root") && inlineValue is not null)
             {
                 if (!_repeated.TryGetValue(name, out var masks))
                 {
