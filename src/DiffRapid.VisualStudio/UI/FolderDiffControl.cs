@@ -1458,7 +1458,8 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
         _position.Text = busyText;
         _package.JoinableTaskFactory.RunAsync(async () =>
         {
-            IReadOnlyList<string> errors;
+            IReadOnlyList<string> errors = Array.Empty<string>();
+            Exception? failure = null;
             try
             {
                 errors = await Task.Run(() => work(_package.DisposalToken));
@@ -1467,14 +1468,32 @@ internal sealed class FolderDiffControl : DockPanel, IComparisonView
             {
                 return;
             }
+            catch (Exception ex)
+            {
+                // Anything the per-item handling did not expect still ends the operation.
+                failure = ex;
+            }
             finally
             {
                 await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
                 _busy = false;
+                if (!_disposed)
+                {
+                    UpdateActionButtons();
+                }
             }
 
             if (_disposed)
             {
+                return;
+            }
+
+            if (failure is not null)
+            {
+                // The folders may have changed part-way, so they are compared again.
+                Diagnostics.LogError(failure);
+                _afterScanMessage = $"{verb} stopped: {failure.Message}";
+                StartScan();
                 return;
             }
 
