@@ -38,7 +38,10 @@ internal static class ExecutablePath
         return Found.GetOrAdd(executable, found);
     }
 
-    /// <summary>The first match for a bare <paramref name="executable"/> in the absolute folders of <paramref name="pathVariable"/>, or null.</summary>
+    /// <summary>
+    /// The first match for a bare <paramref name="executable"/> in the absolute folders of <paramref name="pathVariable"/>,
+    /// or null. On Unix a file without an execute bit is skipped, as the shell does, so it cannot shadow a later match.
+    /// </summary>
     internal static string? Search(string executable, string? pathVariable)
     {
         var name = IsWindows && !Path.HasExtension(executable) ? executable + ".exe" : executable;
@@ -52,13 +55,25 @@ internal static class ExecutablePath
             }
 
             var candidate = Path.Combine(folder, name);
-            if (File.Exists(candidate))
+            if (File.Exists(candidate) && IsExecutable(candidate))
             {
                 return candidate;
             }
         }
 
         return null;
+    }
+
+    private static bool IsExecutable(string candidate)
+    {
+        try
+        {
+            return FileModes.Get(candidate) is not { } mode || (mode & FileModes.AnyExecute) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     // Path.IsPathFullyQualified is missing from netstandard2.0: "\folder" and "C:folder" are rooted but relative.
