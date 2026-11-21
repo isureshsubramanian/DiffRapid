@@ -25,6 +25,12 @@ public sealed class PixelImage
     /// <summary>Bytes per pixel in the BGRA32 layout.</summary>
     public const int BytesPerPixel = 4;
 
+    /// <summary>
+    /// The most pixels a decoded image or a comparison canvas may hold (an estimate: 100 million pixels,
+    /// 400 MB as BGRA32, far past photographs and screenshots while keeping memory bounded).
+    /// </summary>
+    internal const long MaxPixels = 100_000_000;
+
     /// <summary>Creates a fully transparent image with tightly packed rows.</summary>
     public PixelImage(int width, int height)
         : this(width, height, PackedStride(width), new byte[PackedLength(width, height)])
