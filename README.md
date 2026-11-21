@@ -10,7 +10,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![.NET](https://img.shields.io/badge/.NET-10%20%7C%20Standard%202.0-512BD4)
 ![Visual Studio](https://img.shields.io/badge/Visual%20Studio-2026-5C2D91)
-![Tests](https://img.shields.io/badge/tests-1131%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1133%20passing-brightgreen)
 
 **[Install from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=SureshSubramanian.DiffRapid)**
 
