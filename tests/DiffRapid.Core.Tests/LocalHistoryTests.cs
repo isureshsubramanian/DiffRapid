@@ -79,6 +79,43 @@ public sealed class LocalHistoryTests : IDisposable
     }
 
     [Fact]
+    public void HasHistoryNeedsNoLockAndFollowsRenames()
+    {
+        var store = OpenStore();
+        Assert.False(store.HasHistory(SourcePath));
+        Capture(store, "first");
+        var renamed = Path.Combine(_root, "renamed.txt");
+        using (new FileStream(Path.Combine(StoreFolder, ".lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            var watch = Stopwatch.StartNew();
+            Assert.True(store.HasHistory(SourcePath));
+            Assert.False(store.HasHistory(renamed));
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5));
+        }
+
+        store.Rename(SourcePath, renamed);
+        Assert.False(store.HasHistory(SourcePath));
+        Assert.True(store.HasHistory(renamed));
+    }
+
+    [Fact]
+    public void DedupComparesWithTheLastValidLineOfALongIndex()
+    {
+        var store = OpenStore();
+        for (var i = 0; i < 60; i++)
+        {
+            Capture(store, i % 2 == 0 ? "even" : "odd" + i);
+        }
+
+        Capture(store, "last");
+        // A damaged tail longer than the first read window makes the reader look further back.
+        File.AppendAllText(IndexFor(SourcePath), "{ torn line" + new string('x', 10000));
+        Assert.Null(store.SnapshotText(SourcePath, "last", new UTF8Encoding(false), "Again"));
+        Assert.NotNull(store.SnapshotText(SourcePath, "even", new UTF8Encoding(false), "Older content"));
+        Assert.Equal(62, store.List(SourcePath).Count);
+    }
+
+    [Fact]
     public void FileAndBufferSnapshotsOfTheSameBytesDeduplicate()
     {
         var store = OpenStore();

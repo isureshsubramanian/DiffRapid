@@ -266,6 +266,50 @@ public sealed class SyncTests : IDisposable
     }
 
     [Fact]
+    public void Folder_delete_refuses_a_folder_that_still_has_contents()
+    {
+        Write(false, "extra/keep.txt", "keep");
+        var deleted = new List<string>();
+        var results = SyncExecutor.Execute(
+            Plan(SyncMode.MirrorLeftToRight),
+            op => op.RelativePath != "extra/keep.txt" && op.RelativePath != "extra\\keep.txt",
+            new SyncExecuteOptions { Delete = (path, _) => deleted.Add(path) });
+
+        var folder = Assert.Single(results, r => r.Operation.RelativePath == "extra");
+        Assert.Equal(SyncOperationStatus.Failed, folder.Status);
+        Assert.StartsWith("The folder is not empty", folder.Error);
+        Assert.Empty(deleted);
+        Assert.True(Exists(false, "extra/keep.txt"));
+    }
+
+    [Fact]
+    public void Folder_delete_refuses_a_folder_replaced_by_a_link()
+    {
+        Directory.CreateDirectory(Path.Combine(Right, "extra"));
+        var plan = Plan(SyncMode.MirrorLeftToRight);
+        var outside = Path.Combine(_root, "outside");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "precious.txt"), "precious");
+        Directory.Delete(Path.Combine(Right, "extra"));
+        try
+        {
+            Directory.CreateSymbolicLink(Path.Combine(Right, "extra"), outside);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Assert.Skip("Symbolic links cannot be created here.");
+        }
+
+        var deleted = new List<string>();
+        var result = Assert.Single(SyncExecutor.Execute(plan, options: new SyncExecuteOptions { Delete = (path, _) => deleted.Add(path) }));
+        Assert.Equal(SyncOperationStatus.Failed, result.Status);
+        Assert.StartsWith("Links are not followed", result.Error);
+        Assert.Empty(deleted);
+        Assert.True(File.Exists(Path.Combine(outside, "precious.txt")));
+        Directory.Delete(Path.Combine(Right, "extra"));
+    }
+
+    [Fact]
     public void Include_selects_operations_and_the_delete_hook_replaces_plain_deletes()
     {
         Write(true, "copy.txt", "copy");

@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading;
+using DiffRapid.Core.IO;
 
 namespace DiffRapid.Core.Folders;
 
@@ -132,7 +133,7 @@ public static class FolderReportWriter
                 item.RelativePath, item.Status.ToString(), Size(item.Left), Modified(item.Left), Size(item.Right),
                 Modified(item.Right), Differences(item), item.Error ?? string.Empty,
             };
-            writer.Write(string.Join(",", fields.Select(Quote)));
+            writer.Write(string.Join(",", fields.Select(CsvCell.Quote)));
             writer.Write("\r\n");
         }
     }
@@ -159,8 +160,6 @@ public static class FolderReportWriter
     };
 
     private static string Encode(string text) => WebUtility.HtmlEncode(text);
-
-    private static string Quote(string value) => "\"" + value.Replace("\"", "\"\"") + "\"";
 
     private static string Size(FileMeta meta) => meta.Exists ? meta.Size.ToString(CultureInfo.InvariantCulture) : string.Empty;
 

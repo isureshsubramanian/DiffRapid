@@ -1,12 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
 using DiffRapid.Core.Text;
 using DiffRapid.Core.VersionControl;
 
@@ -138,11 +136,17 @@ internal sealed class ExecPlugin : IUnpacker, IPrediffer
         new(context.FileName, Array.Empty<string>(), context.ExternalCommandTimeout, context.CancellationToken);
 }
 
-/// <summary>Starts a program, feeds it input and collects its output within a time limit.</summary>
+/// <summary>
+/// Starts a program, feeds it input and collects its output within a time limit, through the shared
+/// <see cref="ProcessRunner"/>: output past <see cref="ProcessRunner.DefaultOutputLimit"/> stops the program, and a
+/// stopped program has exited before its temporary file is deleted.
+/// </summary>
 internal static class ExternalCommand
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(25);
-    private static readonly TimeSpan OutputDrainTimeout = TimeSpan.FromSeconds(5);
+    // Estimate: a just-stopped program (or a grandchild that outlived it) can hold the temporary file open for a
+    // moment on Windows; a few short retries cover that without delaying the result noticeably.
+    private const int DeleteAttempts = 5;
+    private static readonly TimeSpan DeleteRetryDelay = TimeSpan.FromMilliseconds(100);
 
     public static string Run(string program, IReadOnlyList<string> arguments, byte[] input, PluginContext context)
     {
@@ -169,118 +173,29 @@ internal static class ExternalCommand
 
     private static string Execute(string program, IReadOnlyList<string> arguments, byte[]? standardInput, PluginContext context)
     {
-        using var process = new Process
+        ProcessResult result;
+        try
         {
-            StartInfo = new ProcessStartInfo(program, string.Join(" ", arguments.Select(ProcessRunner.Quote)))
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardErrorEncoding = Encoding.UTF8,
-            },
-        };
-
-        Start(process, program);
-        var outputTask = ReadAllAsync(process.StandardOutput.BaseStream);
-        var errorTask = process.StandardError.ReadToEndAsync();
-        _ = WriteInputAsync(process.StandardInput.BaseStream, standardInput ?? Array.Empty<byte>());
-        WaitForExit(process, program, context);
-        if (!outputTask.Wait(OutputDrainTimeout))
+            result = ProcessRunner.RunAsync(program, null, arguments, standardInput, ProcessRunner.DefaultOutputLimit,
+                context.ExternalCommandTimeout, context.CancellationToken).GetAwaiter().GetResult();
+        }
+        catch (TimeoutException ex)
         {
-            throw new PluginException($"{program}: the output did not finish after the program exited.");
+            throw new PluginException(ex.Message, ex);
+        }
+        catch (IOException ex)
+        {
+            throw new PluginException(ex.Message, ex);
         }
 
-        if (process.ExitCode != 0)
+        if (result.ExitCode != 0)
         {
-            var error = errorTask.Wait(OutputDrainTimeout) ? errorTask.Result.Trim() : string.Empty;
+            var error = result.Error.Trim();
             var detail = error.Length == 0 ? string.Empty : ": " + (error.Length > 500 ? error.Substring(0, 500) + "..." : error);
-            throw new PluginException($"{program} exited with code {process.ExitCode}{detail}");
+            throw new PluginException($"{program} exited with code {result.ExitCode}{detail}");
         }
 
-        return TextFileReader.Decode(outputTask.Result).Text;
-    }
-
-    private static void Start(Process process, string program)
-    {
-        try
-        {
-            process.Start();
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            throw new PluginException($"{program}: {ex.Message}", ex);
-        }
-    }
-
-    private static void WaitForExit(Process process, string program, PluginContext context)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        while (!process.WaitForExit((int)PollInterval.TotalMilliseconds))
-        {
-            if (context.CancellationToken.IsCancellationRequested)
-            {
-                Kill(process);
-                context.CancellationToken.ThrowIfCancellationRequested();
-            }
-
-            if (stopwatch.Elapsed > context.ExternalCommandTimeout)
-            {
-                Kill(process);
-                throw new PluginException($"{program} did not finish within {context.ExternalCommandTimeout.TotalSeconds:0.###} seconds and was stopped.");
-            }
-        }
-
-        // The parameterless wait also lets the redirected streams reach their end.
-        process.WaitForExit();
-    }
-
-    private static async Task<byte[]> ReadAllAsync(Stream stream)
-    {
-        using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer).ConfigureAwait(false);
-        return buffer.ToArray();
-    }
-
-    private static async Task WriteInputAsync(Stream stream, byte[] input)
-    {
-        // A program may exit without reading all of its input; that is not an error.
-        try
-        {
-            await stream.WriteAsync(input, 0, input.Length).ConfigureAwait(false);
-        }
-        catch (IOException)
-        {
-        }
-        finally
-        {
-            try
-            {
-                stream.Dispose();
-            }
-            catch (IOException)
-            {
-            }
-        }
-    }
-
-    private static void Kill(Process process)
-    {
-        // The process may exit on its own between the check and the kill.
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill();
-            }
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-        }
+        return TextFileReader.Decode(result.Output).Text;
     }
 
     private static string CreateTempFile(byte[] input, string fileName)
@@ -298,15 +213,22 @@ internal static class ExternalCommand
             return;
         }
 
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            File.Delete(path);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= DeleteAttempts)
+                {
+                    return;
+                }
+
+                Thread.Sleep(DeleteRetryDelay);
+            }
         }
     }
 }

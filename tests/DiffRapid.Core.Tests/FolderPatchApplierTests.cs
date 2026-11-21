@@ -119,6 +119,35 @@ public sealed class FolderPatchApplierTests : IDisposable
     }
 
     [Fact]
+    public void RenameOntoAnExistingFileFails()
+    {
+        File.WriteAllText(At("a.txt"), "one\ntwo\nthree\n");
+        File.WriteAllText(At("b.txt"), "unrelated\n");
+        var patch = Parse("diff --git a/a.txt b/b.txt\n--- a/a.txt\n+++ b/b.txt\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n");
+        var file = Assert.Single(FolderPatchApplier.Plan(patch, _root).Files);
+        Assert.Equal(FilePatchStatus.Failed, file.Status);
+        Assert.Equal("The file to rename to already exists.", file.Message);
+        Assert.False(FolderPatchApplier.ApplyFile(file).Written);
+        Assert.Equal("unrelated\n", File.ReadAllText(At("b.txt")));
+        Assert.True(File.Exists(At("a.txt")));
+    }
+
+    [Fact]
+    public void RenameTargetCreatedSincePreviewIsNotOverwritten()
+    {
+        File.WriteAllText(At("a.txt"), "# Samples\n");
+        var patch = Parse("diff --git a/a.txt b/b.txt\nsimilarity index 100%\nrename from a.txt\nrename to b.txt\n");
+        var plan = FolderPatchApplier.Plan(patch, _root);
+        Assert.Equal(FilePatchStatus.Ready, Assert.Single(plan.Files).Status);
+        File.WriteAllText(At("b.txt"), "unrelated\n");
+        var result = Assert.Single(FolderPatchApplier.Apply(plan));
+        Assert.False(result.Written);
+        Assert.Equal("The file to rename to was created since the preview.", result.Error);
+        Assert.Equal("unrelated\n", File.ReadAllText(At("b.txt")));
+        Assert.True(File.Exists(At("a.txt")));
+    }
+
+    [Fact]
     public void PureRenameIsPlannedAppliedAndThenAlreadyApplied()
     {
         Directory.CreateDirectory(At("docs"));
@@ -200,6 +229,57 @@ public sealed class FolderPatchApplierTests : IDisposable
         {
             Directory.Delete(outside, true);
         }
+    }
+
+    [Fact]
+    public void LinkCreatedAfterThePreviewIsNotWrittenThrough()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "diffrapid-fpa-outside-" + Guid.NewGuid());
+        Directory.CreateDirectory(outside);
+        try
+        {
+            Directory.CreateDirectory(At("sub"));
+            File.WriteAllText(At("sub/a.txt"), "one\ntwo\nthree\n");
+            File.WriteAllText(Path.Combine(outside, "a.txt"), "one\ntwo\nthree\n");
+            var plan = FolderPatchApplier.Plan(Parse(ChangeA.Replace("/a.txt", "/sub/a.txt")), _root);
+            Assert.Equal(FilePatchStatus.Ready, Assert.Single(plan.Files).Status);
+
+            Directory.Delete(At("sub"), true);
+            try
+            {
+                Directory.CreateSymbolicLink(At("sub"), outside);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Assert.Skip("Symbolic links cannot be created here.");
+            }
+
+            var result = Assert.Single(FolderPatchApplier.Apply(plan));
+            Assert.False(result.Written);
+            Assert.StartsWith("The patch path goes through a link", result.Error);
+            Assert.Equal("one\ntwo\nthree\n", File.ReadAllText(Path.Combine(outside, "a.txt")));
+        }
+        finally
+        {
+            Directory.Delete(outside, true);
+        }
+    }
+
+    [Fact]
+    public void AddThroughDanglingLinkIsRejected()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "diffrapid-fpa-missing-" + Guid.NewGuid(), "new.txt");
+        try
+        {
+            File.CreateSymbolicLink(At("new.txt"), outside);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Assert.Skip("Symbolic links cannot be created here.");
+        }
+
+        var patch = Parse("--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+x\n");
+        Assert.Equal(FilePatchStatus.Unsafe, Assert.Single(FolderPatchApplier.Plan(patch, _root).Files).Status);
     }
 
     [Fact]

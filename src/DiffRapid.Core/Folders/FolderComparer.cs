@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using DiffRapid.Core.Comparison;
+using DiffRapid.Core.IO;
 using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Folders;
@@ -19,7 +20,14 @@ public static class FolderComparer
 {
     private const int MaxDepth = 128;
     private const int BufferSize = 64 * 1024;
-    private const int TextProbeSize = 8000;
+
+    // Estimate: with links followed, one folder can be reached many times (a link to a parent, or several links to
+    // one folder). Two million entries is far beyond the trees compared in practice and keeps the item list near
+    // 1 GB at roughly 500 bytes per item (record, paths and metadata).
+    private const int MaxFollowedEntries = 2_000_000;
+
+    // The same limit on link hops as Linux's ELOOP (40), so a chain of links cannot loop while being resolved.
+    private const int MaxLinkHops = 40;
 
     private static readonly FileMeta Missing = new(0, DateTime.MinValue, 0, false);
 
@@ -103,7 +111,7 @@ public static class FolderComparer
         var leftRoot = Path.GetFullPath(left);
         var rightRoot = Path.GetFullPath(right);
         using var scan = new Scan(options, report, cancellationToken);
-        var root = scan.Visit(leftRoot, rightRoot, string.Empty, depth: 0, hasLeft: true, hasRight: true);
+        var root = scan.Visit(leftRoot, rightRoot, string.Empty, depth: 0, hasLeft: true, hasRight: true, null, null, null, null);
         if (options.DetectRenames && root.Status != FolderCompareStatus.Error)
         {
             var revised = new List<FolderCompareItem>();
@@ -152,6 +160,7 @@ public static class FolderComparer
         private readonly Mask[] _includeFolders;
         private readonly Mask[] _excludeFolders;
         private readonly ThreadLocal<(byte[] Left, byte[] Right)> _buffers = new(() => (new byte[BufferSize], new byte[BufferSize]));
+        private int _entries;
 
         public Scan(FolderCompareOptions options, Action<FolderCompareItem>? report, CancellationToken token)
         {
@@ -172,7 +181,7 @@ public static class FolderComparer
 
         public FolderCompareItem Visit(
             string left, string right, string relative, int depth, bool hasLeft, bool hasRight,
-            FileSystemInfo? leftEntry = null, FileSystemInfo? rightEntry = null)
+            FileSystemInfo? leftEntry, FileSystemInfo? rightEntry, Branch? leftBranch, Branch? rightBranch)
         {
             _token.ThrowIfCancellationRequested();
             var leftMeta = Missing;
@@ -225,7 +234,19 @@ public static class FolderComparer
 
                 if (isFolder)
                 {
-                    return VisitFolder(left, right, relative, depth, status, leftMeta.Exists, rightMeta.Exists, Finish);
+                    Branch? leftFolder = null;
+                    Branch? rightFolder = null;
+                    if (_options.FollowSymlinks)
+                    {
+                        leftFolder = leftMeta.Exists ? Enter(left, KindOf(leftMeta) == FolderItemKind.Link, leftBranch) : null;
+                        rightFolder = rightMeta.Exists ? Enter(right, KindOf(rightMeta) == FolderItemKind.Link, rightBranch) : null;
+                        if (leftFolder?.IsCycle == true || rightFolder?.IsCycle == true)
+                        {
+                            return Finish(FolderCompareStatus.Error, error: "A link leads back to a folder above it (a link cycle).");
+                        }
+                    }
+
+                    return VisitFolder(left, right, relative, depth, status, leftMeta.Exists, rightMeta.Exists, leftFolder, rightFolder, Finish);
                 }
 
                 if (status != FolderCompareStatus.Identical)
@@ -264,11 +285,18 @@ public static class FolderComparer
             FolderCompareStatus status,
             bool leftExists,
             bool rightExists,
+            Branch? leftBranch,
+            Branch? rightBranch,
             Func<FolderCompareStatus, long?, string?, IReadOnlyList<FolderCompareItem>?, FolderCompareItem> finish)
         {
             if (depth >= MaxDepth)
             {
                 return finish(FolderCompareStatus.Error, null, $"Folder nesting (or a link cycle) exceeds {MaxDepth} levels.", null);
+            }
+
+            if (_options.FollowSymlinks && Volatile.Read(ref _entries) > MaxFollowedEntries)
+            {
+                return finish(FolderCompareStatus.Error, null, $"The scan stopped after {MaxFollowedEntries} entries; followed links may repeat folders.", null);
             }
 
             // Non-recursive: subfolders are listed by existence only.
@@ -295,7 +323,9 @@ public static class FolderComparer
                     hasLeft,
                     hasRight,
                     leftEntry,
-                    rightEntry);
+                    rightEntry,
+                    leftBranch,
+                    rightBranch);
             }
 
             // Only the top level runs in parallel, which keeps the total concurrency bounded.
@@ -367,7 +397,92 @@ public static class FolderComparer
                 entries.Add(name, entry);
             }
 
+            Interlocked.Add(ref _entries, entries.Count);
             return entries;
+        }
+
+        /// <summary>
+        /// Records a folder on the current branch by its real path: a plain folder extends its parent's real path, a
+        /// link (or the root) is resolved. Null when the real path cannot be found (no link API on .NET Framework),
+        /// which leaves only the depth and entry limits.
+        /// </summary>
+        private static Branch? Enter(string path, bool isLink, Branch? parent)
+        {
+            var real = isLink || parent is null ? RealPath(path)
+                : parent.RealPath is { } parentReal ? Path.Combine(parentReal, Path.GetFileName(path)) : null;
+            if (real is null)
+            {
+                return new Branch(null, parent, false);
+            }
+
+            for (var above = parent; above is not null; above = above.Parent)
+            {
+                if (above.RealPath is not null && string.Equals(above.RealPath, real, PathContainment.Comparison))
+                {
+                    return new Branch(real, parent, true);
+                }
+            }
+
+            return new Branch(real, parent, false);
+        }
+
+        /// <summary>
+        /// Resolves every link along <paramref name="fullPath"/>, at most <see cref="MaxLinkHops"/> of them. Null when a
+        /// link cannot be resolved on this runtime or the hops run out.
+        /// </summary>
+        private static string? RealPath(string fullPath)
+        {
+            var path = fullPath;
+            for (var hops = 0; hops <= MaxLinkHops; hops++)
+            {
+                var root = Path.GetPathRoot(path) ?? string.Empty;
+                var parts = path.Substring(root.Length).Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+                var current = root;
+                var resolved = true;
+                for (var i = 0; i < parts.Length; i++)
+                {
+                    current = Path.Combine(current, parts[i]);
+                    var info = new DirectoryInfo(current);
+                    if ((int)info.Attributes == -1 || (info.Attributes & FileAttributes.ReparsePoint) == 0)
+                    {
+                        continue;
+                    }
+
+                    var target = LinkTarget(info);
+                    if (target is null)
+                    {
+                        return null;
+                    }
+
+                    path = Path.GetFullPath(Path.Combine(target, string.Join(Path.DirectorySeparatorChar.ToString(), parts.Skip(i + 1))));
+                    resolved = false;
+                    break;
+                }
+
+                if (resolved)
+                {
+                    return current;
+                }
+            }
+
+            return null;
+        }
+
+        // FileSystemInfo.ResolveLinkTarget exists from .NET 6; netstandard2.0 cannot call it directly, and .NET
+        // Framework has no equivalent, where this returns null.
+        private static readonly System.Reflection.MethodInfo? ResolveLinkTarget =
+            typeof(FileSystemInfo).GetMethod("ResolveLinkTarget", new[] { typeof(bool) });
+
+        private static string? LinkTarget(FileSystemInfo link)
+        {
+            try
+            {
+                return (ResolveLinkTarget?.Invoke(link, new object[] { false }) as FileSystemInfo)?.FullName;
+            }
+            catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
         }
 
         private bool IsFiltered(string relativePath, bool isFolder)
@@ -491,15 +606,11 @@ public static class FolderComparer
             return count;
         }
 
-        // Same heuristic as the editor: a NUL byte near the start means binary, unless a UTF-16/32 byte order mark says otherwise.
         private bool LooksLikeText(Stream stream)
         {
             stream.Position = 0;
-            var probe = new byte[TextProbeSize];
-            var count = Fill(stream, probe);
-            var hasUnicodeBom = (count >= 2 && ((probe[0] == 0xFF && probe[1] == 0xFE) || (probe[0] == 0xFE && probe[1] == 0xFF)))
-                || (count >= 4 && probe[0] == 0 && probe[1] == 0 && probe[2] == 0xFE && probe[3] == 0xFF);
-            return hasUnicodeBom || Array.IndexOf(probe, (byte)0, 0, count) < 0;
+            var probe = new byte[TextProbe.Size];
+            return TextProbe.LooksLikeText(probe, Fill(stream, probe));
         }
 
         private byte[] ReadAll(Stream stream)
@@ -517,9 +628,15 @@ public static class FolderComparer
         }
     }
 
+    /// <summary>A followed folder on the current branch of the scan, by real path (null when unknown).</summary>
+    private sealed record Branch(string? RealPath, Branch? Parent, bool IsCycle);
+
     /// <summary>A file or folder glob: <c>*</c> and <c>?</c> stay within a path segment, <c>**</c> crosses segments.</summary>
     private sealed class Mask
     {
+        // The same limit as FolderFilter: a glob such as many "**" in a row can backtrack on a long path.
+        private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(1);
+
         private readonly Regex _regex;
         private readonly bool _matchesPath;
 
@@ -535,12 +652,23 @@ public static class FolderComparer
                 .Replace(@"\*", "[^/]*")
                 .Replace(@"\?", "[^/]");
             var options = RegexOptions.CultureInvariant | (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
-            _regex = new Regex(@"\A" + pattern + @"\z", options);
+            _regex = new Regex(@"\A" + pattern + @"\z", options, MatchTimeout);
         }
 
         public static Mask[] CompileAll(IReadOnlyList<string> masks, bool caseSensitive) =>
             masks.Select(m => new Mask(m, caseSensitive)).ToArray();
 
-        public bool Matches(string relativePath, string name) => _regex.IsMatch(_matchesPath ? relativePath : name);
+        /// <summary>Whether the mask matches; one that runs past its time limit counts as not matching, as in FolderFilter.</summary>
+        public bool Matches(string relativePath, string name)
+        {
+            try
+            {
+                return _regex.IsMatch(_matchesPath ? relativePath : name);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return false;
+            }
+        }
     }
 }

@@ -140,6 +140,32 @@ public sealed class FolderRenameTests : IDisposable
     }
 
     [Fact]
+    public void Lines_shared_by_many_files_do_not_decide_the_pairing()
+    {
+        Write(true, "old/target.cs", "}\nusing System;\n" + Lines(1, 2, 3, 4));
+        Write(false, "new/target.cs", "}\nusing System;\n" + Lines(1, 2, 3, 5));
+        for (var i = 0; i < 150; i++)
+        {
+            Write(false, $"other/f{i}.cs", "}\nusing System;\n" + $"unique {i}\n");
+        }
+
+        var result = Compare(similarity: 0.5);
+        var moved = Item(result, "old/target.cs");
+        Assert.Equal(FolderCompareStatus.Moved, moved.Status);
+        Assert.Equal("new/target.cs", moved.CounterpartPath);
+        Assert.Equal(0.6, moved.Similarity!.Value, 3);
+        Assert.All(Enumerable.Range(0, 150), i => Assert.Equal(FolderCompareStatus.RightOnly, Item(result, $"other/f{i}.cs").Status));
+    }
+
+    [Fact]
+    public void Binary_candidates_are_not_paired_by_similarity()
+    {
+        Write(true, "a/data.bin", "\0" + Lines(1, 2, 3));
+        Write(false, "b/data.bin", "\0" + Lines(1, 2, 4));
+        Assert.Equal(FolderCompareStatus.LeftOnly, Item(Compare(similarity: 0.1), "a/data.bin").Status);
+    }
+
+    [Fact]
     public void Similarity_ignores_blank_lines_and_line_order_and_endings()
     {
         Write(true, "a.txt", "alpha\r\nbeta\r\n\r\ngamma\r\n");

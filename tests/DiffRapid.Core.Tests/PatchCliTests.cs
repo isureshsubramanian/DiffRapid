@@ -3,6 +3,7 @@ using DiffRapid.Cli;
 using DiffRapid.Core.Comparison;
 using DiffRapid.Core.Folders;
 using DiffRapid.Core.Output;
+using DiffRapid.Core.Patching;
 
 namespace DiffRapid.Core.Tests;
 
@@ -108,6 +109,81 @@ public sealed class PatchCliTests : IDisposable
         File.WriteAllText(At("right/empty-add"), "");
         File.WriteAllText(At("left/same"), "unchanged\n");
         File.WriteAllText(At("right/same"), "unchanged\n");
+    }
+
+    [Fact]
+    public void RenamedAndMovedFilesAreWrittenAsGitRenames()
+    {
+        Directory.CreateDirectory(At("left/docs"));
+        Directory.CreateDirectory(At("right/notes"));
+        File.WriteAllText(At("left/old.txt"), "same\n");
+        File.WriteAllText(At("right/new.txt"), "same\n");
+        File.WriteAllText(At("left/docs/guide.txt"), "one\ntwo\nthree\nfour\n");
+        File.WriteAllText(At("right/notes/guide.txt"), "one\ntwo\nthree\nFOUR\n");
+        var options = new FolderCompareOptions { DetectRenames = true, RenameSimilarityThreshold = 0.5 };
+        var result = FolderComparer.Compare(At("left"), At("right"), options);
+        Assert.Contains(result.Items, i => i.Status == FolderCompareStatus.Renamed);
+        Assert.Contains(result.Items, i => i.Status == FolderCompareStatus.Moved);
+        using var writer = new StringWriter();
+        FolderPatchWriter.Write(writer, result, CompareOptions.Default);
+        var text = writer.ToString();
+        Assert.Contains("rename from old.txt\nrename to new.txt\n", text);
+        Assert.Contains("rename from docs/guide.txt\nrename to notes/guide.txt\n", text);
+
+        CopyFolder("left", "copy");
+        var plan = FolderPatchApplier.Plan(Patch.Parse(text), At("copy"));
+        Assert.Equal(2, plan.Files.Count);
+        Assert.All(FolderPatchApplier.Apply(plan), r => Assert.True(r.Written, r.Error));
+        Directory.Delete(At("copy/docs"));
+        AssertSnapshot(Snapshot(At("right")), At("copy"));
+    }
+
+    [Fact]
+    public void PathsWithTabsNewlinesQuotesAndBackslashesRoundTrip()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var names = new[] { "tab\tname.txt", "new\nline.txt", "quote\"name.txt", "back\\slash.txt", "--- fake.txt" };
+        Directory.CreateDirectory(At("left"));
+        Directory.CreateDirectory(At("right"));
+        foreach (var name in names)
+        {
+            File.WriteAllText(Path.Combine(At("left"), name), "old\n");
+            File.WriteAllText(Path.Combine(At("right"), name), "new\n");
+        }
+
+        using var writer = new StringWriter();
+        FolderPatchWriter.Write(writer, FolderComparer.Compare(At("left"), At("right")), CompareOptions.Default);
+        var patch = Patch.Parse(writer.ToString());
+        Assert.Equal(names.Order(), patch.Files.Select(f => f.NewPath!).Order());
+        Assert.All(patch.Files, f => Assert.Equal(f.OldPath, f.NewPath));
+
+        CopyFolder("left", "copy");
+        Assert.All(FolderPatchApplier.Apply(FolderPatchApplier.Plan(patch, At("copy"))), r => Assert.True(r.Written, r.Error));
+        AssertSnapshot(Snapshot(At("right")), At("copy"));
+    }
+
+    [Theory]
+    [InlineData("\"a/x\\001y\"", "x\u0001y")]
+    [InlineData("\"a/caf\\303\\251\"", "café")]
+    [InlineData("\"a/q\\\"t\\\\b\"\t2020-01-01", "q\"t\\b")]
+    public void QuotedPatchPathsAreUnescapedLikeGit(string quoted, string expected)
+    {
+        var file = Assert.Single(Patch.Parse("--- " + quoted + "\n+++ " + quoted + "\n@@ -1 +1 @@\n-a\n+b\n").Files);
+        Assert.Equal(expected, file.OldPath);
+    }
+
+    [Theory]
+    [InlineData("\"a/unterminated")]
+    [InlineData("\"a/bad\\q\"")]
+    [InlineData("\"a/x\" trailing")]
+    [InlineData("\"a/\\400\"")]
+    public void InvalidQuotedPatchPathsAreRejected(string quoted)
+    {
+        Assert.Throws<FormatException>(() => Patch.Parse("--- " + quoted + "\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"));
     }
 
     private void CopyFolder(string source, string target)

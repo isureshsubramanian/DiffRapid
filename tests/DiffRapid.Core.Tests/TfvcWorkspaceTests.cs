@@ -30,6 +30,10 @@ public sealed class TfvcWorkspaceTests
             Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
             runner.Handler = _ => new ProcessResult(1, Encoding.UTF8.GetBytes("ignored tf.exe"), "failed");
             Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
+            runner.Handler = _ => throw new OperationCanceledException();
+            Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
+            runner.Handler = _ => throw new IOException("cannot start");
+            Assert.Equal("tf", TfvcWorkspace.Locate(runner, installer, null));
         }
         finally
         {
@@ -77,8 +81,8 @@ public sealed class TfvcWorkspaceTests
         var newest = new string('a', 40);
         var oldest = new string('b', 40);
         var status = renamed ? "\nR100\0old.txt\0new.txt" : "\nM\0new.txt";
-        var output = $"\0{newest}\0aaaaaaa\0Alice\02020-01-02T03:04:05Z\0Newest\0{status}\0" +
-            $"\0{oldest}\0bbbbbbb\0Bob\02020-01-01T03:04:05Z\0Oldest\0\nA\0old.txt\0";
+        var output = $"\x01{newest}\0aaaaaaa\0Alice\02020-01-02T03:04:05Z\0Newest\0{status}\0" +
+            $"\x01{oldest}\0bbbbbbb\0Bob\02020-01-01T03:04:05Z\0Oldest\0\nA\0old.txt\0";
         var runner = new FakeRunner
         {
             Handler = _ => new ProcessResult(0, Encoding.UTF8.GetBytes(output), "")
@@ -91,6 +95,26 @@ public sealed class TfvcWorkspaceTests
         Assert.Equal("new.txt", history[0].PathAtVersion);
         Assert.Equal(renamed ? "old.txt" : "new.txt", history[1].PathAtVersion);
         Assert.Equal("Bob", history[1].Author);
+    }
+
+    /// <summary>Verifies that paths are never read as commits and that malformed output is a Git error.</summary>
+    [Fact]
+    public void GitHistoryReadsFieldsByPositionAndRejectsMalformedOutput()
+    {
+        var sha = new string('c', 40);
+        var hexName = new string('d', 40);
+        var history = GitRepository.ParseHistory(
+            $"\x01{sha}\0ccccccc\0Alice\02020-01-02T03:04:05Z\0Subject\0\nR100\0{hexName}\0\x01odd\0" +
+            $"\x01{new string('e', 64)}\0eeeeeee\0Bob\02020-01-01T03:04:05Z\0Older\0\nM\0{hexName}\0", "\x01odd");
+        Assert.Equal(2, history.Count);
+        Assert.Equal("\x01odd", history[0].PathAtCommit);
+        Assert.Equal(hexName, history[1].PathAtCommit);
+        Assert.Equal(new string('e', 64), history[1].Sha);
+
+        foreach (var malformed in new[] { $"{sha}\0x\0y\02020-01-02T03:04:05Z\0s\0", $"\x01{sha}\0x\0y\0not a date\0s\0", $"\x01{sha}\0x", $"\x01{sha}\0x\0y\02020-01-02T03:04:05Z\0s\0\nR100\0only-one" })
+        {
+            Assert.Throws<GitException>(() => GitRepository.ParseHistory(malformed, "file"));
+        }
     }
 
     /// <summary>Verifies detailed history and the most specific workspace mapping.</summary>
@@ -195,6 +219,32 @@ public sealed class TfvcWorkspaceTests
         Assert.Contains("--follow", runner.Arguments!);
         Assert.Contains("core.quotepath=false", runner.Arguments!);
         Assert.Contains("log.showSignature=false", runner.Arguments!);
+    }
+
+    /// <summary>Verifies the output cap, the time limit and closed standard input.</summary>
+    [Fact]
+    public async Task ProcessRunnerCapsOutputStopsAtTheTimeLimitAndClosesInput()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var flood = await Assert.ThrowsAsync<IOException>(() =>
+            ProcessRunner.RunAsync("/bin/sh", null, ["-c", "while :; do echo xxxxxxxxxxxxxxxx; done"], null, 4096, TimeSpan.FromSeconds(30), default));
+        Assert.Contains("output passed", flood.Message);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            ProcessRunner.RunAsync("/bin/sleep", null, ["30"], null, 4096, TimeSpan.FromMilliseconds(200), default));
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15));
+
+        // cat ends at once because its standard input is closed rather than inherited.
+        var echo = await ProcessRunner.RunAsync("/bin/cat", null, [], "fed"u8.ToArray(), 4096, TimeSpan.FromSeconds(30), default);
+        Assert.Equal("fed", echo.Text);
+        var empty = await new ProcessRunner().RunAsync("/bin/cat", Path.GetTempPath(), [], default);
+        Assert.Equal(0, empty.ExitCode);
+        Assert.Empty(empty.Output);
     }
 
     /// <summary>Verifies cancellation terminates a running process.</summary>

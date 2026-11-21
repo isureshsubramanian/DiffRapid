@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using DiffRapid.Core.IO;
 
 namespace DiffRapid.Core.VersionControl;
 
@@ -51,8 +52,30 @@ internal interface IProcessRunner
     Task<ProcessResult> RunAsync(string executable, string directory, IReadOnlyList<string> arguments, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Runs a program directly (never through a shell) and captures its output. The one place that starts child
+/// processes for version control and external command plugins, so all of them get the same limits: standard input is
+/// redirected (and closed after any input is written, so a prompt cannot hang), standard output is capped, and a
+/// cancelled, timed-out or over-limit program is killed and waited for before this returns.
+/// </summary>
+/// <remarks>
+/// Only the direct child is killed: netstandard2.0 has no Process.Kill(entireProcessTree), so a grandchild the
+/// program started may keep running (and may keep the output pipes open, which <see cref="DrainTimeout"/> bounds).
+/// </remarks>
 internal sealed class ProcessRunner : IProcessRunner
 {
+    /// <summary>
+    /// Estimate: larger output is not a file revision or a plugin's text but a runaway program; 256 MB keeps the
+    /// capture and its one copy (512 MB at worst) affordable inside the Visual Studio process.
+    /// </summary>
+    internal const long DefaultOutputLimit = 256L * 1024 * 1024;
+
+    // Estimate: diagnostics past 64 KB add nothing to an error message; the rest is read and dropped.
+    private const int ErrorLimit = 64 * 1024;
+
+    // Estimate: an exited program's pipes close at once; this only bounds a grandchild that still holds them.
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
+
     internal static string Quote(string argument)
     {
         var result = new StringBuilder("\"");
@@ -82,26 +105,78 @@ internal sealed class ProcessRunner : IProcessRunner
     }
 
     /// <summary>Runs a command while capturing raw output and UTF-8 diagnostics.</summary>
-    public async Task<ProcessResult> RunAsync(string executable, string directory, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public Task<ProcessResult> RunAsync(string executable, string directory, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+        => RunAsync(executable, directory, arguments, null, DefaultOutputLimit, Timeout.InfiniteTimeSpan, cancellationToken);
+
+    /// <summary>
+    /// Runs <paramref name="executable"/> with <paramref name="standardInput"/> (none when null) and returns its exit
+    /// code, output and diagnostics. Worst case: <paramref name="outputLimit"/> bytes of output plus one copy, and
+    /// 64 KB of diagnostics, for at most <paramref name="timeout"/> plus the drain time.
+    /// </summary>
+    /// <exception cref="IOException">The program could not start (a bare name is looked up only in absolute PATH
+    /// folders, never the current one), wrote more than <paramref name="outputLimit"/> bytes,
+    /// or left its output open after exiting.</exception>
+    /// <exception cref="TimeoutException">The program ran past <paramref name="timeout"/> and was stopped.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled; the program was stopped.</exception>
+    internal static async Task<ProcessResult> RunAsync(string executable, string? directory, IReadOnlyList<string> arguments,
+        byte[]? standardInput, long outputLimit, TimeSpan timeout, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var process = new Process
         {
-            StartInfo = new ProcessStartInfo(executable, string.Join(" ", arguments.Select(Quote)))
+            StartInfo = new ProcessStartInfo(ExecutablePath.Resolve(executable), string.Join(" ", arguments.Select(Quote)))
             {
-                WorkingDirectory = directory,
+                WorkingDirectory = directory ?? string.Empty,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                StandardErrorEncoding = Encoding.UTF8,
             },
         };
 
         StartProcess(process, executable);
-        using var registration = cancellationToken.Register(() => KillProcess(process));
-        return await CaptureOutputAsync(process, cancellationToken).ConfigureAwait(false);
+        var limitExceeded = false;
+        using var deadline = new CancellationTokenSource(Bounded(timeout));
+        using var cancelled = cancellationToken.Register(() => KillProcess(process));
+        using var timedOut = deadline.Token.Register(() => KillProcess(process));
+        _ = WriteInputAsync(process.StandardInput.BaseStream, standardInput ?? Array.Empty<byte>());
+
+        // Drain both streams concurrently so neither pipe can block the child process.
+        var output = ReadAsync(process.StandardOutput.BaseStream, outputLimit, () =>
+        {
+            limitExceeded = true;
+            KillProcess(process);
+        });
+        var error = ReadAsync(process.StandardError.BaseStream, ErrorLimit, null);
+        await Task.Run(() => process.WaitForExit()).ConfigureAwait(false);
+        var streams = Task.WhenAll(output, error);
+        var drained = await Task.WhenAny(streams, Task.Delay(DrainTimeout)).ConfigureAwait(false) == streams;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (limitExceeded)
+        {
+            throw new IOException($"{executable}: the output passed {outputLimit / (1024 * 1024)} MB and the program was stopped.");
+        }
+
+        if (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException($"{executable} did not finish within {timeout.TotalSeconds:0.###} seconds and was stopped.");
+        }
+
+        if (!drained)
+        {
+            throw new IOException(executable + ": the output did not finish after the program exited.");
+        }
+
+        return new ProcessResult(process.ExitCode, await output.ConfigureAwait(false), Encoding.UTF8.GetString(await error.ConfigureAwait(false)));
     }
+
+    // CancellationTokenSource takes at most int.MaxValue milliseconds; anything longer (or infinite) means no limit.
+    private static TimeSpan Bounded(TimeSpan timeout) =>
+        timeout == Timeout.InfiniteTimeSpan || timeout.TotalMilliseconds >= int.MaxValue ? Timeout.InfiniteTimeSpan
+        : timeout < TimeSpan.Zero ? TimeSpan.Zero
+        : timeout;
 
     private static void StartProcess(Process process, string executable)
     {
@@ -133,14 +208,55 @@ internal sealed class ProcessRunner : IProcessRunner
         }
     }
 
-    private static async Task<ProcessResult> CaptureOutputAsync(Process process, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reads a stream to its end, keeping at most <paramref name="limit"/> bytes. Past the limit,
+    /// <paramref name="exceeded"/> runs and reading stops; without it, the rest is read and dropped.
+    /// </summary>
+    private static async Task<byte[]> ReadAsync(Stream stream, long limit, Action? exceeded)
     {
-        // Drain both streams concurrently so neither pipe can block the child process.
-        using var output = new MemoryStream();
-        var standardOutput = process.StandardOutput.BaseStream.CopyToAsync(output);
-        var standardError = process.StandardError.ReadToEndAsync();
-        await Task.WhenAll(standardOutput, standardError, Task.Run(() => process.WaitForExit())).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-        return new ProcessResult(process.ExitCode, output.ToArray(), await standardError.ConfigureAwait(false));
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, 0, chunk.Length).ConfigureAwait(false)) > 0)
+        {
+            var room = limit - buffer.Length;
+            if (read > room)
+            {
+                buffer.Write(chunk, 0, (int)Math.Max(0, room));
+                if (exceeded is not null)
+                {
+                    exceeded();
+                    break;
+                }
+
+                continue;
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
+    }
+
+    private static async Task WriteInputAsync(Stream stream, byte[] input)
+    {
+        // A program may exit without reading all of its input; that is not an error.
+        try
+        {
+            await stream.WriteAsync(input, 0, input.Length).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+        }
+        finally
+        {
+            try
+            {
+                stream.Dispose();
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 }

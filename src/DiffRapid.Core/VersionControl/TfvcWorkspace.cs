@@ -5,6 +5,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using DiffRapid.Core.IO;
 
 namespace DiffRapid.Core.VersionControl;
 
@@ -54,12 +55,21 @@ public sealed class TfvcWorkspace : IVersionControl
 
     private static string LocateWithVisualStudioInstaller(string installer, IProcessRunner runner)
     {
-        // Prefer the first tf.exe from the latest installation that includes Team Explorer.
-        var result = runner.RunAsync(installer, Environment.CurrentDirectory,
-            new[] { "-latest", "-requires", "Microsoft.VisualStudio.TeamExplorer", "-find", "**\\tf.exe" },
-            CancellationToken.None).GetAwaiter().GetResult();
-        var candidates = result.Text.Trim().Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-        return result.ExitCode == 0 && candidates.Length > 0 ? candidates[0] : "tf";
+        // Prefer the first tf.exe from the latest installation that includes Team Explorer. The same 10-second limit
+        // as the workfold query below keeps a hung installer from blocking discovery; PATH is the fallback.
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var result = runner.RunAsync(installer, Environment.CurrentDirectory,
+                new[] { "-latest", "-requires", "Microsoft.VisualStudio.TeamExplorer", "-find", "**\\tf.exe" },
+                timeout.Token).GetAwaiter().GetResult();
+            var candidates = result.Text.Trim().Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return result.ExitCode == 0 && candidates.Length > 0 ? candidates[0] : "tf";
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException)
+        {
+            return "tf";
+        }
     }
 
     /// <summary>Finds workspace metadata or queries local workfold mappings.</summary>
@@ -158,13 +168,9 @@ public sealed class TfvcWorkspace : IVersionControl
     private string LocalPath(string path)
     {
         var full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(Root, path));
-        var prefix = Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-        {
-            throw new ArgumentException("The file is outside the TFVC workspace.", nameof(path));
-        }
-
-        return full;
+        return PathContainment.RelativeInside(Root, full) is null
+            ? throw new ArgumentException("The file is outside the TFVC workspace.", nameof(path))
+            : full;
     }
 
     /// <summary>Lists changes using English detailed tf.exe output and invariant date parsing.</summary>
@@ -189,7 +195,7 @@ public sealed class TfvcWorkspace : IVersionControl
             throw new IOException("tf: " + result.Error.Trim());
         }
 
-        return ParseHistory(result.Text, full.Substring(Root.TrimEnd(Path.DirectorySeparatorChar).Length + 1).Replace('\\', '/'));
+        return ParseHistory(result.Text, PathContainment.RelativeInside(Root, full)!.Replace('\\', '/'));
     }
 
     /// <summary>Reads a changeset, latest server version T, or fetched workspace version W.</summary>

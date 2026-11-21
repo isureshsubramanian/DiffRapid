@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using DiffRapid.Core.IO;
 
 namespace DiffRapid.Core.History;
 
@@ -77,6 +78,12 @@ public sealed partial class LocalHistoryStore
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="path"/> may have snapshots: its index file exists. It takes no lock and reads no file,
+    /// so it suits the UI thread; <see cref="List"/> (which waits for the store lock) returns the entries.
+    /// </summary>
+    public bool HasHistory(string path) => File.Exists(IndexPath(NormalizePath(path)));
+
     /// <summary>Lists snapshots newest first, skipping malformed index lines.</summary>
     public IReadOnlyList<LocalHistoryEntry> List(string path, CancellationToken cancellationToken = default)
     {
@@ -106,22 +113,8 @@ public sealed partial class LocalHistoryStore
         ValidateEntry(entry);
         var fullPath = NormalizePath(path);
         using var storeLock = AcquireLock(cancellationToken);
-        var temporaryPath = TemporaryPath(Path.GetDirectoryName(fullPath)!);
-        try
-        {
-            using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, BufferSize))
-            {
-                CopyBlob(entry, output, cancellationToken);
-                output.Flush(flushToDisk: true);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            ReplaceFile(temporaryPath, fullPath);
-        }
-        finally
-        {
-            File.Delete(temporaryPath);
-        }
+        AtomicFile.Write(fullPath, output => CopyBlob(entry, output, cancellationToken),
+            beforeReplace: _ => cancellationToken.ThrowIfCancellationRequested());
     }
 
     /// <summary>Moves history to a new path, merging destination history and preserving paths recorded at capture time.</summary>
@@ -171,17 +164,9 @@ public sealed partial class LocalHistoryStore
         while ((line = reader.ReadLine()) != null)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            try
+            if (ParseEntry(line) is { } entry)
             {
-                var entry = JsonSerializer.Deserialize<LocalHistoryEntry>(line, JsonOptions);
-                if (IsValidEntry(entry))
-                {
-                    entries.Add(entry!);
-                }
-            }
-            catch (JsonException)
-            {
-                // A torn or damaged line must not hide the other snapshots.
+                entries.Add(entry);
             }
         }
 
@@ -209,31 +194,82 @@ public sealed partial class LocalHistoryStore
         output.Flush(flushToDisk: true);
     }
 
-    private void WriteIndex(string indexPath, IEnumerable<LocalHistoryEntry> entries, CancellationToken cancellationToken)
+    private static void WriteIndex(string indexPath, IEnumerable<LocalHistoryEntry> entries, CancellationToken cancellationToken)
     {
-        var temporaryPath = TemporaryPath(_indexFolder);
-        try
-        {
-            using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        AtomicFile.Write(
+            indexPath,
+            output =>
             {
-                using (var writer = new StreamWriter(output, new UTF8Encoding(false), BufferSize, leaveOpen: true))
+                using var writer = new StreamWriter(output, new UTF8Encoding(false), BufferSize, leaveOpen: true);
+                foreach (var entry in entries)
                 {
-                    foreach (var entry in entries)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        writer.WriteLine(JsonSerializer.Serialize(entry, JsonOptions));
-                    }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    writer.WriteLine(JsonSerializer.Serialize(entry, JsonOptions));
                 }
+            },
+            beforeReplace: _ => cancellationToken.ThrowIfCancellationRequested());
+    }
 
-                output.Flush(flushToDisk: true);
+    /// <summary>
+    /// The most recently written valid entry, which is the last parseable line (appends add the newest entry; a
+    /// rewrite orders by time). The file is read from its end in growing windows, so the cost depends on the last
+    /// entries rather than the whole history; at worst, with no valid line, about 4/3 of the file is read.
+    /// </summary>
+    private static LocalHistoryEntry? ReadLatest(string indexPath, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(indexPath))
+        {
+            return null;
+        }
+
+        using var stream = new FileStream(indexPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        // Estimate: an index line is a few hundred bytes, so 4 KB usually holds the last entry several times over.
+        for (var window = 4096L; ; window *= 4)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var start = Math.Max(0, stream.Length - window);
+            var bytes = new byte[stream.Length - start];
+            stream.Position = start;
+            var count = 0;
+            int read;
+            while (count < bytes.Length && (read = stream.Read(bytes, count, bytes.Length - count)) > 0)
+            {
+                count += read;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            ReplaceFile(temporaryPath, indexPath);
+            // Unless the window reaches the start of the file, its first line may be cut and is not trusted.
+            var lines = Encoding.UTF8.GetString(bytes, 0, count).Split('\n');
+            for (var index = lines.Length - 1; index >= (start == 0 ? 0 : 1); index--)
+            {
+                if (ParseEntry(lines[index].TrimEnd('\r')) is { } entry)
+                {
+                    return entry;
+                }
+            }
+
+            if (start == 0)
+            {
+                return null;
+            }
         }
-        finally
+    }
+
+    private static LocalHistoryEntry? ParseEntry(string line)
+    {
+        if (line.Length == 0)
         {
-            File.Delete(temporaryPath);
+            return null;
+        }
+
+        try
+        {
+            var entry = JsonSerializer.Deserialize<LocalHistoryEntry>(line, JsonOptions);
+            return IsValidEntry(entry) ? entry : null;
+        }
+        catch (JsonException)
+        {
+            // A torn or damaged line must not hide the other snapshots.
+            return null;
         }
     }
 
@@ -262,18 +298,6 @@ public sealed partial class LocalHistoryStore
         entries.Reverse().OrderByDescending(entry => entry.TimestampUtc);
 
     private static string Hex(byte[] bytes) => BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
-
-    private static void ReplaceFile(string temporaryPath, string target)
-    {
-        if (File.Exists(target))
-        {
-            File.Replace(temporaryPath, target, destinationBackupFileName: null);
-        }
-        else
-        {
-            File.Move(temporaryPath, target);
-        }
-    }
 
     private static void ValidateOptions(LocalHistoryOptions options)
     {

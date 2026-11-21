@@ -13,11 +13,13 @@ public static class AtomicFile
     /// Runs <paramref name="write"/> against a temporary file next to <paramref name="path"/> and, when it returns,
     /// moves the result over the target. When <paramref name="write"/> throws, the target is unchanged and the
     /// temporary file is deleted. A read-only target is replaced only when <paramref name="replaceReadOnly"/> is set.
+    /// <paramref name="beforeReplace"/>, when given, runs with the temporary file's path once it is complete and
+    /// closed (to verify it or set its times); when it throws, the target is likewise unchanged.
     /// </summary>
     /// <exception cref="ArgumentException">The path is empty or has no folder part.</exception>
     /// <exception cref="IOException">The file could not be written or replaced.</exception>
     /// <exception cref="UnauthorizedAccessException">The folder or a read-only target cannot be written.</exception>
-    public static void Write(string path, Action<Stream> write, bool replaceReadOnly = false)
+    public static void Write(string path, Action<Stream> write, bool replaceReadOnly = false, Action<string>? beforeReplace = null)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -46,6 +48,8 @@ public static class AtomicFile
                 write(stream);
                 stream.Flush(flushToDisk: true);
             }
+
+            beforeReplace?.Invoke(temporary);
 
             if (File.Exists(fullPath))
             {
@@ -84,7 +88,7 @@ public static class AtomicFile
         }
     }
 
-    /// <summary>Writes <paramref name="bytes"/> atomically; see <see cref="Write(string, Action{Stream}, bool)"/>.</summary>
+    /// <summary>Writes <paramref name="bytes"/> atomically; see <see cref="Write(string, Action{Stream}, bool, Action{string}?)"/>.</summary>
     public static void WriteAllBytes(string path, byte[] bytes, bool replaceReadOnly = false)
     {
         if (bytes is null)

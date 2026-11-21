@@ -39,6 +39,25 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [Fact]
+    public void FailedCheckBeforeReplaceKeepsTheOldContentAndCleansUp()
+    {
+        var path = Path.Combine(_folder, "out.txt");
+        File.WriteAllBytes(path, [9, 9]);
+        string? checkedPath = null;
+
+        Assert.Throws<IOException>(() => AtomicFile.Write(path, stream => stream.WriteByte(1), beforeReplace: temp =>
+        {
+            checkedPath = temp;
+            Assert.Equal([1], File.ReadAllBytes(temp));
+            throw new IOException("mismatch");
+        }));
+
+        Assert.NotEqual(path, checkedPath);
+        Assert.Equal([9, 9], File.ReadAllBytes(path));
+        Assert.Equal([path], Directory.GetFiles(_folder));
+    }
+
+    [Fact]
     public void ReadOnlyTargetIsReplacedOnlyWhenAsked()
     {
         var path = Path.Combine(_folder, "locked.txt");
