@@ -280,8 +280,13 @@ public sealed class MergeSession
         var offsets = new int[_resolutions.Length + 1];
         for (var i = 0; i < _resolutions.Length; i++)
         {
-            offsets[i] = sb.Length;
+            var start = sb.Length;
+            var open = start > 0 && sb[start - 1] != '\r' && sb[start - 1] != '\n';
             AppendChunk(sb, i, labels, includeBase);
+
+            // A chunk that writes text after an open line starts with that line's terminator
+            // (MergeResult.TerminateOpenLine); the terminator belongs to the chunk that wrote the line.
+            offsets[i] = open && sb.Length > start ? start + _newline.Length : start;
         }
 
         offsets[_resolutions.Length] = sb.Length;
@@ -355,6 +360,7 @@ public sealed class MergeSession
         var endings = _customEndings[index];
         for (var i = 0; i < lines.Length; i++)
         {
+            MergeResult.TerminateOpenLine(sb, newline);
             sb.Append(lines[i]).Append(endings is null ? newline : endings[i]);
         }
     }

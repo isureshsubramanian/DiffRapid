@@ -1,5 +1,6 @@
 using DiffRapid.Core.Comparison;
 using DiffRapid.Core.Merge;
+using DiffRapid.Core.Text;
 using static DiffRapid.Core.Tests.TextComparerTests;
 
 namespace DiffRapid.Core.Tests;
@@ -94,6 +95,16 @@ public class ThreeWayMergerTests
         var result = ThreeWayMerger.Merge(Doc("t = 1;"), Doc("t = 2;"), Doc("t = 3;"), options);
 
         Assert.Equal(1, result.ConflictCount);
+    }
+
+    [Fact]
+    public void An_unterminated_base_line_is_not_joined_to_appended_lines()
+    {
+        var options = new CompareOptions { IgnoreLineEndings = true };
+
+        var result = ThreeWayMerger.Merge(TextDocument.Parse("a\nb"), TextDocument.Parse("a\nb\nc"), TextDocument.Parse("a\nb"), options);
+
+        Assert.Equal("a\nb\nc", result.ToText());
     }
 
     [Fact]

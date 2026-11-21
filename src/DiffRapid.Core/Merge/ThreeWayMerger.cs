@@ -99,6 +99,7 @@ public sealed class MergeResult
 
     internal void AppendConflict(StringBuilder sb, MergeChunk chunk, ConflictLabels labels, bool includeBase, string newline)
     {
+        TerminateOpenLine(sb, newline);
         sb.Append("<<<<<<< ").Append(labels.Left).Append(newline);
         Append(sb, Left, chunk.LeftStart, chunk.LeftEnd, newline, forceTerminator: true);
         if (includeBase)
@@ -117,8 +118,22 @@ public sealed class MergeResult
         for (var i = start; i < end; i++)
         {
             var line = doc[i];
+            TerminateOpenLine(sb, newline);
             sb.Append(line.Content);
             sb.Append(line.Ending == LineEnding.None && forceTerminator ? newline : line.EndingText);
+        }
+    }
+
+    /// <summary>
+    /// Ends a line written without a terminator (a source's last line) before more output follows, so it is not
+    /// joined to the next line. Every writer of merged output calls this first; MergeSession.OutputLineRanges
+    /// relies on that to give the terminator to the chunk that wrote the open line.
+    /// </summary>
+    internal static void TerminateOpenLine(StringBuilder sb, string newline)
+    {
+        if (sb.Length > 0 && sb[sb.Length - 1] != '\n' && sb[sb.Length - 1] != '\r')
+        {
+            sb.Append(newline);
         }
     }
 
