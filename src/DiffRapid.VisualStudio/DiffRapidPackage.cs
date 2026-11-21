@@ -38,6 +38,16 @@ public sealed class DiffRapidPackage : AsyncPackage
         await LocalHistoryRecorder.StartAsync(this);
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && ThreadHelper.CheckAccess())
+        {
+            LocalHistoryRecorder.Stop();
+        }
+
+        base.Dispose(disposing);
+    }
+
     /// <summary>
     /// Opens a new comparison document tab for two files. Images open in the image view, two CSV or TSV files or
     /// two Excel workbooks in the table view, and other binary files (except .NET assemblies, compared by their API) in the hex view;
