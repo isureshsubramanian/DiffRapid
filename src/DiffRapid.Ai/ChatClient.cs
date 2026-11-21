@@ -277,6 +277,9 @@ public sealed class ChatClient : IDisposable
         var length = 0;
         using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
         {
+            // As in SendOnceAsync: .NET Framework's response streams ignore the token once a read has started, so
+            // the timeout disposes the stream. The caller maps the resulting error to its timeout message.
+            using var registration = cancellationToken.Register(stream.Dispose);
             int read;
             while (length < buffer.Length &&
                 (read = await stream.ReadAsync(buffer, length, buffer.Length - length, cancellationToken).ConfigureAwait(false)) > 0)
