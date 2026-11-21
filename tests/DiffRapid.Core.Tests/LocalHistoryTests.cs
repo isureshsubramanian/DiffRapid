@@ -8,6 +8,8 @@ using DiffRapid.Core.History;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class LocalHistoryTests : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

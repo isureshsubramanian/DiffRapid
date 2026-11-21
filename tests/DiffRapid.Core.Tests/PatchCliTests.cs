@@ -7,6 +7,8 @@ using DiffRapid.Core.Patching;
 
 namespace DiffRapid.Core.Tests;
 
+// Swaps the global Console.Out or Console.Error, so it shares a collection with every class that runs the CLI in-process.
+[Collection("Console")]
 public sealed class PatchCliTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "diffrapid-patch-" + Guid.NewGuid());

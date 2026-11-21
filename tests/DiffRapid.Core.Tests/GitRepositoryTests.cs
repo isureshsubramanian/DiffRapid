@@ -6,6 +6,8 @@ using DiffRapid.Core.VersionControl;
 namespace DiffRapid.Core.Tests;
 
 /// <summary>Verifies Git repository history, revision content, discovery, and CLI commands.</summary>
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class GitRepositoryTests
 {
     /// <summary>Verifies Git history, revision content, discovery, and CLI output.</summary>

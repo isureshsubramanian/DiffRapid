@@ -97,6 +97,8 @@ namespace DiffRapid.Core.Tests.ApiFixtures
 
 namespace DiffRapid.Core.Tests
 {
+    // Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+    [Collection("Console")]
     public sealed class AssemblyApiTests : IDisposable
     {
         private const string FixtureNamespace = "DiffRapid.Core.Tests.ApiFixtures";

@@ -8,6 +8,8 @@ using DiffRapid.Core.Text;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class ReportTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "diffrapid-report-" + Guid.NewGuid());

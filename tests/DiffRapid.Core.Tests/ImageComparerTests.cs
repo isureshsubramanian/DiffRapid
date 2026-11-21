@@ -3,6 +3,8 @@ using DiffRapid.Core.Imaging;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class ImageComparerTests
 {
     private static readonly PixelColor White = PixelColor.FromRgb(255, 255, 255);

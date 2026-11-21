@@ -7,6 +7,8 @@ using DiffRapid.Cli;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class AiTests
 {
     private static readonly AiEndpoint Endpoint = new() { BaseUrl = "https://example.test/v1", Model = "test-model" };

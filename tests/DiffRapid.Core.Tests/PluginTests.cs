@@ -6,6 +6,8 @@ using DiffRapid.Core.Plugins;
 
 namespace DiffRapid.Core.Tests;
 
+// Runs the CLI in-process, which writes to the global Console that other CLI tests capture.
+[Collection("Console")]
 public sealed class PluginTests
 {
     private static readonly string SortProgram = OperatingSystem.IsWindows() ? "sort.exe" : "sort";
